@@ -24,8 +24,9 @@ jobs:
             - uses: actions/setup-node@v4
               with:
                   node-version: 20
-                  cache: npm
 
+            # No dependency install here, hence no pnpm setup nor cache. `npm version` only rewrites
+            # package.json (pnpm-lock.yaml does not record the root package version).
             - name: Bump version in package.json
               env:
                   VERSION: ${{ inputs.version }}
@@ -45,7 +46,7 @@ jobs:
                   git config user.name "github-actions[bot]"
                   git config user.email "github-actions[bot]@users.noreply.github.com"
                   git checkout -b "release/v${VERSION}"
-                  git add package.json package-lock.json CHANGELOG.md
+                  git add package.json CHANGELOG.md
                   git commit -m "chore(release): bump version to ${VERSION}"
                   git tag "v${VERSION}"
                   git push origin "release/v${VERSION}"

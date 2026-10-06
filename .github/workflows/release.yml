@@ -12,17 +12,20 @@ jobs:
             id-token: write # required for npm provenance (OIDC)
         steps:
             - uses: actions/checkout@v4
+            - uses: pnpm/action-setup@v6
             - uses: actions/setup-node@v4
               with:
                   node-version: 20
-                  cache: npm
+                  cache: pnpm
                   registry-url: https://registry.npmjs.org
             # Trusted Publishing (OIDC) requires npm >= 11.5.1; setup-node ships an older npm.
             - run: npm install -g npm@latest
-            - run: npm ci
-            - run: npm run typecheck
-            - run: npm run lint
-            - run: npm run test
+            - run: pnpm install --frozen-lockfile
+            - run: pnpm run typecheck
+            - run: pnpm run lint
+            - run: pnpm run test
+            # Publish with the npm CLI (not pnpm): npm >= 11.5.1 implements Trusted Publishing (OIDC) and
+            # automatic provenance. `prepublishOnly` rebuilds dist/ with the pnpm-installed toolchain.
             # No NODE_AUTH_TOKEN: auth happens via OIDC (Trusted Publisher on npmjs.com).
             # Provenance is generated automatically when publishing through a trusted publisher.
             - run: npm publish --access public
