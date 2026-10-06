@@ -1,6 +1,6 @@
 {
     "name": "svg-vectordrawable",
-    "version": "0.1.1",
+    "version": "0.2.0",
     "description": "Convert SVG to Android VectorDrawable XML. AST-based (via svgo), with gradients (incl. gradientTransform), clip-path, groups and full CSS color support. Fails loud on constructs a VectorDrawable cannot represent.",
     "type": "module",
     "exports": {
