@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-10-06
+
 ### Added
 
 - `rules` option: per-warning-code severity (`'off' | 'warn' | 'error'`), overriding `strict` — e.g. `{ strict: true, rules: { 'opacity-approximated': 'warn' } }`. Unknown codes throw a `TypeError`.
