@@ -23,11 +23,13 @@ jobs:
             - uses: pnpm/action-setup@v6
             - uses: actions/setup-node@v4
               with:
-                  node-version: 20
+                  # npm releases now require Node >= 22.22 / 24.15; Node 20 is end-of-life.
+                  node-version: 24
                   cache: pnpm
                   registry-url: https://registry.npmjs.org
             # Trusted Publishing (OIDC) requires npm >= 11.5.1; setup-node ships an older npm.
-            - run: npm install -g npm@latest
+            # Pinned to a major: `npm@latest` jumped to npm 12 (Node >= 22.22) and broke the v0.2.0 release.
+            - run: npm install -g npm@^11.5.1
             - run: pnpm install --frozen-lockfile
             - run: pnpm run typecheck
             - run: pnpm run lint
