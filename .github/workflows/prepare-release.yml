@@ -14,12 +14,14 @@ jobs:
         permissions:
             contents: write
             pull-requests: write
+            actions: write # dispatch release.yml
         steps:
-            # GH_PAT (not the default GITHUB_TOKEN) so the pushed tag triggers release.yml.
+            # Default GITHUB_TOKEN, no personal access token. A tag pushed with it does not trigger
+            # other workflows, so release.yml is dispatched explicitly at the end (workflow_dispatch is
+            # one of the events GITHUB_TOKEN may trigger).
             - uses: actions/checkout@v4
               with:
                   fetch-depth: 0
-                  token: ${{ secrets.GH_PAT }}
 
             - uses: actions/setup-node@v4
               with:
@@ -52,13 +54,25 @@ jobs:
                   git push origin "release/v${VERSION}"
                   git push origin "v${VERSION}"
 
+            # Publish first: run release.yml on the tag. It is a new top-level run of release.yml, the
+            # workflow registered as npm Trusted Publisher.
+            - name: Dispatch the release workflow on the tag
+              env:
+                  GH_TOKEN: ${{ github.token }}
+                  VERSION: ${{ inputs.version }}
+              run: gh workflow run release.yml --ref "v${VERSION}"
+
+            # Needs "Allow GitHub Actions to create and approve pull requests" (Settings > Actions >
+            # General). When it is off, print the link instead of failing: the release is already out.
             - name: Open PR into main
               env:
-                  GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+                  GH_TOKEN: ${{ github.token }}
                   VERSION: ${{ inputs.version }}
               run: |
-                  gh pr create \
+                  if ! gh pr create \
                     --title "chore(release): bump version to ${VERSION}" \
-                    --body "Préparation automatique de la release v${VERSION}. Le tag pousse déjà la publication npm ; merger pour intégrer le bump dans main." \
+                    --body "Préparation automatique de la release v${VERSION}. Le tag a déclenché la publication npm ; merger pour intégrer le bump dans main." \
                     --base main \
-                    --head "release/v${VERSION}"
+                    --head "release/v${VERSION}"; then
+                    echo "::warning::Could not open the PR (Actions may not create pull requests here). Open it manually: ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/compare/main...release/v${VERSION}"
+                  fi
