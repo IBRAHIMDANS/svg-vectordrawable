@@ -27,6 +27,58 @@ jobs:
             - run: pnpm run test
             - run: pnpm run build
 
+    node18-smoke:
+        # `engines` says >= 18: build with a supported toolchain (Node 20), then import the ESM and CJS
+        # builds under Node 18 and convert one gradient SVG.
+        runs-on: ubuntu-latest
+        steps:
+            - uses: actions/checkout@v4
+            - uses: pnpm/action-setup@v6
+            - uses: actions/setup-node@v4
+              with:
+                  node-version: 20
+                  cache: pnpm
+            - run: pnpm install --frozen-lockfile
+            - run: pnpm run build
+            - uses: actions/setup-node@v4
+              with:
+                  node-version: 18
+            - name: Smoke test dist/ on Node 18
+              run: |
+                  node --version
+                  node --input-type=module -e "
+                  import { createRequire } from 'node:module';
+                  import { convert } from './dist/index.js';
+                  const { convert: convertCjs } = createRequire(process.cwd() + '/')('./dist/index.cjs');
+                  const svg = '<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 24 24\"><defs><linearGradient id=\"g\"><stop offset=\"0\" stop-color=\"red\"/><stop offset=\"1\" stop-color=\"blue\"/></linearGradient></defs><path fill=\"url(#g)\" d=\"M2 2h20v20H2z\"/></svg>';
+                  for (const [name, fn] of [['esm', convert], ['cjs', convertCjs]]) {
+                      const { xml, warnings } = fn(svg);
+                      if (!xml.includes('<vector') || !xml.includes('aapt:attr') || warnings.length > 0) {
+                          throw new Error(name + ' smoke test failed:\n' + xml);
+                      }
+                      console.log(name + ' OK on Node ' + process.version);
+                  }
+                  "
+                  node dist/cli.js --help > /dev/null
+
+    corpus:
+        # Converts ~9k real icons (Feather, Bootstrap, Heroicons, Tabler) with optimize on and off;
+        # fails on any exception or unexpected warning code. Icon packages are installed outside the project.
+        runs-on: ubuntu-latest
+        needs: build-test
+        steps:
+            - uses: actions/checkout@v4
+            - uses: pnpm/action-setup@v6
+            - uses: actions/setup-node@v4
+              with:
+                  node-version: 22
+                  cache: pnpm
+            - run: pnpm install --frozen-lockfile
+            - run: pnpm run build
+            - run: node scripts/corpus.mjs
+              env:
+                  SVGVD_CORPUS_DIR: ${{ runner.temp }}/svgvd-corpus
+
     android-validate:
         # aapt2 compile + link against a platform android.jar (link checks attribute names and values).
         runs-on: ubuntu-latest
@@ -48,3 +100,36 @@ jobs:
             - run: pnpm install --frozen-lockfile
             - run: pnpm run build
             - run: node scripts/aapt2-validate.mjs
+
+    android-render:
+        # Renders the generated VectorDrawables with Android's own graphics stack (layoutlib through
+        # Paparazzi, on the JVM) and compares them with resvg's render of the source SVG.
+        runs-on: ubuntu-latest
+        needs: build-test
+        steps:
+            - uses: actions/checkout@v4
+            - uses: pnpm/action-setup@v6
+            - uses: actions/setup-node@v4
+              with:
+                  # prepare.mjs / compare.mjs import test/visual/compare.ts: native type stripping (Node >= 22.18).
+                  node-version: 24
+                  cache: pnpm
+            - uses: actions/setup-java@v4
+              with:
+                  distribution: temurin
+                  java-version: 21
+            - uses: android-actions/setup-android@v3
+              with:
+                  packages: 'platforms;android-36'
+            - uses: gradle/actions/setup-gradle@v4
+            - run: pnpm install --frozen-lockfile
+            - run: pnpm run build
+            - run: node android-render/prepare.mjs
+            - run: ./gradlew :render:testDebugUnitTest --console=plain
+              working-directory: android-render
+            - run: node android-render/compare.mjs
+            - if: failure()
+              uses: actions/upload-artifact@v4
+              with:
+                  name: android-render
+                  path: android-render/build/render
