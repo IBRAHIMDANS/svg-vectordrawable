@@ -19,7 +19,7 @@
         }
     },
     "bin": {
-        "svgvd": "./dist/cli.js"
+        "svgvd": "dist/cli.js"
     },
     "files": [
         "dist"
@@ -58,11 +58,11 @@
     "author": "Ibrahima Dansoko <ibrahimdansoko@gmail.com>",
     "repository": {
         "type": "git",
-        "url": "git+https://github.com/IBRAHIMDANS/svg-to-vectordrawable.git"
+        "url": "git+https://github.com/IBRAHIMDANS/svg-vectordrawable.git"
     },
-    "homepage": "https://github.com/IBRAHIMDANS/svg-to-vectordrawable#readme",
+    "homepage": "https://github.com/IBRAHIMDANS/svg-vectordrawable#readme",
     "bugs": {
-        "url": "https://github.com/IBRAHIMDANS/svg-to-vectordrawable/issues"
+        "url": "https://github.com/IBRAHIMDANS/svg-vectordrawable/issues"
     },
     "packageManager": "pnpm@12.9.1",
     "engines": {
