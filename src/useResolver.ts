@@ -1,4 +1,8 @@
 import type { XastElement } from './gradient.js';
+import { presentation } from './style.js';
+import { formatMatrix } from './transform.js';
+import { parseLength } from './units.js';
+import { parseViewBox, viewBoxMatrix } from './viewport.js';
 
 /**
  * Resolves `<use>` references in an SVG AST so the rest of the pipeline only ever sees concrete
@@ -11,6 +15,12 @@ const MAX_DEPTH = 10;
 
 /** Attributes consumed by `<use>` itself; they must not leak onto the inlined group as presentation. */
 const USE_GEOMETRY_ATTRS = new Set(['href', 'xlink:href', 'x', 'y', 'width', 'height', 'id']);
+
+/** Symbol attributes consumed by the viewport mapping; they must not linger on the inlined group. */
+const SYMBOL_VIEWPORT_ATTRS = ['viewBox', 'preserveAspectRatio', 'width', 'height', 'overflow'] as const;
+
+/** Prefix of the generated viewport clip ids (distinct from clip.ts's `svgvd-viewport-`). */
+const CLIP_ID_PREFIX = 'svgvd-symbol-viewport-';
 
 const isElement = (node: XastElement): boolean => node.type === 'element' && node.name !== undefined;
 
@@ -44,13 +54,87 @@ function cloneElement(node: XastElement): XastElement {
 }
 
 /**
+ * Viewport size of a `<use>` instancing a `<symbol>`: the use's width/height win, then the
+ * symbol's. A percentage (or a missing value) resolves against the parent viewport, which is not
+ * known here: NaN, and the caller keeps the unscaled behaviour.
+ */
+function viewportLength(use: string | undefined, symbol: string | undefined): number {
+    const raw = use !== undefined && use.trim() !== 'auto' ? use : symbol;
+    return parseLength(raw);
+}
+
+/** Allocates clip ids that collide neither with the document's ids nor with each other. */
+type IdAllocator = () => string;
+
+function idAllocator(taken: ReadonlySet<string>): IdAllocator {
+    let count = 0;
+    return () => {
+        let id: string;
+        do id = `${CLIP_ID_PREFIX}${++count}`;
+        while (taken.has(id));
+        return id;
+    };
+}
+
+/**
+ * Wraps an inlined `<symbol viewBox>` so it renders like SVG instancing: the viewBox is mapped
+ * onto the viewport (width×height at the use origin) and, unless the symbol's `overflow` is
+ * `visible`/`auto`, clipped to it. Returns the children of the replacement group, or undefined
+ * when no absolute viewport size is known (the caller then keeps the plain translate).
+ * Layout: `[<g clip-path>[<clipPath>, <g transform=viewBox>[symbol]]]`, mirroring nested `<svg>`.
+ */
+function symbolViewport(
+    use: XastElement,
+    symbol: XastElement,
+    clone: XastElement,
+    nextId: IdAllocator,
+): XastElement[] | undefined {
+    const symbolAttrs = symbol.attributes ?? {};
+    const vb = parseViewBox(symbolAttrs.viewBox);
+    if (vb === undefined) return undefined;
+    const width = viewportLength(use.attributes?.width, symbolAttrs.width);
+    const height = viewportLength(use.attributes?.height, symbolAttrs.height);
+    if (Number.isNaN(width) || Number.isNaN(height)) return undefined;
+    // A zero (or negative) viewport disables rendering of the instance.
+    if (!(width > 0 && height > 0)) return [];
+
+    for (const attr of SYMBOL_VIEWPORT_ATTRS) delete clone.attributes?.[attr];
+    const content: XastElement = {
+        type: 'element',
+        name: 'g',
+        attributes: { transform: formatMatrix(viewBoxMatrix(vb, width, height, symbolAttrs.preserveAspectRatio)) },
+        children: [clone],
+    };
+
+    const overflow = presentation(symbol, 'overflow')?.trim();
+    if (overflow === 'visible' || overflow === 'auto') return [content];
+
+    // The rect lives in the wrapper's user space, i.e. after the x/y translate: origin is (0, 0).
+    // The clipPath sits inside the clipped group, where clip.ts still finds it by id.
+    const id = nextId();
+    const rect = { x: '0', y: '0', width: String(width), height: String(height) };
+    const clipPath: XastElement = {
+        type: 'element',
+        name: 'clipPath',
+        attributes: { id },
+        children: [{ type: 'element', name: 'rect', attributes: rect }],
+    };
+    return [{ type: 'element', name: 'g', attributes: { 'clip-path': `url(#${id})` }, children: [clipPath, content] }];
+}
+
+/**
  * Builds the inlined replacement for a `<use>`: a deep clone of the target wrapped in a `<g>` that
  * carries the use's `x`/`y` translation (composed after any `transform` on the use) and its
- * presentation attributes. A `<symbol>` target is treated as a group (cloned, then renamed to `g`).
+ * presentation attributes. A `<symbol>` target is treated as a group (cloned, then renamed to `g`);
+ * one with a `viewBox` is also scaled into, and clipped to, its viewport (see `symbolViewport`).
  */
-function buildReplacement(use: XastElement, target: XastElement): XastElement {
+function buildReplacement(use: XastElement, target: XastElement, nextId: IdAllocator): XastElement {
     const clone = cloneElement(target);
-    if (clone.name === 'symbol') clone.name = 'g';
+    let children: XastElement[] = [clone];
+    if (clone.name === 'symbol') {
+        clone.name = 'g';
+        children = symbolViewport(use, target, clone, nextId) ?? children;
+    }
 
     const attributes: Record<string, string> = {};
 
@@ -70,7 +154,7 @@ function buildReplacement(use: XastElement, target: XastElement): XastElement {
         attributes[key] = value;
     }
 
-    return { type: 'element', name: 'g', attributes, children: [clone] };
+    return { type: 'element', name: 'g', attributes, children };
 }
 
 /**
@@ -81,6 +165,7 @@ function buildReplacement(use: XastElement, target: XastElement): XastElement {
  */
 export function resolveUses(root: XastElement): void {
     const byId = indexById(root);
+    const nextId = idAllocator(new Set(byId.keys()));
 
     const resolveChildren = (node: XastElement, depth: number): void => {
         const children = node.children;
@@ -94,7 +179,7 @@ export function resolveUses(root: XastElement): void {
                 const id = depth > 0 ? targetId(child) : undefined;
                 const target = id !== undefined ? byId.get(id) : undefined;
                 if (target !== undefined) {
-                    const replacement = buildReplacement(child, target);
+                    const replacement = buildReplacement(child, target, nextId);
                     // Expand any `<use>` nested in the freshly inlined subtree, with less budget.
                     resolveChildren(replacement, depth - 1);
                     children[i] = replacement;

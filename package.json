@@ -10,8 +10,12 @@
             "require": "./dist/index.cjs"
         },
         "./browser": {
-            "types": "./dist/index.d.ts",
+            "types": "./dist/browser.d.ts",
             "import": "./dist/browser.js"
+        },
+        "./browser-lite": {
+            "types": "./dist/browser-lite.d.ts",
+            "import": "./dist/browser-lite.js"
         }
     },
     "bin": {
@@ -26,13 +30,17 @@
         "test": "vitest run",
         "test:watch": "vitest",
         "test:coverage": "vitest run --coverage",
+        "test:visual": "vitest run test/visual.test.ts",
         "typecheck": "tsc --noEmit",
         "lint": "eslint .",
         "lint:fix": "eslint . --fix",
         "format": "prettier --write .",
         "format:check": "prettier --check .",
         "validate:aapt2": "node scripts/aapt2-validate.mjs",
-        "prepublishOnly": "npm run build",
+        "validate:corpus": "node scripts/corpus.mjs",
+        "validate:android": "node android-render/prepare.mjs && cd android-render && ./gradlew :render:testDebugUnitTest --console=plain && cd .. && node android-render/compare.mjs",
+        "validate": "pnpm run build && pnpm run validate:aapt2 && pnpm run validate:corpus",
+        "prepublishOnly": "pnpm run build",
         "release": "npm publish --provenance --access public"
     },
     "keywords": [
@@ -56,22 +64,24 @@
     "bugs": {
         "url": "https://github.com/IBRAHIMDANS/svg-to-vectordrawable/issues"
     },
+    "packageManager": "pnpm@12.9.1",
     "engines": {
         "node": ">=18"
     },
     "dependencies": {
-        "svgo": "^4.0.1"
+        "svgo": "^4.1.0"
     },
     "devDependencies": {
-        "@eslint/js": "^9.0.0",
-        "@types/node": "^20.14.0",
-        "@vitest/coverage-v8": "^2.1.0",
-        "eslint": "^9.0.0",
-        "globals": "^14.0.0",
-        "prettier": "^3.0.0",
-        "tsup": "^8.3.0",
+        "@eslint/js": "^10.0.1",
+        "@resvg/resvg-js": "^2.6.2",
+        "@types/node": "^26.6.4",
+        "@vitest/coverage-v8": "^5.0.3",
+        "eslint": "^10.12.0",
+        "globals": "^17.13.0",
+        "prettier": "^3.9.9",
+        "tsup": "^8.5.1",
         "typescript": "^5.6.0",
-        "typescript-eslint": "^8.0.0",
-        "vitest": "^2.1.0"
+        "typescript-eslint": "^8.71.1",
+        "vitest": "^5.0.3"
     }
 }

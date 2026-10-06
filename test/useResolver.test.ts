@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { convert } from '../src/index.js';
 import { resolveUses } from '../src/useResolver.js';
 import type { XastElement } from '../src/gradient.js';
 
@@ -152,5 +153,161 @@ describe('resolveUses', () => {
 
         const svg = onlyChild(tree);
         expect(svg.children?.some((c) => c.name === 'defs')).toBe(true);
+    });
+});
+
+describe('resolveUses — <symbol viewBox> viewport', () => {
+    /** Resolves a single `<use>` of a single `<symbol>` and returns the replacement wrapper. */
+    const resolveSymbol = (symbolAttrs: Record<string, string>, useAttrs: Record<string, string>): XastElement => {
+        const tree = root([
+            el('svg', {}, [
+                el('defs', {}, [el('symbol', { id: 's', ...symbolAttrs }, [el('path', { d: 'M0 0h1v1h-1z' })])]),
+                el('use', { href: '#s', ...useAttrs }),
+            ]),
+        ]);
+        resolveUses(tree);
+        return onlyChild(tree).children?.[1] as XastElement;
+    };
+
+    /** Walks wrapper → clip group → content group and returns the pieces (clip may be absent). */
+    const parts = (wrapper: XastElement): { clipGroup?: XastElement; clipPath?: XastElement; content: XastElement } => {
+        const first = onlyChild(wrapper);
+        if (first.attributes?.['clip-path'] === undefined) return { content: first };
+        const clipPath = first.children?.find((c) => c.name === 'clipPath');
+        const content = first.children?.find((c) => c.name === 'g') as XastElement;
+        return { clipGroup: first, clipPath, content };
+    };
+
+    it('scales the symbol viewBox onto the use width/height', () => {
+        const wrapper = resolveSymbol({ viewBox: '0 0 1 1' }, { x: '2', y: '3', width: '10', height: '10' });
+
+        expect(wrapper.attributes?.transform).toBe('translate(2 3)');
+        expect(wrapper.attributes?.width).toBeUndefined();
+        const { content } = parts(wrapper);
+        expect(content.attributes?.transform).toBe('matrix(10 0 0 10 0 0)');
+        const symbolAsGroup = onlyChild(content);
+        expect(symbolAsGroup.name).toBe('g');
+        expect(symbolAsGroup.attributes?.viewBox).toBeUndefined();
+        expect(onlyChild(symbolAsGroup).name).toBe('path');
+    });
+
+    it('centres with xMidYMid meet by default', () => {
+        const { content } = parts(resolveSymbol({ viewBox: '0 0 10 20' }, { width: '40', height: '40' }));
+        expect(content.attributes?.transform).toBe('matrix(2 0 0 2 10 0)');
+    });
+
+    it('honours an explicit alignment with slice and a non-zero viewBox origin', () => {
+        const { content } = parts(
+            resolveSymbol(
+                { viewBox: '5 5 10 20', preserveAspectRatio: 'xMinYMax slice' },
+                { width: '40', height: '40' },
+            ),
+        );
+        // scale = max(4, 2) = 4; ty = 1 · (40 − 80) = −40; then − origin · scale.
+        expect(content.attributes?.transform).toBe('matrix(4 0 0 4 -20 -60)');
+    });
+
+    it('stretches non-uniformly with preserveAspectRatio="none"', () => {
+        const { content } = parts(
+            resolveSymbol({ viewBox: '0 0 10 20', preserveAspectRatio: 'none' }, { width: '40', height: '40' }),
+        );
+        expect(content.attributes?.transform).toBe('matrix(4 0 0 2 0 0)');
+    });
+
+    it('falls back to the symbol width/height when the use has none', () => {
+        const { content } = parts(resolveSymbol({ viewBox: '0 0 1 1', width: '5', height: '5' }, {}));
+        expect(content.attributes?.transform).toBe('matrix(5 0 0 5 0 0)');
+    });
+
+    it('lets the use width/height override the symbol ones', () => {
+        const { content } = parts(
+            resolveSymbol({ viewBox: '0 0 1 1', width: '5', height: '5' }, { width: '8', height: '8' }),
+        );
+        expect(content.attributes?.transform).toBe('matrix(8 0 0 8 0 0)');
+    });
+
+    it('keeps the unscaled behaviour when no absolute size is known', () => {
+        const wrapper = resolveSymbol({ viewBox: '0 0 1 1' }, { x: '1', y: '1' });
+        expect(wrapper.attributes?.transform).toBe('translate(1 1)');
+        const symbolAsGroup = onlyChild(wrapper);
+        expect(symbolAsGroup.attributes?.['clip-path']).toBeUndefined();
+        expect(symbolAsGroup.attributes?.transform).toBeUndefined();
+        expect(onlyChild(symbolAsGroup).name).toBe('path');
+    });
+
+    it('clips to the viewport with a generated <clipPath>', () => {
+        const { clipGroup, clipPath } = parts(resolveSymbol({ viewBox: '0 0 1 1' }, { width: '10', height: '6' }));
+        expect(clipPath).toBeDefined();
+        const id = clipPath?.attributes?.id as string;
+        expect(clipGroup?.attributes?.['clip-path']).toBe(`url(#${id})`);
+        const rect = onlyChild(clipPath as XastElement);
+        expect(rect.name).toBe('rect');
+        expect(rect.attributes).toEqual({ x: '0', y: '0', width: '10', height: '6' });
+    });
+
+    it.each(['visible', 'auto'])('does not clip when the symbol has overflow="%s"', (overflow) => {
+        const { clipGroup, content } = parts(
+            resolveSymbol({ viewBox: '0 0 1 1', overflow }, { width: '10', height: '10' }),
+        );
+        expect(clipGroup).toBeUndefined();
+        expect(content.attributes?.transform).toBe('matrix(10 0 0 10 0 0)');
+    });
+
+    it('also reads overflow from the symbol style', () => {
+        const { clipGroup } = parts(
+            resolveSymbol({ viewBox: '0 0 1 1', style: 'overflow:visible' }, { width: '10', height: '10' }),
+        );
+        expect(clipGroup).toBeUndefined();
+    });
+
+    it('generates clip ids that collide neither with existing ids nor with each other', () => {
+        const tree = root([
+            el('svg', {}, [
+                el('defs', {}, [
+                    el('clipPath', { id: 'svgvd-symbol-viewport-1' }, [el('rect', { width: '1', height: '1' })]),
+                    el('symbol', { id: 's', viewBox: '0 0 1 1' }, [el('path', { d: 'M0 0h1v1h-1z' })]),
+                ]),
+                el('use', { href: '#s', width: '2', height: '2' }),
+                el('use', { href: '#s', width: '3', height: '3' }),
+            ]),
+        ]);
+        resolveUses(tree);
+
+        const svg = onlyChild(tree);
+        const ids = [svg.children?.[1], svg.children?.[2]].map((w) => parts(w as XastElement).clipPath?.attributes?.id);
+        expect(ids[0]).toBeDefined();
+        expect(ids[1]).toBeDefined();
+        expect(ids[0]).not.toBe('svgvd-symbol-viewport-1');
+        expect(ids[1]).not.toBe('svgvd-symbol-viewport-1');
+        expect(ids[0]).not.toBe(ids[1]);
+    });
+
+    it('renders nothing for a zero-sized viewport', () => {
+        const wrapper = resolveSymbol({ viewBox: '0 0 1 1' }, { width: '0', height: '10' });
+        expect(wrapper.name).toBe('g');
+        expect(wrapper.children).toEqual([]);
+    });
+
+    it('leaves a symbol without viewBox exactly as before, even with a use size', () => {
+        const wrapper = resolveSymbol({}, { x: '2', y: '3', width: '10', height: '10' });
+        expect(wrapper.attributes).toEqual({ transform: 'translate(2 3)' });
+        const symbolAsGroup = onlyChild(wrapper);
+        expect(symbolAsGroup.attributes).toEqual({ id: 's' });
+        expect(onlyChild(symbolAsGroup).name).toBe('path');
+    });
+
+    it('scales and clips end to end through convert()', () => {
+        const svg =
+            '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">' +
+            '<defs><symbol id="s" viewBox="0 0 1 1"><path d="M0 0h2v2h-2z" fill="#000"/></symbol></defs>' +
+            '<use href="#s" x="2" y="2" width="10" height="10"/></svg>';
+        for (const optimize of [false, true]) {
+            const { xml, warnings } = convert(svg, { optimize });
+            expect(warnings).toEqual([]);
+            expect(xml).toContain('android:scaleX="10"');
+            expect(xml).toContain('android:scaleY="10"');
+            // The viewport clip (10×10 at the use origin) must reach the output.
+            expect(xml).toContain('<clip-path android:pathData="M0,0h10v10h-10z" />');
+        }
     });
 });

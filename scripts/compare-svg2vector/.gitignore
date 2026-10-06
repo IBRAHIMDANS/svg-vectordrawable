@@ -1,0 +1,6 @@
+# Gradle state and build outputs
+.gradle/
+build/
+.kotlin/
+# Comparison outputs (converted XML, PNGs, reports)
+out/
