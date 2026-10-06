@@ -1,55 +1,72 @@
+import { parseLength } from './units.js';
+
 type Attrs = Record<string, string>;
 
-const n = (attrs: Attrs, key: string, fallback = 0): number => {
-    const v = attrs[key];
-    if (v === undefined) return fallback;
-    const parsed = parseFloat(v);
-    return Number.isNaN(parsed) ? fallback : parsed;
-};
+/** Size of the viewport (viewBox units) that percentage shape attributes resolve against. */
+export interface ShapeViewport {
+    width: number;
+    height: number;
+}
 
-/**
- * Converts a basic SVG shape element to path data, so the rest of the pipeline only deals with
- * `<path>`. svgo's `convertShapeToPath` normally does this upstream; this keeps us correct even
- * when normalization is disabled. Returns null for shapes we cannot express (or empty geometry).
- */
-export function shapeToPathData(name: string, attrs: Attrs): string | null {
+export interface ShapeOptions {
+    /** Reference for `%` values; without it, percentages fall back to their attribute default. */
+    viewport?: ShapeViewport;
+    /** Decimal places kept for generated numbers. @default 3 */
+    precision?: number;
+}
+
+export function shapeToPathData(name: string, attrs: Attrs, options: ShapeOptions = {}): string | null {
+    const { viewport, precision = 3 } = options;
+    const f = 10 ** precision;
+    /** Rounds away float noise (`0.49999999999999994`); integers print unchanged. */
+    const fmt = (v: number): string => String(Math.round(v * f) / f || 0);
+    /** Path data template whose interpolated numbers are rounded. */
+    const p = (strings: TemplateStringsArray, ...values: number[]): string =>
+        strings.reduce((acc, str, i) => acc + str + (i < values.length ? fmt(values[i]!) : ''), '');
+    const diagonal = viewport ? Math.sqrt((viewport.width ** 2 + viewport.height ** 2) / 2) : undefined;
+    /** Reads a length; `axis` picks the percentage reference (x: width, y: height, d: diagonal). */
+    const n = (key: string, axis: 'x' | 'y' | 'd'): number => {
+        const ref = axis === 'x' ? viewport?.width : axis === 'y' ? viewport?.height : diagonal;
+        const parsed = parseLength(attrs[key], ref);
+        return Number.isNaN(parsed) ? 0 : parsed;
+    };
     switch (name) {
         case 'rect': {
-            const w = n(attrs, 'width');
-            const h = n(attrs, 'height');
+            const w = n('width', 'x');
+            const h = n('height', 'y');
             if (w <= 0 || h <= 0) return null;
-            const x = n(attrs, 'x');
-            const y = n(attrs, 'y');
-            let rx = attrs.rx !== undefined ? n(attrs, 'rx') : n(attrs, 'ry');
-            let ry = attrs.ry !== undefined ? n(attrs, 'ry') : n(attrs, 'rx');
+            const x = n('x', 'x');
+            const y = n('y', 'y');
+            let rx = attrs.rx !== undefined ? n('rx', 'x') : n('ry', 'y');
+            let ry = attrs.ry !== undefined ? n('ry', 'y') : n('rx', 'x');
             rx = Math.min(Math.max(rx, 0), w / 2);
             ry = Math.min(Math.max(ry, 0), h / 2);
             if (rx > 0 || ry > 0) {
                 return (
-                    `M${x + rx},${y}h${w - 2 * rx}a${rx},${ry} 0 0 1 ${rx},${ry}` +
-                    `v${h - 2 * ry}a${rx},${ry} 0 0 1 ${-rx},${ry}h${-(w - 2 * rx)}` +
-                    `a${rx},${ry} 0 0 1 ${-rx},${-ry}v${-(h - 2 * ry)}a${rx},${ry} 0 0 1 ${rx},${-ry}z`
+                    p`M${x + rx},${y}h${w - 2 * rx}a${rx},${ry} 0 0 1 ${rx},${ry}` +
+                    p`v${h - 2 * ry}a${rx},${ry} 0 0 1 ${-rx},${ry}h${-(w - 2 * rx)}` +
+                    p`a${rx},${ry} 0 0 1 ${-rx},${-ry}v${-(h - 2 * ry)}a${rx},${ry} 0 0 1 ${rx},${-ry}z`
                 );
             }
-            return `M${x},${y}h${w}v${h}h${-w}z`;
+            return p`M${x},${y}h${w}v${h}h${-w}z`;
         }
         case 'circle': {
-            const r = n(attrs, 'r');
+            const r = n('r', 'd');
             if (r <= 0) return null;
-            const cx = n(attrs, 'cx');
-            const cy = n(attrs, 'cy');
-            return `M${cx - r},${cy}a${r},${r} 0 1 0 ${2 * r},0a${r},${r} 0 1 0 ${-2 * r},0z`;
+            const cx = n('cx', 'x');
+            const cy = n('cy', 'y');
+            return p`M${cx - r},${cy}a${r},${r} 0 1 0 ${2 * r},0a${r},${r} 0 1 0 ${-2 * r},0z`;
         }
         case 'ellipse': {
-            const rx = n(attrs, 'rx');
-            const ry = n(attrs, 'ry');
+            const rx = n('rx', 'x');
+            const ry = n('ry', 'y');
             if (rx <= 0 || ry <= 0) return null;
-            const cx = n(attrs, 'cx');
-            const cy = n(attrs, 'cy');
-            return `M${cx - rx},${cy}a${rx},${ry} 0 1 0 ${2 * rx},0a${rx},${ry} 0 1 0 ${-2 * rx},0z`;
+            const cx = n('cx', 'x');
+            const cy = n('cy', 'y');
+            return p`M${cx - rx},${cy}a${rx},${ry} 0 1 0 ${2 * rx},0a${rx},${ry} 0 1 0 ${-2 * rx},0z`;
         }
         case 'line':
-            return `M${n(attrs, 'x1')},${n(attrs, 'y1')}L${n(attrs, 'x2')},${n(attrs, 'y2')}`;
+            return p`M${n('x1', 'x')},${n('y1', 'y')}L${n('x2', 'x')},${n('y2', 'y')}`;
         case 'polyline':
         case 'polygon': {
             const pts = (attrs.points ?? '')

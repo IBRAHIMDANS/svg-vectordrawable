@@ -22,6 +22,13 @@ export function multiply(m1: Matrix, m2: Matrix): Matrix {
     };
 }
 
+/** True when every coefficient matches the identity within 1e-12. */
+export const isIdentity = (m: Matrix): boolean =>
+    Object.entries(IDENTITY).every(([k, v]) => Math.abs(m[k as keyof Matrix] - v) < 1e-12);
+
+/** Serializes a matrix as an SVG `matrix(a b c d e f)` transform. */
+export const formatMatrix = (m: Matrix): string => `matrix(${m.a} ${m.b} ${m.c} ${m.d} ${m.e} ${m.f})`;
+
 export function applyPoint(m: Matrix, x: number, y: number): [number, number] {
     return [m.a * x + m.c * y + m.e, m.b * x + m.d * y + m.f];
 }
