@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">
+  <clipPath id="c"><rect width="14" height="24"/></clipPath>
+  <mask id="m" maskUnits="userSpaceOnUse" x="0" y="0" width="20" height="20">
+    <g transform="translate(2 2)"><circle cx="9" cy="9" r="9" fill="#fff"/></g>
+  </mask>
+  <mask id="a" style="mask-type:alpha"><rect x="15" y="3" width="6" height="18" rx="2" fill="#D9D9D9"/></mask>
+  <path transform="rotate(5 12 12)" d="M0 0h24v24H0z" fill="#e91e63" clip-path="url(#c)" mask="url(#m)"/>
+  <g mask="url(#a)"><path d="M12 0h12v24H12z" fill="#3f51b5"/></g>
+</svg>
