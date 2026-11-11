@@ -320,6 +320,11 @@ textarea {
     border-radius: 6px;
 }
 
+/* The unresolved-colors note sits between the drawable preview and its caption. */
+#vd-preview + .preview-note {
+    margin-block: 8px;
+}
+
 .site-footer {
     padding: 16px 0 32px;
     color: var(--muted);
