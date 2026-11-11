@@ -24,6 +24,10 @@ Options:
                        (gradients and fillType need API 24)
   --xml-tag            Prepend an XML declaration
   --tint <color>       Add android:tint to the <vector>
+  --auto-mirrored      Add android:autoMirrored="true" (flipped in RTL layouts)
+  --width <dp>         Set android:width, keeping the viewport; alone, the
+                       height follows the aspect ratio
+  --height <dp>        Set android:height (same rules as --width)
   --android-names      Name outputs as valid Android resources (Arrow-Left.svg →
                        arrow_left.xml); fails if two inputs map to the same name.
                        An explicit -o file.xml is used as is
@@ -98,7 +102,13 @@ function parseArgs(
         } else if (arg === '--xml-tag') opts.xmlTag = true;
         else if (arg === '--android-names') naming.androidNames = true;
         else if (arg === '--tint') opts.tint = value();
-        else if (arg === '-p' || arg === '--precision') {
+        else if (arg === '--auto-mirrored') opts.autoMirrored = true;
+        else if (arg === '--width' || arg === '--height') {
+            const dp = value();
+            if (!/^(\d+\.?\d*|\.\d+)$/.test(dp) || !(Number(dp) > 0))
+                fail(`Invalid ${arg} (expected a positive number of dp): ${dp}`);
+            opts[arg === '--width' ? 'width' : 'height'] = Number(dp);
+        } else if (arg === '-p' || arg === '--precision') {
             const precision = value();
             if (!/^\d+$/.test(precision)) fail(`Invalid --precision (expected a non-negative integer): ${precision}`);
             opts.floatPrecision = Number(precision);

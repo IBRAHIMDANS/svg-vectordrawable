@@ -55,6 +55,24 @@ function apiRequirements(xml: string): { feature: string; sdk: number }[] {
     return out;
 }
 
+interface Size {
+    width: number;
+    height: number;
+}
+
+/**
+ * `android:width` / `android:height` (dp): the `width` / `height` options, else the SVG's size. One
+ * option alone scales the other dimension by the SVG size's aspect ratio (not the viewport's: under
+ * `preserveAspectRatio="none"` they differ, and the size is what the drawing is stretched to).
+ */
+function vectorSize(svgSize: Size, width: number | undefined, height: number | undefined): Size {
+    const ratio = svgSize.width / svgSize.height;
+    return {
+        width: width ?? (height === undefined ? svgSize.width : height * ratio),
+        height: height ?? (width === undefined ? svgSize.height : width / ratio),
+    };
+}
+
 /** Text content of an element (`<style>` CSS), comments stripped. */
 const cssText = (el: XastElement): string =>
     (el.children ?? [])
@@ -81,6 +99,7 @@ export function convert(svg: string, options: ConvertOptions = {}): ConvertResul
         indent = 4,
         xmlTag = false,
         tint,
+        autoMirrored = false,
         onWarn,
         minSdk: appMinSdk,
     } = options;
@@ -95,6 +114,11 @@ export function convert(svg: string, options: ConvertOptions = {}): ConvertResul
         );
     if (!(Number.isInteger(indent) && indent >= 0))
         throw new TypeError(`Invalid indent: ${indent} (expected a non-negative integer)`);
+    for (const name of ['width', 'height'] as const) {
+        const dp = options[name];
+        if (dp !== undefined && !(Number.isFinite(dp) && dp > 0))
+            throw new TypeError(`Invalid ${name}: ${dp} (expected a finite number of dp greater than 0)`);
+    }
     // An unparseable color would silently drop every shape painted with `currentColor`.
     if (toAndroidColor(currentColor, 1, currentColor) === null)
         throw new TypeError(`Invalid currentColor: ${JSON.stringify(currentColor)} (expected a CSS color)`);
@@ -172,22 +196,25 @@ export function convert(svg: string, options: ConvertOptions = {}): ConvertResul
     // tint is an Android color literal (#AARRGGBB), not an SVG color — pass it through verbatim.
     const tintLine = tint ? `\n${step}android:tint="${escapeXml(tint.trim())}"` : '';
     const alphaLine = rootAlpha < 1 ? `\n${step}android:alpha="${rootAlpha}"` : '';
+    const mirrorLine = autoMirrored ? `\n${step}android:autoMirrored="true"` : '';
+    // The width / height options resize the drawable only: the viewport (the content's coordinates) stays.
+    const size = vectorSize(layout, options.width, options.height);
     const decl = xmlTag ? '<?xml version="1.0" encoding="utf-8"?>\n' : '';
     const xml =
         decl +
-        `<vector xmlns:android="http://schemas.android.com/apk/res/android"${aapt}${tintLine}${alphaLine}\n` +
-        `${step}android:width="${r(layout.width)}dp"\n` +
-        `${step}android:height="${r(layout.height)}dp"\n` +
+        `<vector xmlns:android="http://schemas.android.com/apk/res/android"${aapt}${tintLine}${alphaLine}${mirrorLine}\n` +
+        `${step}android:width="${r(size.width)}dp"\n` +
+        `${step}android:height="${r(size.height)}dp"\n` +
         `${step}android:viewportWidth="${r(layout.viewportWidth)}"\n` +
         `${step}android:viewportHeight="${r(layout.viewportHeight)}">\n` +
         `${body}\n` +
         `</vector>\n`;
 
     // Android-side checks on the generated XML (what the app ships), after the conversion itself.
-    if (layout.width > MAX_VECTOR_DP || layout.height > MAX_VECTOR_DP)
+    if (size.width > MAX_VECTOR_DP || size.height > MAX_VECTOR_DP)
         warn({
             code: 'large-vector',
-            message: `Vector size ${r(layout.width)}×${r(layout.height)}dp exceeds ${MAX_VECTOR_DP}dp; large vectors are slow to render (prefer a bitmap for big artwork).`,
+            message: `Vector size ${r(size.width)}×${r(size.height)}dp exceeds ${MAX_VECTOR_DP}dp; large vectors are slow to render (prefer a bitmap for big artwork).`,
             node: 'vector',
         });
     if (severityOf('long-path-data') !== 'off') {

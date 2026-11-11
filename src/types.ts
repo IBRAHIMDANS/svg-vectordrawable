@@ -141,6 +141,19 @@ export interface ConvertOptions {
     xmlTag?: boolean;
     /** Add `android:tint` to the `<vector>`. Android color literal (e.g. `#AARRGGBB`), passed verbatim. */
     tint?: string;
+    /**
+     * Add `android:autoMirrored="true"` to the `<vector>`: Android flips the drawable horizontally
+     * in right-to-left layouts (arrows, chevrons…). @default false
+     */
+    autoMirrored?: boolean;
+    /**
+     * `android:width` in dp, replacing the size taken from the SVG; the viewport is unchanged. Alone,
+     * the height follows the SVG's aspect ratio. With both `width` and `height`, a different ratio
+     * stretches the drawing (as Android does). Must be a finite number greater than 0.
+     */
+    width?: number;
+    /** `android:height` in dp; same rules as `width` (alone, the width follows the aspect ratio). */
+    height?: number;
     /** Called for every warning as it happens (in addition to the returned list). */
     onWarn?: (warning: Warning) => void;
     /**

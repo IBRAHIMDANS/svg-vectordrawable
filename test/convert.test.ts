@@ -1350,3 +1350,72 @@ describe('invalid options and sizes are rejected instead of producing broken XML
         expect(xml).not.toContain('-5');
     });
 });
+
+describe('autoMirrored and size override (width / height in dp)', () => {
+    const icon = svg('<path d="M2 2h20v20H2z"/>');
+    const wide = svg('<path d="M0 0h20v10H0z"/>', 'width="40" height="20" viewBox="0 0 20 10"');
+    const attr = (xml: string, name: string): string | undefined =>
+        new RegExp(`android:${name}="([^"]*)"`).exec(xml)?.[1];
+    const codes = (result: { warnings: { code: string }[] }): string[] => result.warnings.map((w) => w.code);
+    const body = (xml: string): string => xml.slice(xml.indexOf('<path'));
+
+    it('adds android:autoMirrored="true" only when enabled', () => {
+        expect(convert(icon, { ...raw, autoMirrored: true }).xml).toContain('android:autoMirrored="true"');
+        expect(convert(icon, raw).xml).not.toContain('autoMirrored');
+        expect(convert(icon, { ...raw, autoMirrored: false }).xml).not.toContain('autoMirrored');
+    });
+
+    it('leaves the default output byte-identical when the options are unset', () => {
+        expect(convert(wide, { ...raw, width: undefined, height: undefined, autoMirrored: false }).xml).toBe(
+            convert(wide, raw).xml,
+        );
+    });
+
+    it('replaces width and height without touching the viewport', () => {
+        const { xml } = convert(icon, { ...raw, width: 48, height: 32 });
+        expect([attr(xml, 'width'), attr(xml, 'height')]).toEqual(['48dp', '32dp']);
+        expect([attr(xml, 'viewportWidth'), attr(xml, 'viewportHeight')]).toEqual(['24', '24']);
+        expect(body(xml)).toBe(body(convert(icon, raw).xml));
+    });
+
+    it('keeps the aspect ratio when only one dimension is given', () => {
+        const byWidth = convert(wide, { ...raw, width: 100 }).xml;
+        expect([attr(byWidth, 'width'), attr(byWidth, 'height')]).toEqual(['100dp', '50dp']);
+        const byHeight = convert(wide, { ...raw, height: 5 }).xml;
+        expect([attr(byHeight, 'width'), attr(byHeight, 'height')]).toEqual(['10dp', '5dp']);
+        expect([attr(byHeight, 'viewportWidth'), attr(byHeight, 'viewportHeight')]).toEqual(['20', '10']);
+    });
+
+    it('follows the rendered size ratio, not the viewport, under preserveAspectRatio="none"', () => {
+        const stretched = svg(
+            '<path d="M0 0h24v12H0z"/>',
+            'width="24" height="24" viewBox="0 0 24 12" preserveAspectRatio="none"',
+        );
+        const { xml } = convert(stretched, { ...raw, width: 48 });
+        expect([attr(xml, 'width'), attr(xml, 'height')]).toEqual(['48dp', '48dp']);
+        expect([attr(xml, 'viewportWidth'), attr(xml, 'viewportHeight')]).toEqual(['24', '12']);
+    });
+
+    it('rounds a derived dimension to floatPrecision', () => {
+        const third = svg('<path d="M0 0h3v1H0z"/>', 'viewBox="0 0 3 1"');
+        expect(attr(convert(third, { ...raw, width: 10 }).xml, 'height')).toBe('3.333dp');
+        expect(attr(convert(third, { ...raw, width: 10, floatPrecision: 1 }).xml, 'height')).toBe('3.3dp');
+    });
+
+    it('evaluates large-vector on the final size', () => {
+        const big = svg('<path d="M0 0h9v9z"/>', 'viewBox="0 0 512 512"');
+        expect(codes(convert(big, raw))).toEqual(['large-vector']);
+        expect(codes(convert(big, { ...raw, width: 24 }))).toEqual([]);
+        const huge = convert(icon, { ...raw, height: 480 });
+        expect(codes(huge)).toEqual(['large-vector']);
+        expect(huge.warnings[0]!.message).toContain('480×480dp');
+    });
+
+    it.each([0, -24, Number.NaN, Number.POSITIVE_INFINITY, '48' as unknown as number])(
+        'rejects width / height %s',
+        (dp) => {
+            expect(() => convert(icon, { width: dp })).toThrow(/Invalid width/);
+            expect(() => convert(icon, { height: dp })).toThrow(TypeError);
+        },
+    );
+});

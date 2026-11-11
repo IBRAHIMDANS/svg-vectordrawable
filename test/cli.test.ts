@@ -298,4 +298,37 @@ describe('svgvd CLI', () => {
             expect(help).toContain('--min-sdk <n>');
         });
     });
+
+    describe('--auto-mirrored, --width and --height', () => {
+        it('adds android:autoMirrored with --auto-mirrored', () => {
+            expect(svgvd('-s', ICON, '--auto-mirrored').stdout).toContain('android:autoMirrored="true"');
+            expect(svgvd('-s', ICON).stdout).not.toContain('autoMirrored');
+        });
+
+        it('overrides the size in dp, keeping the viewport and the aspect ratio', () => {
+            const both = svgvd('-s', ICON, '--width', '48', '--height', '32.5').stdout;
+            expect(both).toContain('android:width="48dp"');
+            expect(both).toContain('android:height="32.5dp"');
+            expect(both).toContain('android:viewportWidth="24"');
+            const one = svgvd('-s', ICON, '--height', '.5').stdout;
+            expect(one).toContain('android:width="0.5dp"');
+            expect(one).toContain('android:height="0.5dp"');
+        });
+
+        it.each(['--width', '--height'])('rejects an invalid %s', (flag) => {
+            for (const value of ['abc', '0', '-1', '0.0', '1e2', '48dp', '']) {
+                const res = svgvd('-s', ICON, flag, value);
+                expect(res.status).toBe(1);
+                expect(res.stderr).toContain(`Invalid ${flag}`);
+            }
+            expect(svgvd('-s', ICON, flag).status).toBe(1);
+        });
+
+        it('documents the options in the help', () => {
+            const help = svgvd('--help').stdout;
+            expect(help).toContain('--auto-mirrored');
+            expect(help).toContain('--width <dp>');
+            expect(help).toContain('--height <dp>');
+        });
+    });
 });
