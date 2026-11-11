@@ -120,6 +120,14 @@ export function describeError({ message, category }) {
     return category ? `${message} (${category}, rejected by strict mode)` : message;
 }
 
+/**
+ * The note under the drawable preview listing the color references it drew in gray, or `''` when
+ * every color resolved, e.g. `Drawn in gray (no preview value): ?attr/colorPrimary`.
+ */
+export function describeUnresolvedColors(references = []) {
+    return references.length ? `Drawn in gray (no preview value): ${references.join(', ')}` : '';
+}
+
 /** A `data:` URL for an `<img>` (scripts in an SVG loaded as an image never run). */
 export function svgDataUrl(svg) {
     return `data:image/svg+xml,${encodeURIComponent(svg)}`;

@@ -27,9 +27,17 @@ function runConversion(svg, options, preview) {
             node: w.node,
         })),
         preview: null,
+        // Color references (`?attr/…`, `@color/…`) the preview has no value for, drawn in gray.
+        unresolvedColors: [],
     };
+    // The callback cannot cross postMessage: collect the references here and send them as data.
+    const unresolvedColors = [];
     try {
-        outcome.preview = svgvd.vectorDrawableToSvg(result.xml, preview);
+        outcome.preview = svgvd.vectorDrawableToSvg(result.xml, {
+            ...preview,
+            onUnresolvedColor: (reference) => unresolvedColors.push(reference),
+        });
+        outcome.unresolvedColors = unresolvedColors;
     } catch (error) {
         outcome.previewError = error instanceof Error ? error.message : String(error);
     }
