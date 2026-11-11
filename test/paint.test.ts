@@ -53,8 +53,9 @@ describe.each([true, false])('wpt reproductions (optimize: %s)', (optimize) => {
         expect(strictError(source, optimize)).toBeNull();
     });
 
-    it('context-fill is reported (strict rejects it) instead of silently dropping the shape', () => {
-        const source = repro('wpt-paint-context-fill.svg');
+    it('context-fill outside a <use> instance is reported (strict rejects it)', () => {
+        // Resolved from the <use> since TASK-075 (test/useResolver.test.ts); the bare target has no context element.
+        const source = repro('wpt-paint-context-fill.svg').replace(/<\/?defs>/g, '').replace(/<use[^>]*\/>/, '');
         const { warnings } = convert(source, { optimize });
         expect(warnings.map((w) => [w.code, w.message])).toEqual([
             ['unsupported-paint', expect.stringContaining('fill="context-fill"')],

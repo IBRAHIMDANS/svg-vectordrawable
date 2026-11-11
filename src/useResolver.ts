@@ -1,4 +1,5 @@
 import type { XastElement } from './ast.js';
+import { USE_INSTANCE_ATTR } from './inherited.js';
 import { presentation } from './style.js';
 import { formatMatrix } from './transform.js';
 import { parseLength } from './units.js';
@@ -151,9 +152,10 @@ function symbolViewport(
 
 /**
  * Builds the inlined replacement for a `<use>`: a deep clone of the target wrapped in a `<g>` that
- * carries the use's `x`/`y` translation (composed after any `transform` on the use) and its
- * presentation attributes. A `<symbol>` target is treated as a group (cloned, then renamed to `g`),
- * clipped to its viewport and, with a `viewBox`, scaled into it (see `symbolViewport`). On an
+ * carries the use's `x`/`y` translation (composed after any `transform` on the use), its
+ * presentation attributes and the `USE_INSTANCE_ATTR` mark (context element, see inherited.ts). A
+ * `<symbol>` target is treated as a group (cloned, then renamed to `g`), clipped to its viewport
+ * and, with a `viewBox`, scaled into it (see `symbolViewport`). On an
  * `<svg>` target, the use's width/height override the svg's own (the nested-svg walker does the rest).
  */
 function buildReplacement(use: XastElement, target: XastElement, nextId: IdAllocator, spend: CloneBudget): XastElement {
@@ -186,6 +188,8 @@ function buildReplacement(use: XastElement, target: XastElement, nextId: IdAlloc
         if (USE_GEOMETRY_ATTRS.has(key) || key === 'transform') continue;
         attributes[key] = value;
     }
+    // The replacement is the context element of its content (`context-fill` / `context-stroke`).
+    attributes[USE_INSTANCE_ATTR] = '';
 
     return { type: 'element', name: 'g', attributes, children };
 }
