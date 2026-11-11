@@ -3,6 +3,7 @@
 [![npm version](https://img.shields.io/npm/v/svg-vectordrawable)](https://www.npmjs.com/package/svg-vectordrawable)
 [![npm downloads](https://img.shields.io/npm/dm/svg-vectordrawable)](https://www.npmjs.com/package/svg-vectordrawable)
 [![CI](https://github.com/IBRAHIMDANS/svg-vectordrawable/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/IBRAHIMDANS/svg-vectordrawable/actions/workflows/ci.yml)
+[![codecov](https://codecov.io/gh/IBRAHIMDANS/svg-vectordrawable/graph/badge.svg)](https://codecov.io/gh/IBRAHIMDANS/svg-vectordrawable)
 [![types included](https://img.shields.io/npm/types/svg-vectordrawable)](https://www.npmjs.com/package/svg-vectordrawable)
 [![license](https://img.shields.io/npm/l/svg-vectordrawable)](LICENSE)
 
@@ -117,26 +118,26 @@ try {
 }
 ```
 
-| Code                           | Meaning                                                                                      |
-| ------------------------------ | -------------------------------------------------------------------------------------------- |
-| `unsupported-element`          | `<text>`, `<image>`, `<foreignObject>`, `<switch>` — skipped                                 |
-| `unsupported-attribute`        | non-clip `mask`, `filter`, `marker*`, `vector-effect`, `paint-order`, `arcs` joins — ignored |
-| `unsupported-stroke-dasharray` | dash pattern that cannot be resolved (`em`/`ex` units) — drawn solid                         |
-| `unsupported-stroke-gradient`  | no longer emitted (gradient strokes are supported); kept for compatibility                   |
-| `unsupported-paint`            | `<pattern>` paint (fallback color or black); translucent stop mapped to a reference          |
-| `unsupported-style`            | CSS left in a `<style>` that could not be applied to elements — ignored                      |
-| `unsupported-clip-path`        | `objectBoundingBox` clip, evenodd clip with crossing contours, unconvertible content         |
-| `gradient-approximated`        | radial focal point; elliptical radial on a path that also has a solid stroke                 |
-| `opacity-approximated`         | opacity folded onto overlapping children / fill+stroke — overlaps look darker                |
-| `missing-gradient`             | `url(#id)` paint pointing at nothing, no fallback — black                                    |
-| `missing-clip-path`            | `clip-path` pointing at nothing — ignored                                                    |
-| `group-skew`                   | skewed `<g>` baked into path geometry                                                        |
-| `gradient-under-skew`          | gradient placement under a baked skew is approximate                                         |
-| `gradient-bbox-unavailable`    | `objectBoundingBox` gradient without a measurable path box                                   |
-| `empty-path`                   | shape without geometry — skipped                                                             |
-| `min-sdk-exceeded` (info)      | the output needs a higher API level than the `minSdk` option                                 |
-| `large-vector` (info)          | `android:width`/`height` above 200 dp (Android lint `VectorRaster`)                          |
-| `long-path-data` (info, off)   | a `pathData` longer than 800 characters (lint `VectorPath`); enable it with `rules`          |
+| Code                           | Meaning                                                                                                 |
+| ------------------------------ | ------------------------------------------------------------------------------------------------------- |
+| `unsupported-element`          | `<text>`, `<image>`, `<foreignObject>`, `<switch>` — skipped                                            |
+| `unsupported-attribute`        | non-clip `mask`, `filter`, `marker*`, `vector-effect`, `paint-order`, `arcs` joins — ignored            |
+| `unsupported-stroke-dasharray` | dash pattern that cannot be resolved (`em`/`ex` units) — drawn solid                                    |
+| `unsupported-stroke-gradient`  | no longer emitted (gradient strokes are supported); kept for compatibility                              |
+| `unsupported-paint`            | `<pattern>` paint (fallback color or black); translucent stop mapped to a reference                     |
+| `unsupported-style`            | CSS left in a `<style>` that could not be applied to elements — ignored                                 |
+| `unsupported-clip-path`        | `objectBoundingBox` clip, evenodd clip with crossing contours, unconvertible content                    |
+| `gradient-approximated`        | radial focal point; elliptical radial on a path that also has a solid stroke                            |
+| `opacity-approximated`         | opacity folded onto overlapping children / fill+stroke — overlaps look darker                           |
+| `missing-gradient`             | `url(#id)` paint, no fallback: pointing at nothing (black fill) or at an invalid gradient (not painted) |
+| `missing-clip-path`            | `clip-path` pointing at nothing — ignored                                                               |
+| `group-skew`                   | skewed `<g>` baked into path geometry                                                                   |
+| `gradient-under-skew`          | gradient placement under a baked skew is approximate                                                    |
+| `gradient-bbox-unavailable`    | `objectBoundingBox` gradient without a measurable path box                                              |
+| `empty-path`                   | shape without geometry — skipped                                                                        |
+| `min-sdk-exceeded` (info)      | the output needs a higher API level than the `minSdk` option                                            |
+| `large-vector` (info)          | `android:width`/`height` above 200 dp (Android lint `VectorRaster`)                                     |
+| `long-path-data` (info, off)   | a `pathData` longer than 800 characters (lint `VectorPath`); enable it with `rules`                     |
 
 Node file helpers:
 
@@ -162,7 +163,23 @@ svgvd icon.svg --strict=lossy  # fail only when content would be lost
 svgvd icon.svg --min-sdk 21    # warn when the output needs a higher API level
 svgvd arrow.svg --auto-mirrored --width 24   # RTL mirroring, 24dp wide (height follows the ratio)
 svgvd icons/ -o res/drawable/ --android-names   # Arrow-Left.svg → arrow_left.xml (valid resource names)
+cat icon.svg | svgvd > icon.xml   # stdin → stdout (also `svgvd -`, or `svgvd - -o icon.xml`)
+svgvd icons/ -r -o out/        # recursive: icons/a/b.svg → out/a/b.xml
+svgvd icons/ -o out/ --json    # JSON report on stdout, for CI (see below)
+svgvd icons/ -r --dry-run      # convert and report, write nothing
 ```
+
+`--json` prints one entry per file, `[{ input, output, warnings, minSdk, error }]`, and nothing else on
+stdout (human-readable lines stay on stderr). Each warning carries its `code` and `category`
+(`lossy`, `approximation`, `info`); `error` is `null` or `{ message, code?, category? }` (`code` when a
+warning was escalated by `--strict` / `--rule`). The XML then has to go to files: `--json` is refused
+with `--stdout`, or with stdin / `-s` without `-o file.xml`, unless `--dry-run`. The exit code is 1
+when any file fails, as without `--json`.
+
+With `--recursive` and `--android-names`, the outputs are written flat into `-o` (an Android resource
+directory has no subdirectories) and a name collision across subdirectories fails before anything is
+written. Symbolic links to directories are not followed. Without an input argument, `svgvd` reads
+stdin only when it is not a terminal, and prints the help when nothing is piped.
 
 ### Browser
 
