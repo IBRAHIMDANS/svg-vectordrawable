@@ -226,6 +226,49 @@ describe('normalize: shapes with a negative size are not drawn', () => {
     });
 });
 
+describe('normalize: shapes with a zero size warn in both modes', () => {
+    const codes = (source: string, optimize: boolean): string[] =>
+        convert(source, { optimize }).warnings.map((w) => w.code);
+
+    for (const shape of [
+        '<rect width="0" height="10"/>',
+        '<rect width="10" height="0"/>',
+        '<rect width="0.0" height="10"/>',
+        "<circle cx='50' cy='50' r='0'/>",
+        '<ellipse cx="50" cy="50" rx="0" ry="10"/>',
+        '<ellipse cx="50" cy="50" rx="5" ry="0"/>',
+    ]) {
+        it(`${shape}: optimize: true emits the same warnings as optimize: false`, () => {
+            const source = svg(`${shape}<path d="M0 0h10v10z"/>`);
+            expect(codes(source, true)).toEqual(codes(source, false));
+            // The 1000×1000 viewport adds `large-vector`.
+            expect(codes(source, true)).toEqual(['empty-path', 'large-vector']);
+            expect(countPaths(convert(source).xml)).toBe(1);
+        });
+
+        it(`${shape}: strict rejects it with empty-path in both modes`, () => {
+            for (const optimize of [true, false]) {
+                let error: unknown;
+                try {
+                    convert(svg(shape), { optimize, strict: true });
+                } catch (err) {
+                    error = err;
+                }
+                expect(error).toBeInstanceOf(ConversionError);
+                expect((error as ConversionError).warning.code).toBe('empty-path');
+            }
+        });
+    }
+
+    it('keeps converting shapes to paths otherwise (a zero position does not count)', () => {
+        expect(elementNames(svg('<rect x="0" y="0" width="10" height="10"/><circle cx="0" cy="0" r="5"/>'))).toEqual([
+            'svg',
+            'path',
+            'path',
+        ]);
+    });
+});
+
 describe('normalize: pathLength on basic shapes', () => {
     const dashed = 'fill="none" stroke="#000" stroke-width="10" stroke-dasharray="1 1" pathLength="4"';
 

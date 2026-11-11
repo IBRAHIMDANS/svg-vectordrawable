@@ -82,6 +82,22 @@ const MAY_HAVE_PATH_LENGTH = /\spathLength\s*=/;
 const MAY_HAVE_NEGATIVE_SIZE = /\s(?:width|height|r|rx|ry)\s*=\s*["']\s*-/;
 
 /**
+ * A zero `width` / `height` (rect), `r` (circle) or `rx` / `ry` (ellipse) also disables rendering.
+ * svgo's `removeHiddenElems` deletes such shapes silently, whereas `optimize: false` reports them
+ * with `empty-path` (and `strict` throws). Keep them as elements so both modes warn alike.
+ * Element-aware so that the common `<rect rx="0">` does not match.
+ */
+const MAY_HAVE_ZERO_SIZE =
+    /<(?:rect\b[^>]*?\s(?:width|height)|circle\b[^>]*?\sr|ellipse\b[^>]*?\sr[xy])\s*=\s*["']\s*[-+]?(?:0+\.?0*|\.0+)(?:e[-+]?\d+)?(?:px)?\s*["']/i;
+const ZERO_SIZE_HIDDEN_ELEMS = {
+    rectWidth0: false,
+    rectHeight0: false,
+    circleR0: false,
+    ellipseRX0: false,
+    ellipseRY0: false,
+};
+
+/**
  * svgo moves `transform` between groups and their children (`moveElemsAttrsToGroup`,
  * `moveGroupAttrsToElems`, `collapseGroups`) and bakes it into path data (`convertPathData`)
  * without reading the CSS `transform` property nor `transform-origin`, which the converter folds
@@ -114,6 +130,10 @@ function defaultConfigFor(svg: string, floatPrecision: number, fillBlackForUnfil
         }
     }
     if (MAY_HAVE_NEGATIVE_SIZE.test(svg)) overrides.convertShapeToPath = false;
+    if (MAY_HAVE_ZERO_SIZE.test(svg)) {
+        overrides.convertShapeToPath = false;
+        overrides.removeHiddenElems = ZERO_SIZE_HIDDEN_ELEMS;
+    }
     if (!fillBlackForUnfilled) {
         // `removeUnknownsAndDefaults` drops `fill="#000"` (black, #000000, rgb(0,0,0) once
         // `convertColors` has run) as the SVG default; without `fillBlackForUnfilled` the converter
