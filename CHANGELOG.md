@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-11-11
+
 ### Fixed
 
 - `floatPrecision` and `indent` are validated (`TypeError`): a non-numeric precision used to write `NaN` into every coordinate (`android:width="NaNdp"`), a negative one rounded to tens. `floatPrecision` must be an integer from 0 to 20, `indent` a non-negative integer.
