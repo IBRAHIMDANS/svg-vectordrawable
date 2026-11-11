@@ -1,0 +1,8 @@
+{
+    "name": "svg-vectordrawable-gradle-example",
+    "private": true,
+    "description": "Installs the svgvd CLI used by the Gradle plugin example (npx --no-install svgvd).",
+    "devDependencies": {
+        "svg-vectordrawable": "^0.3.0"
+    }
+}

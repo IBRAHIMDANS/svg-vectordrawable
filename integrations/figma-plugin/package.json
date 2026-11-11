@@ -1,0 +1,14 @@
+{
+    "name": "svg-vectordrawable-figma-plugin",
+    "private": true,
+    "description": "Figma plugin: converts the selected layers to Android VectorDrawable XML with svg-vectordrawable (browser-lite build), offline.",
+    "type": "module",
+    "scripts": {
+        "build": "node scripts/build.ts",
+        "test": "node scripts/build.ts && node --test \"test/*-test.ts\"",
+        "typecheck": "tsc -p tsconfig.json"
+    },
+    "engines": {
+        "node": ">=22.18"
+    }
+}

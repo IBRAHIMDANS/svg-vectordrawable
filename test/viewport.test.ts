@@ -69,6 +69,141 @@ describe('root without a size', () => {
     });
 });
 
+// SVG 2 §8.12 (intrinsic sizing): a percentage or missing width / height gives no intrinsic size, the
+// viewBox gives the intrinsic aspect ratio; CSS replaced-element sizing derives the other dimension.
+// Checked in Firefox 158 and Chrome 157 (`<img>` of the SVG). resvg 2.6 keeps the viewBox's dimension
+// instead, so the references below spell out both sizes.
+describe('root with a viewBox and a single dimension', () => {
+    const shapes = '<rect width="10" height="20" fill="green"/><circle cx="5" cy="5" r="4" fill="red"/>';
+    const size = (attrs: Record<string, string>) => {
+        const { width, height, viewportWidth, viewportHeight, offsetX, offsetY } = rootLayout(attrs);
+        return { width, height, viewportWidth, viewportHeight, offsetX, offsetY };
+    };
+    const unscaled = { viewportWidth: 10, viewportHeight: 20, offsetX: 0, offsetY: 0 };
+
+    it('width only: the height follows the viewBox ratio', () => {
+        expect(size({ viewBox: '0 0 10 20', width: '5' })).toEqual({ width: 5, height: 10, ...unscaled });
+        expectRendersLike(
+            svg('viewBox="0 0 10 20" width="5"', shapes),
+            svg('viewBox="0 0 10 20" width="5" height="10"', shapes),
+        );
+    });
+
+    it('height only: the width follows the viewBox ratio', () => {
+        expect(size({ viewBox: '0 0 10 20', height: '5' })).toEqual({ width: 2.5, height: 5, ...unscaled });
+        expectRendersLike(
+            svg('viewBox="0 0 10 20" height="40"', shapes),
+            svg('viewBox="0 0 10 20" width="20" height="40"', shapes),
+        );
+    });
+
+    it('a percentage is no size: the other dimension sets it through the ratio', () => {
+        expect(size({ viewBox: '0 0 10 20', width: '50%', height: '5' })).toEqual({
+            width: 2.5,
+            height: 5,
+            ...unscaled,
+        });
+        expect(size({ viewBox: '0 0 10 20', width: '5', height: '50%' })).toEqual({
+            width: 5,
+            height: 10,
+            ...unscaled,
+        });
+    });
+
+    it('preserveAspectRatio="none" keeps the viewBox ratio (SVG 2 §8.12; Firefox)', () => {
+        for (const preserveAspectRatio of ['none', 'xMinYMin slice'])
+            expect(size({ viewBox: '0 0 10 20', width: '5', preserveAspectRatio })).toEqual({
+                width: 5,
+                height: 10,
+                ...unscaled,
+            });
+    });
+
+    it('keeps the viewBox origin offset', () => {
+        expect(size({ viewBox: '-2 3 10 20', height: '40' })).toEqual({
+            width: 20,
+            height: 40,
+            viewportWidth: 10,
+            viewportHeight: 20,
+            offsetX: 2,
+            offsetY: -3,
+        });
+    });
+
+    it('no usable dimension: the viewBox size, as before', () => {
+        const cases: Record<string, string>[] = [{}, { width: '50%' }, { width: '0', height: '1ex' }];
+        for (const attrs of cases)
+            expect(size({ viewBox: '0 0 10 20', ...attrs })).toEqual({ width: 10, height: 20, ...unscaled });
+    });
+
+    it('the width / height options scale from the derived size', () => {
+        const source = svg('viewBox="0 0 10 20" width="5"', shapes);
+        expect(convert(source, { width: 30 }).xml).toContain('android:height="60dp"');
+        expect(convert(source, { height: 30 }).xml).toContain('android:width="15dp"');
+    });
+
+    it('large-vector sees the derived dimension', () => {
+        const { xml, warnings } = convert(svg('viewBox="0 0 10 20" height="4000"', shapes));
+        expect(xml).toContain('android:width="2000dp"');
+        expect(warnings.map((w) => w.code)).toContain('large-vector');
+    });
+});
+
+// A browser resolves `em` / `rem` on the root against the initial font size, 16 px (`<img>` of the
+// SVG in Firefox and Chrome); `ex` / `ch` depend on the font and stay undefined.
+describe('font-relative size on the root <svg>', () => {
+    const size = (attrs: Record<string, string>) => {
+        const { width, height, assumed } = rootLayout(attrs);
+        return { width, height, assumed };
+    };
+
+    it('5em → 80 dp: em counts 16 px', () => {
+        expect(size({ width: '5em', height: '2.5EM' })).toEqual({ width: 80, height: 40, assumed: [] });
+        const { xml, warnings } = convert(svg('width="5em" height="5em"', '<rect width="4" height="4"/>'), {
+            strict: true,
+        });
+        expect(warnings).toEqual([]);
+        expect(xml).toContain('android:width="80dp"');
+        expect(xml).toContain('android:height="80dp"');
+        expect(xml).toContain('android:viewportWidth="80"');
+    });
+
+    it('rem counts 16 px as well (the root is its own font-size reference)', () => {
+        expect(size({ width: '2rem', height: '1e1rem' })).toEqual({ width: 32, height: 160, assumed: [] });
+        for (const optimize of [true, false])
+            expect(
+                convert(svg('width="2rem" height="2rem"', '<rect width="4" height="4"/>'), { optimize }).xml,
+            ).toContain('android:width="32dp"');
+    });
+
+    it('em with a viewBox: the other dimension follows the viewBox ratio', () => {
+        expect(rootLayout({ viewBox: '0 0 10 20', width: '1em' })).toMatchObject({
+            width: 16,
+            height: 32,
+            viewportWidth: 10,
+            viewportHeight: 20,
+        });
+        expect(convert(svg('viewBox="0 0 10 20" height="2em"', '<rect width="4" height="4"/>')).xml).toContain(
+            'android:width="16dp"',
+        );
+    });
+
+    it('a malformed or negative em length still defines no size', () => {
+        for (const width of ['em', 'pxem', '5pxem', '5 em', '-1em', '0rem'])
+            expect(size({ width, height: '10' }).assumed).toEqual(['width']);
+    });
+
+    it('ex / ch define no size: the viewBox, else 24 with the sizeless warning', () => {
+        expect(size({ viewBox: '0 0 10 20', width: '3ex' })).toEqual({ width: 10, height: 20, assumed: [] });
+        expect(size({ width: '3ex', height: '2ch' })).toEqual({ width: 24, height: 24, assumed: ['width', 'height'] });
+        const { xml, warnings } = convert(svg('width="3ex" height="10"', '<rect width="4" height="4"/>'));
+        expect(warnings.map((w) => w.code)).toEqual(['unsupported-attribute']);
+        expect(warnings[0]!.message).toContain('no usable width');
+        expect(xml).toContain('android:width="24dp"');
+        expect(xml).toContain('android:height="10dp"');
+    });
+});
+
 describe('transform on the root <svg>', () => {
     it('wpt-outer-svg-transform.svg: renders like its source', () => {
         expectRendersLike(repro('wpt-outer-svg-transform.svg'));
