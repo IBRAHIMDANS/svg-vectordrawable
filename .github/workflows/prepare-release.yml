@@ -23,16 +23,29 @@ jobs:
               with:
                   fetch-depth: 0
 
+            - uses: pnpm/action-setup@v6
             - uses: actions/setup-node@v4
               with:
-                  node-version: 20
+                  node-version: 22
+                  cache: pnpm
 
-            # No dependency install here, hence no pnpm setup nor cache. `npm version` only rewrites
-            # package.json (pnpm-lock.yaml does not record the root package version).
+            # Dependencies and a build are needed only to regenerate the README image below.
+            - run: pnpm install --frozen-lockfile
+
+            # `npm version` only rewrites package.json (pnpm-lock.yaml does not record the root package
+            # version, so the frozen install above stays valid).
             - name: Bump version in package.json
               env:
                   VERSION: ${{ inputs.version }}
               run: npm version "${VERSION}" --no-git-tag-version
+
+            # The README before/after image prints the version from package.json: rebuild after the
+            # bump and regenerate it so it ships in the release commit. The render is deterministic,
+            # so the PNG changes only when the version or the converter output does.
+            - name: Regenerate the README comparison image
+              run: |
+                  pnpm run build
+                  node docs/assets/generate-comparison.mjs
 
             - name: Patch CHANGELOG (Unreleased → version)
               env:
@@ -48,7 +61,7 @@ jobs:
                   git config user.name "github-actions[bot]"
                   git config user.email "github-actions[bot]@users.noreply.github.com"
                   git checkout -b "release/v${VERSION}"
-                  git add package.json CHANGELOG.md
+                  git add package.json CHANGELOG.md docs/assets/radial-gradient-comparison.png
                   git commit -m "chore(release): bump version to ${VERSION}"
                   git tag "v${VERSION}"
                   git push origin "release/v${VERSION}"

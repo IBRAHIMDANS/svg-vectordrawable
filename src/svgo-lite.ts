@@ -6,12 +6,7 @@
 //   - `_collections.colorsNames`, the CSS named-color table (kept identical to svgo's, see tests).
 // svgo exports neither its parser nor its collections separately (package `exports` only expose
 // `.` and `./browser`), hence this small XML parser mirroring svgo's sax-based one.
-import type { XastElement } from './gradient.js';
-
-interface XastRoot {
-    type: 'root';
-    children: XastElement[];
-}
+import type { XastElement, XastRoot } from './ast.js';
 
 interface XastNode extends XastElement {
     value?: string;
@@ -61,6 +56,8 @@ const XML_ENTITIES: Record<string, string> = { amp: '&', lt: '<', gt: '>', quot:
 const ENTITY_DECLARATION = /<!ENTITY\s+(\S+)\s+(?:'([^']+)'|"([^"]+)")\s*>/g;
 const ENTITY_REF = /&([^&;\s<]*)(;?)/g;
 const MAX_ENTITY_DEPTH = 4;
+/** Custom entities expanded per document, as in sax: nesting alone lets a few bytes expand without bound. */
+const MAX_ENTITY_COUNT = 512;
 
 /** XML `Char` production (same check as sax). */
 const isXmlChar = (c: number): boolean =>
@@ -94,6 +91,7 @@ export function parseXml(src: string): XastRoot {
     ];
     const entities = new Map(Object.entries(XML_ENTITIES));
     let pos = 0;
+    let entityCount = 0;
 
     const fail = (message: string, at = pos): never => {
         throw new XmlError(message, src, at);
@@ -112,6 +110,8 @@ export function parseXml(src: string): XastRoot {
                   const value = entities.get(name);
                   if (value !== undefined) {
                       if (Object.hasOwn(XML_ENTITIES, name)) return value;
+                      if (++entityCount > MAX_ENTITY_COUNT)
+                          return fail('Parsed entity count exceeds max entity count', at);
                       if (depth >= MAX_ENTITY_DEPTH) return fail('Parsed entity depth exceeds max entity depth', at);
                       return decode(value, at, depth + 1);
                   }

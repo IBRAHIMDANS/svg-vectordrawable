@@ -1,8 +1,9 @@
 #!/usr/bin/env node
-// Compiles every fixture's converted VectorDrawable with Android's `aapt2`, then links the compiled
-// resources against the newest `<sdk>/platforms/android-*/android.jar`, to prove the output is not
-// just well-formed XML but a resource the Android toolchain actually accepts. `compile` alone only
-// checks XML syntax; `link` resolves every `android:` attribute name and value against the platform.
+// Compiles every fixture's converted VectorDrawable (once per option variant, see VARIANTS) with
+// Android's `aapt2`, then links the compiled resources against the newest
+// `<sdk>/platforms/android-*/android.jar`, to prove the output is not just well-formed XML but a
+// resource the Android toolchain actually accepts. `compile` alone only checks XML syntax; `link`
+// resolves every `android:` attribute name and value against the platform.
 //
 // Locally without an SDK it prints a clear message and exits 0 (so it never blocks dev). In CI,
 // once an SDK is present, an aapt2 failure or a conversion throw exits 1. A missing platform jar
@@ -64,6 +65,44 @@ function findAndroidJar(sdkRoot) {
 // supports from API 24 (Android 7.0) — the floor for every fixture.
 const MIN_SDK = 24;
 
+// Each fixture is converted once per variant, so the options that change the `<vector>` root
+// (`autoMirrored`, `width`, `height`) are proven to compile and link too, not just the defaults.
+// The suffix keeps every resource name distinct and valid (lowercase letters, digits, underscores).
+//
+// `_themed` emits Android color references (`currentColor` and `colorMap` options) on fills, strokes
+// and gradient stops (`<item android:color>`); `link` resolves them, so the resources they name
+// are declared in VALUES_XML (framework ones, `@android:color/…` / `?android:attr/…`, come from android.jar).
+//
+// `_ids` keeps SVG ids as `android:name` (`preserveIds`), so the names it writes are proven valid too.
+const THEMED = {
+    currentColor: '?attr/iconTint',
+    colorMap: {
+        '#f00': '@color/brand', // clip-path, objectbox-gradient (stop)
+        '#00f': '?android:attr/colorAccent', // skew-group, objectbox-gradient (stop)
+        '#ffb13b': '@android:color/white', // react logo fill + stroke
+        '#61dafb': '@color/brand', // react logo
+        '#504E9C': '?attr/iconTint', // linear-gradient (stop)
+        '#07B8D8': '@android:color/black', // linear-gradient (stop)
+        '#000': '@color/brand', // svgo-cubic-smooth stroke; radial-gradient-transform's translucent stop stays literal (warned)
+        '#fff': '@color/brand', // radial-gradient-transform (opaque stop)
+    },
+};
+const VARIANTS = [
+    { suffix: '', options: {} },
+    { suffix: '_mirrored_w48', options: { autoMirrored: true, width: 48 } },
+    { suffix: '_h13_5', options: { height: 13.5 } },
+    { suffix: '_themed', label: 'themed (currentColor + colorMap references)', options: THEMED },
+    { suffix: '_ids', options: { preserveIds: true } },
+];
+
+/** The app resources the `_themed` references point at (`res/values/themed.xml`). */
+const VALUES_XML =
+    '<?xml version="1.0" encoding="utf-8"?>\n' +
+    '<resources>\n' +
+    '    <color name="brand">#FF1A73E8</color>\n' +
+    '    <attr name="iconTint" format="color|reference" />\n' +
+    '</resources>\n';
+
 /** Runs aapt2 with the given args; on failure prints its output and returns false. */
 function runAapt2(aapt2, step, args) {
     try {
@@ -115,22 +154,30 @@ async function main() {
     const workDir = mkdtempSync(join(tmpdir(), 'aapt2-validate-'));
     const resDir = join(workDir, 'res', 'drawable');
     mkdirSync(resDir, { recursive: true });
+    mkdirSync(join(workDir, 'res', 'values'));
+    writeFileSync(join(workDir, 'res', 'values', 'themed.xml'), VALUES_XML);
 
-    // Map each fixture to a valid Android resource filename (dN.xml — lowercase, starts with a letter).
+    // Map each fixture × variant to a valid Android resource filename (dN<suffix>.xml — lowercase,
+    // starts with a letter).
     const mapping = [];
     let convertFailures = 0;
+    let references = 0;
     fixtures.forEach((file, i) => {
-        const name = `d${i}`;
-        try {
-            const svg = readFileSync(join(fixturesDir, file), 'utf8');
-            const { xml } = convert(svg, { optimize: true });
-            writeFileSync(join(resDir, `${name}.xml`), xml);
-            mapping.push({ file, name });
-        } catch (err) {
-            convertFailures++;
-            console.error(
-                `[aapt2-validate] ✗ conversion failed for ${file}: ${err instanceof Error ? err.message : err}`,
-            );
+        for (const { suffix, label: variantLabel, options } of VARIANTS) {
+            const name = `d${i}${suffix}`;
+            const label = suffix ? `${file} ${variantLabel ?? JSON.stringify(options)}` : file;
+            try {
+                const svg = readFileSync(join(fixturesDir, file), 'utf8');
+                const { xml } = convert(svg, { optimize: true, ...options });
+                writeFileSync(join(resDir, `${name}.xml`), xml);
+                mapping.push({ label, name });
+                references += (xml.match(/android:(?:fillColor|strokeColor|color)="[@?]/g) ?? []).length;
+            } catch (err) {
+                convertFailures++;
+                console.error(
+                    `[aapt2-validate] ✗ conversion failed for ${label}: ${err instanceof Error ? err.message : err}`,
+                );
+            }
         }
     });
 
@@ -139,13 +186,20 @@ async function main() {
         console.error(`[aapt2-validate] ${convertFailures} conversion(s) failed.`);
         process.exit(1);
     }
+    // Guards the `_themed` variant against silently emitting literals only (nothing left to link).
+    if (references === 0) {
+        cleanup(workDir);
+        console.error('[aapt2-validate] ✗ The themed variant emitted no color reference.');
+        process.exit(1);
+    }
+    console.log(`[aapt2-validate] ${references} color references (@color/…, ?attr/…) to resolve.`);
 
     const outZip = join(workDir, 'out.zip');
     if (!runAapt2(aapt2, 'compile', ['compile', '--dir', join(workDir, 'res'), '-o', outZip])) {
         cleanup(workDir);
         process.exit(1);
     }
-    console.log(`[aapt2-validate] ✓ aapt2 compiled all ${mapping.length} fixtures with no errors.`);
+    console.log(`[aapt2-validate] ✓ aapt2 compiled all ${mapping.length} drawables with no errors.`);
 
     const androidJar = findAndroidJar(sdkRoot);
     let linked = false;
@@ -188,12 +242,12 @@ async function main() {
             process.exit(1);
         }
         linked = true;
-        console.log(`[aapt2-validate] ✓ aapt2 linked all ${mapping.length} fixtures with no errors.`);
+        console.log(`[aapt2-validate] ✓ aapt2 linked all ${mapping.length} drawables with no errors.`);
     }
 
     cleanup(workDir);
     console.log(`[aapt2-validate] ✓ ${linked ? 'compile + link' : 'compile only'} OK:`);
-    for (const { file, name } of mapping) console.log(`    ${name}.xml  ←  ${file}`);
+    for (const { label, name } of mapping) console.log(`    ${name}.xml  ←  ${label}`);
     process.exit(0);
 }
 

@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="140" height="140">
+  <!-- Reduced from web-platform-tests/wpt svg/painting/reftests/paint-fill-attr-oklch.svg at commit 76f5455a0a266f098dd8bd888a8a84b0cad0350d.
+       Copyright (c) web-platform-tests contributors. 3-Clause BSD License:
+       https://github.com/web-platform-tests/wpt/blob/master/LICENSE.md
+       Defect: CSS Color 4 functions (oklch, oklab, lab, lch, hwb, color()) are not parsed: the shape is
+       silently dropped. Expected #339377 (the wpt reference). Same for the other paint-fill-attr-* files.
+       resvg 2.6 does not parse oklch() either (renders black), so this file is a unit-test reproduction,
+       not a visual-test fixture. -->
+  <rect width="120" height="120" x="10" y="10" fill="oklch(0.6 0.1 170)"/>
+</svg>

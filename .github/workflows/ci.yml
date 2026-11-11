@@ -7,13 +7,13 @@ on:
 
 jobs:
     build-test:
-        # Full dev toolchain. Node 18 is not in the matrix: vitest 5 crashes on it (engines ^22.12) and
-        # eslint 10 requires >= 20.19. The library itself still supports 18 — see `node18-smoke`.
+        # Full dev toolchain, on the Node versions it declares (tsup 9: ^22.18 || ^24.11, vitest 5:
+        # ^22.12 || ^24). The library itself still supports 20 — see `node20-smoke`.
         runs-on: ubuntu-latest
         strategy:
             fail-fast: false
             matrix:
-                node-version: [20, 22]
+                node-version: [22, 24]
         steps:
             - uses: actions/checkout@v4
             - uses: pnpm/action-setup@v6
@@ -24,26 +24,47 @@ jobs:
             - run: pnpm install --frozen-lockfile
             - run: pnpm run typecheck
             - run: pnpm run lint
+            - run: pnpm run format:check
             - run: pnpm run test
             - run: pnpm run build
+            - name: Package types (attw)
+              # ./browser and ./browser-lite are ESM-only on purpose (README, Browser): the rule
+              # cjs-resolves-to-esm is ignored in the script, any other attw problem fails.
+              if: matrix.node-version == 22
+              run: pnpm run check:types
+            # integrations/figma-plugin has no dependencies of its own: it uses the root toolchain (tsc, tsup)
+            # and inlines the dist/browser-lite.global.js just built. The other integrations (vite-plugin,
+            # gradle-plugin, mcp-server) have their own lockfiles, build against svg-vectordrawable from npm
+            # and run in integrations-plugins.yml / integrations-mcp.yml.
+            - name: Figma plugin typecheck
+              run: pnpm exec tsc -p integrations/figma-plugin/tsconfig.json
+            - name: Figma plugin build and tests
+              working-directory: integrations/figma-plugin
+              # Same command as the plugin's `pnpm test`. timeout-minutes bounds any hang.
+              timeout-minutes: 5
+              run: node scripts/build.ts && node --test "test/*-test.ts"
+            - name: Playground smoke test
+              # Real worker.js against the fresh browser-lite bundle; pages.yml only runs it after merge.
+              if: matrix.node-version == 22
+              run: node --test playground/smoke-test.mjs
 
-    node18-smoke:
-        # `engines` says >= 18: build with a supported toolchain (Node 20), then import the ESM and CJS
-        # builds under Node 18 and convert one gradient SVG.
+    node20-smoke:
+        # `engines` says >= 20: build with a supported toolchain (Node 22), then import the ESM and CJS
+        # builds under Node 20 and convert one gradient SVG.
         runs-on: ubuntu-latest
         steps:
             - uses: actions/checkout@v4
             - uses: pnpm/action-setup@v6
             - uses: actions/setup-node@v4
               with:
-                  node-version: 20
+                  node-version: 22
                   cache: pnpm
             - run: pnpm install --frozen-lockfile
             - run: pnpm run build
             - uses: actions/setup-node@v4
               with:
-                  node-version: 18
-            - name: Smoke test dist/ on Node 18
+                  node-version: 20
+            - name: Smoke test dist/ on Node 20
               run: |
                   node --version
                   node --input-type=module -e "
@@ -79,6 +100,26 @@ jobs:
               env:
                   SVGVD_CORPUS_DIR: ${{ runner.temp }}/svgvd-corpus
 
+    wpt:
+        # `strict: true` on the SVG files of web-platform-tests (pinned commit, sparse checkout of svg/):
+        # fails on a converted file that renders unlike its source outside KNOWN_ARTEFACTS, or on a stale entry.
+        runs-on: ubuntu-latest
+        needs: build-test
+        timeout-minutes: 10
+        steps:
+            - uses: actions/checkout@v4
+            - uses: pnpm/action-setup@v6
+            - uses: actions/setup-node@v4
+              with:
+                  # wpt-corpus.mjs imports test/visual/*.ts: native type stripping (Node >= 22.18).
+                  node-version: 24
+                  cache: pnpm
+            - run: pnpm install --frozen-lockfile
+            - run: pnpm run build
+            - run: node scripts/wpt-corpus.mjs --check
+              env:
+                  SVGVD_WPT_DIR: ${{ runner.temp }}/svgvd-wpt
+
     android-validate:
         # aapt2 compile + link against a platform android.jar (link checks attribute names and values).
         runs-on: ubuntu-latest
@@ -88,7 +129,7 @@ jobs:
             - uses: pnpm/action-setup@v6
             - uses: actions/setup-node@v4
               with:
-                  node-version: 20
+                  node-version: 22
                   cache: pnpm
             - uses: actions/setup-java@v4
               with:

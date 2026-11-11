@@ -14,11 +14,14 @@
  *   `fillAlpha` / `strokeAlpha` multiply the color alpha (or the gradient); defaults butt / miter / 4.
  * - `<aapt:attr name="android:fillColor|strokeColor"><gradient>`: linear / radial gradients in the
  *   path's coordinate space (= SVG `userSpaceOnUse`), `tileMode` clamp / repeated / mirror.
+ * - Color references (`@[package:]color/name`, `?[package:]attr/name`, as produced by the converter's
+ *   `currentColor` / `colorMap` options) have no value outside an app: they take the color given in
+ *   {@link PreviewOptions.colors}, otherwise {@link UNRESOLVED_COLOR} (neutral gray), reported through
+ *   {@link PreviewOptions.onUnresolvedColor}.
  *
  * Unsupported input throws an `Error` naming the construct: sweep gradients (no SVG equivalent),
- * resource / theme references instead of color literals (`@color/…`, `?attr/…`), unknown elements,
- * malformed XML, a missing or non-positive viewport. `trimPathStart` / `trimPathEnd` /
- * `trimPathOffset` (never produced by the converter) are ignored.
+ * malformed colors, unknown elements, malformed XML, a missing or non-positive viewport.
+ * `trimPathStart` / `trimPathEnd` / `trimPathOffset` (never produced by the converter) are ignored.
  *
  * Deliberately self-contained (its own tiny XML parser, no import from the converter): the test
  * harness uses it to validate the converter's output, so a converter bug cannot be masked by shared
@@ -33,12 +36,35 @@ export interface PreviewOptions {
      */
     density?: number;
     /**
-     * Apply the vector's `android:tint` (color literal only) with its `android:tintMode` (default
-     * `src_in`; `src_over`, `src_atop`, `multiply`, `screen`, `add` supported) as an SVG filter.
+     * Apply the vector's `android:tint` (color literal, or reference resolved like any color) with its
+     * `android:tintMode` (default `src_in`; `src_over`, `src_atop`, `multiply`, `screen`, `add`
+     * supported) as an SVG filter.
      * Default `false`: the tint is ignored and the drawing keeps its own colors.
      */
     applyTint?: boolean;
+    /**
+     * Preview values of the color references of the drawable, e.g.
+     * `{ '?attr/colorPrimary': '#6750A4', '@color/brand': '#801A73E8' }`. Keys are references written
+     * exactly as in the XML; values are Android color literals (`#RGB`, `#ARGB`, `#RRGGBB`,
+     * `#AARRGGBB`: alpha first, as in `res/values/colors.xml`). A malformed key or value throws a
+     * `TypeError`. A reference missing from the map is drawn in {@link UNRESOLVED_COLOR}.
+     */
+    colors?: Readonly<Record<string, string>>;
+    /**
+     * Called once per distinct color reference that `colors` does not resolve (drawn in
+     * {@link UNRESOLVED_COLOR}), in order of appearance, after the preview is built.
+     */
+    onUnresolvedColor?: (reference: string) => void;
 }
+
+/** Color of a reference missing from {@link PreviewOptions.colors} (Android literal, opaque mid gray). */
+export const UNRESOLVED_COLOR = '#FF808080';
+
+/** A resource / package name (same grammar as the converter's `src/colorRef.ts`, kept independent). */
+const NAME = '[a-zA-Z_][a-zA-Z0-9_.]*';
+
+/** `@[package:]color/name` or `?[package:]attr/name`. */
+const REFERENCE_RE = new RegExp(`^(?:@(?:${NAME}:)?color|\\?(?:${NAME}:)?attr)/${NAME}$`);
 
 /** A parsed XML element of the restricted VectorDrawable format. */
 export interface XmlNode {
@@ -53,6 +79,7 @@ function decodeEntities(s: string): string {
     return s.replace(/&(#x[0-9a-f]+|#\d+|[a-z]+);/gi, (m, e: string) => {
         if (e[0] === '#') {
             const code = e[1] === 'x' || e[1] === 'X' ? parseInt(e.slice(2), 16) : parseInt(e.slice(1), 10);
+            if (!(code <= 0x10ffff)) throw new Error(`Invalid character reference ${m}`);
             return String.fromCodePoint(code);
         }
         return ENTITIES[e] ?? m;
@@ -142,12 +169,67 @@ function num(attrs: Record<string, string>, key: string, fallback: number): numb
     return n;
 }
 
+/** Values of `android:strokeLineCap` / `android:strokeLineJoin` (same keywords as SVG), default first. */
+const LINE_CAPS = ['butt', 'round', 'square'] as const;
+const LINE_JOINS = ['miter', 'round', 'bevel'] as const;
+
+/** Reads an enumerated attribute (default: the first keyword); anything else is not copied into the SVG. */
+function keyword(attrs: Record<string, string>, key: string, allowed: readonly string[]): string {
+    const raw = attrs[`android:${key}`];
+    if (raw === undefined) return allowed[0]!;
+    if (!allowed.includes(raw)) throw new Error(`Unsupported android:${key}=${JSON.stringify(raw)}`);
+    return raw;
+}
+
+/** Reads a `<vector>` size (`24dp`, any unit suffix ignored); must be a positive number. */
+function dp(attrs: Record<string, string>, key: string, fallback: number): number {
+    const raw = attrs[`android:${key}`];
+    if (raw === undefined) return fallback;
+    const n = parseFloat(raw);
+    if (!(n > 0 && Number.isFinite(n))) throw new Error(`android:${key}="${raw}" is not a positive size`);
+    return n;
+}
+
 const TILE_TO_SPREAD: Record<string, string> = { clamp: 'pad', repeated: 'repeat', mirror: 'reflect' };
 
-/** Mutable state threaded through the serialization (unique ids, collected `<defs>`). */
+/** Mutable state threaded through the serialization (unique ids, collected `<defs>`, color resolution). */
 interface Ctx {
     defs: string[];
     nextId: number;
+    /** Resolves a color attribute value: a literal, or a reference through `options.colors`. */
+    color: (value: string) => SvgColor;
+}
+
+/**
+ * Validates `options.colors` and returns the color resolver of the preview: a reference takes its
+ * mapped color, or {@link UNRESOLVED_COLOR} (recorded in `unresolved`); anything else must be a literal.
+ * Values are parsed here, so only `#rrggbb` and a number ever reach the SVG.
+ */
+function colorResolver(colors: Readonly<Record<string, string>>, unresolved: Set<string>): Ctx['color'] {
+    if (typeof colors !== 'object' || colors === null) throw new TypeError('colors must be an object');
+    const resolved = new Map<string, SvgColor>();
+    for (const [key, value] of Object.entries(colors)) {
+        if (!REFERENCE_RE.test(key))
+            throw new TypeError(`Invalid colors key ${JSON.stringify(key)} (expected @color/name or ?attr/name)`);
+        let color: SvgColor;
+        try {
+            color = parseAndroidColor(String(value));
+        } catch {
+            throw new TypeError(
+                `Invalid colors[${JSON.stringify(key)}]: ${JSON.stringify(value)} (expected #RGB, #ARGB, #RRGGBB or #AARRGGBB)`,
+            );
+        }
+        resolved.set(key, color);
+    }
+    const fallback = parseAndroidColor(UNRESOLVED_COLOR);
+    return (value) => {
+        const ref = value.trim();
+        if (!REFERENCE_RE.test(ref)) return parseAndroidColor(value);
+        const color = resolved.get(ref);
+        if (color) return color;
+        unresolved.add(ref);
+        return fallback;
+    };
 }
 
 /** Emits an SVG gradient for an Android `<gradient>` into the defs; returns its paint `url(#…)`. */
@@ -173,7 +255,7 @@ function gradientToSvg(g: XmlNode, ctx: Ctx): string {
     }
     const stopXml = stops
         .map((s) => {
-            const c = parseAndroidColor(s.color);
+            const c = ctx.color(s.color);
             return `<stop offset="${s.offset}" stop-color="${c.rgb}" stop-opacity="${c.opacity}"/>`;
         })
         .join('');
@@ -201,7 +283,7 @@ function paintOf(path: XmlNode, key: 'fillColor' | 'strokeColor', ctx: Ctx): Svg
         return { rgb: gradientToSvg(gradient, ctx), opacity: 1 };
     }
     const value = path.attrs[`android:${key}`];
-    return value === undefined ? null : parseAndroidColor(value);
+    return value === undefined ? null : ctx.color(value);
 }
 
 function pathToSvg(path: XmlNode, ctx: Ctx): string {
@@ -224,8 +306,8 @@ function pathToSvg(path: XmlNode, ctx: Ctx): string {
         out.push(`stroke="${stroke.rgb}"`, `stroke-width="${strokeWidth}"`);
         const opacity = stroke.opacity * num(a, 'strokeAlpha', 1);
         if (opacity !== 1) out.push(`stroke-opacity="${opacity}"`);
-        out.push(`stroke-linecap="${a['android:strokeLineCap'] ?? 'butt'}"`);
-        out.push(`stroke-linejoin="${a['android:strokeLineJoin'] ?? 'miter'}"`);
+        out.push(`stroke-linecap="${keyword(a, 'strokeLineCap', LINE_CAPS)}"`);
+        out.push(`stroke-linejoin="${keyword(a, 'strokeLineJoin', LINE_JOINS)}"`);
         out.push(`stroke-miterlimit="${num(a, 'strokeMiterLimit', 4)}"`);
     }
     return `<path ${out.join(' ')}/>`;
@@ -283,14 +365,14 @@ const TINT_COMPOSITE: Record<string, string> = {
     add: 'operator="arithmetic" k1="0" k2="1" k3="1" k4="0"',
 };
 
-/** Wraps the drawing in a filter applying `android:tint` (literal color) with its `android:tintMode`. */
+/** Wraps the drawing in a filter applying `android:tint` (literal or resolved reference) with its `android:tintMode`. */
 function applyTint(body: string, a: Record<string, string>, vw: number, vh: number, ctx: Ctx): string {
     const tint = a['android:tint'];
     if (tint === undefined) return body;
     const mode = a['android:tintMode'] ?? 'src_in';
     const composite = TINT_COMPOSITE[mode];
     if (!composite) throw new Error(`Unsupported android:tintMode="${mode}"`);
-    const c = parseAndroidColor(tint);
+    const c = ctx.color(tint);
     const id = `t${ctx.nextId++}`;
     // The region is the whole viewport (src_over / add tint transparent pixels too, as on Android).
     ctx.defs.push(
@@ -307,16 +389,22 @@ function applyTint(body: string, a: Record<string, string>, vw: number, vh: numb
  * The SVG `width` / `height` are the vector's `android:width` / `android:height` in dp times
  * `options.density` (default 1), its `viewBox` the viewport, stretched with `preserveAspectRatio="none"`
  * like Android. See the module documentation for the reproduced semantics and the unsupported input,
- * which throws an `Error` (e.g. a sweep gradient or a `@color/…` reference).
+ * which throws an `Error` (e.g. a sweep gradient). Color references take `options.colors`, or gray.
  *
  * ```ts
  * import { convert, vectorDrawableToSvg } from 'svg-vectordrawable';
  * const preview = vectorDrawableToSvg(convert(svg).xml, { density: 4 });
+ * const themed = vectorDrawableToSvg(convert(svg, { currentColor: '?attr/colorPrimary' }).xml, {
+ *     colors: { '?attr/colorPrimary': '#6750A4' },
+ *     onUnresolvedColor: (ref) => console.warn(`no preview color for ${ref}`),
+ * });
  * ```
  */
 export function vectorDrawableToSvg(xml: string, options: PreviewOptions = {}): string {
     const density = options.density ?? 1;
     if (!(density > 0 && Number.isFinite(density))) throw new Error(`density must be a positive number (${density})`);
+    const unresolved = new Set<string>();
+    const color = colorResolver(options.colors ?? {}, unresolved);
     const vector = parseXml(xml);
     if (vector.name !== 'vector') throw new Error(`Root element is <${vector.name}>, expected <vector>`);
     const a = vector.attrs;
@@ -324,16 +412,17 @@ export function vectorDrawableToSvg(xml: string, options: PreviewOptions = {}): 
     const vh = num(a, 'viewportHeight', NaN);
     if (!(vw > 0 && vh > 0)) throw new Error('<vector> needs positive viewportWidth / viewportHeight');
     // `24dp` → 24: dp map 1:1 to SVG user units at mdpi (density 1).
-    const w = parseFloat(a['android:width'] ?? `${vw}`) * density;
-    const h = parseFloat(a['android:height'] ?? `${vh}`) * density;
-    const ctx: Ctx = { defs: [], nextId: 0 };
+    const w = dp(a, 'width', vw) * density;
+    const h = dp(a, 'height', vh) * density;
+    const ctx: Ctx = { defs: [], nextId: 0, color };
     let body = childrenToSvg(vector.children, ctx);
     if (options.applyTint) body = applyTint(body, a, vw, vh, ctx);
     const alpha = num(a, 'alpha', 1);
     if (alpha !== 1) body = `<g opacity="${alpha}">${body}</g>`;
     const defs = ctx.defs.length ? `<defs>${ctx.defs.join('')}</defs>` : '';
-    return (
+    const svg =
         `<svg xmlns="http://www.w3.org/2000/svg" width="${w}" height="${h}" viewBox="0 0 ${vw} ${vh}" ` +
-        `preserveAspectRatio="none">${defs}${body}</svg>`
-    );
+        `preserveAspectRatio="none">${defs}${body}</svg>`;
+    if (options.onUnresolvedColor) for (const ref of unresolved) options.onUnresolvedColor(ref);
+    return svg;
 }

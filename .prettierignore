@@ -3,3 +3,30 @@ node_modules
 coverage
 test/__snapshots__
 *.svg
+# Managed by pnpm.
+pnpm-lock.yaml
+pnpm-workspace.yaml
+# Gradle outputs of the Android checks.
+android-render/build
+android-render/render/build
+android-render/.gradle
+scripts/compare-svg2vector/build
+scripts/compare-svg2vector/out
+scripts/compare-svg2vector/.gradle
+scripts/compose-check/build
+scripts/compose-check/.gradle
+scripts/compose-check/.kotlin
+# Local copy of the IIFE build used to serve the playground.
+playground/browser-lite.global.js
+# Local backlog files (not versioned).
+TODO.md
+TODO-DONE.md
+# Vite and Gradle plugins: build outputs and the example app's generated files.
+integrations/vite-plugin/dist
+integrations/vite-plugin/example/android
+integrations/vite-plugin/example/dist
+integrations/gradle-plugin/**/build
+integrations/gradle-plugin/**/.gradle
+# Agent worktrees (full copies of the repo) and local, unversioned drafts.
+.claude/
+docs/drafts/

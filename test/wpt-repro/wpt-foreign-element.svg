@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:h="http://www.w3.org/1999/xhtml" width="100" height="100">
+  <!-- Reduced from web-platform-tests/wpt svg/struct/reftests/use-symbol-display-none.svg at commit 76f5455a0a266f098dd8bd888a8a84b0cad0350d.
+       Copyright (c) web-platform-tests contributors. 3-Clause BSD License:
+       https://github.com/web-platform-tests/wpt/blob/master/LICENSE.md
+       Defect: (over-rejection, not a wrong render) an element of another namespace placed directly in
+       the SVG tree, such as the wpt reftest <h:link>, is treated as a shape: empty-path warning, so strict
+       rejects a file it converts faithfully. Same for the non-rendering <view> element. This rejects
+       most wpt reftests and hides them from scripts/wpt-corpus.mjs. -->
+  <h:link rel="match" href="reference/green-100x100.svg"/>
+  <rect width="100" height="100" fill="green"/>
+</svg>

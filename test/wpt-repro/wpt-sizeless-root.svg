@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg">
+  <!-- Reduced from web-platform-tests/wpt svg/shapes/rect-02.svg at commit 76f5455a0a266f098dd8bd888a8a84b0cad0350d.
+       Copyright (c) web-platform-tests contributors. 3-Clause BSD License:
+       https://github.com/web-platform-tests/wpt/blob/master/LICENSE.md
+       Defect: no viewBox, width or height: the converter assumes a 24x24 viewport and silently crops the
+       shape (resvg renders a 100x100 viewport, browsers 300x150). No warning, not rejected by strict. -->
+  <rect x="10" y="10" width="50" height="50" fill="none" stroke="blue" stroke-width="4"/>
+</svg>

@@ -5,11 +5,22 @@ This guide maps the API, options and CLI of
 June 2022, depends on `svgo@^2.8.0`) to `svg-vectordrawable`.
 
 Everything stated about `svg2vectordrawable` below was checked against the 2.9.1 tarball from npm
-(`src/*.js`, `bin/`, `README.md`) and by running it on small probe SVGs on 2026-10-05.
+(`src/*.js`, `bin/`, `README.md`) and by running it on small probe SVGs on 2026-10-05. The pitfalls
+added on 2026-11-11 come from migrating five open-source projects (almost 15,000 icons) from 2.9.1 to
+`svg-vectordrawable` 0.3.0 and comparing the renderings of both outputs with the source SVGs; the
+figures quoted below were measured again on the published 0.4.0.
 
-> The `rules` option, `ConversionError`, `--rule`, `--android-names`, dashed strokes, gradient strokes
-> and several fixes mentioned here are in the `[Unreleased]` section of the changelog: they ship with
-> the release after 0.1.1.
+## Before you install
+
+- **pnpm `minimumReleaseAge`.** If your pnpm setup enforces a minimum release age, a version published
+  more recently than that delay is refused (`ERR_PNPM_NO_MATURE_MATCHING_VERSION`), or pnpm adds it to
+  `minimumReleaseAgeExclude` in `pnpm-workspace.yaml` on its own. Check the publication date with
+  `npm view svg-vectordrawable time`, then wait for the delay or keep the exclusion deliberately.
+- **TypeScript ≥ 5.3.** The type declarations import svgo's types with `resolution-mode`, which older
+  compilers cannot parse: TypeScript 5.2 and older (checked with 5.1.3) fail with `TS1005: ';' expected`
+  in `dist/index.d.cts` / `dist/index.d.ts`, even with `skipLibCheck: true`. Upgrade TypeScript before
+  switching. Any `moduleResolution` then works (`node` / `node10`, `node16`, `nodenext`, `bundler`),
+  from ESM or CommonJS files.
 
 ## TL;DR
 
@@ -31,7 +42,7 @@ const { convert, ConversionError } = require('svg-vectordrawable'); // or: impor
 
 try {
     const { xml, warnings } = convert(svgCode, {
-        floatPrecision: 2, // default is 3
+        // floatPrecision: 2 dropped on purpose — the default 3 is closer to the source, see Options
         strict: true,
         // fillBlack: true is the default here (fillBlackForUnfilled)
         xmlTag: true,
@@ -71,19 +82,19 @@ Notes on the old file helper, useful when you replace it:
 
 ### Options
 
-| `svg2vectordrawable` option    | `svg-vectordrawable` option                 | Notes                                                                                                                                                                                                     |
-| ------------------------------ | ------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `floatPrecision` (default `2`) | `floatPrecision` (default `3`)              | Set `2` explicitly to keep the old rounding. In the old library it was also passed to svgo.                                                                                                               |
-| `strict` (default `false`)     | `strict` (default `false`) + `rules`        | Different semantics, see [Strict mode](#strict-mode-and-errors).                                                                                                                                          |
-| `fillBlack` (default `false`)  | `fillBlackForUnfilled` (default **`true`**) | Same meaning (unfilled shapes get `#FF000000`, as SVG paints them). The default flipped: pass `fillBlackForUnfilled: false` to keep the old output.                                                       |
-| `xmlTag` (default `false`)     | `xmlTag` (default `false`)                  | Same declaration: `<?xml version="1.0" encoding="utf-8"?>`.                                                                                                                                               |
-| `tint`                         | `tint`                                      | The old library upper-cases hex values and writes the rest unescaped. This one writes the value verbatim, XML-escaped: pass an Android color literal (`#AARRGGBB`, `#RRGGBB`, …) or a resource reference. |
-| —                              | `optimize` (default `true`)                 | svgo normalization. The old default export always ran svgo; its file helper and CLI never did.                                                                                                            |
-| —                              | `svgoConfig`                                | Replace the svgo config used when `optimize` is on.                                                                                                                                                       |
-| —                              | `currentColor` (default `'#000000'`)        | The color substituted for `currentColor`. The old library also ended up with black, because it maps any color it cannot parse to black.                                                                   |
-| —                              | `indent` (default `4`)                      | The old library always indents with 4 spaces.                                                                                                                                                             |
-| —                              | `onWarn`                                    | Callback per warning, in addition to the returned `warnings`.                                                                                                                                             |
-| —                              | `rules`                                     | Per-warning-code severity: `'off' \| 'warn' \| 'error'`, overrides `strict`. Unknown codes throw a `TypeError`.                                                                                           |
+| `svg2vectordrawable` option    | `svg-vectordrawable` option                 | Notes                                                                                                                                                                                                                                                                                                                                                                                                                                         |
+| ------------------------------ | ------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `floatPrecision` (default `2`) | `floatPrecision` (default `3`)              | Not the same rounding: the old library passed it to svgo (with `makeArcs` off); this one keeps svgo at its own precision (3) and rounds the result to `floatPrecision`. Setting `2` does not reproduce the old output: on the 2,291 icons of `brave/leo`, 55 render closer to the source than with 2.9.1 and 3 further at precision 2, against 73 closer and 2 further at the default 3 (masked flags, see `<mask>` below). Keep the default. |
+| `strict` (default `false`)     | `strict` (default `false`) + `rules`        | Different semantics, see [Strict mode](#strict-mode-and-errors).                                                                                                                                                                                                                                                                                                                                                                              |
+| `fillBlack` (default `false`)  | `fillBlackForUnfilled` (default **`true`**) | Same meaning (unfilled shapes get `#FF000000`, as SVG paints them). The default flipped. With `false`, only shapes without any fill are dropped; an explicit black fill (`#000`, `#000000`, `black`, `rgb(0,0,0)`) keeps `#FF000000`. 2.9.1 with `fillBlack: false` left `#000` / `black` shapes without `fillColor` (invisible), because svgo 2 deletes them as a default value.                                                             |
+| `xmlTag` (default `false`)     | `xmlTag` (default `false`)                  | Same declaration: `<?xml version="1.0" encoding="utf-8"?>`.                                                                                                                                                                                                                                                                                                                                                                                   |
+| `tint`                         | `tint`                                      | The old library upper-cases hex values and writes the rest unescaped. This one writes the value verbatim, XML-escaped: pass an Android color literal (`#AARRGGBB`, `#RRGGBB`, …) or a resource reference.                                                                                                                                                                                                                                     |
+| —                              | `optimize` (default `true`)                 | svgo normalization. The old default export always ran svgo; its file helper and CLI never did.                                                                                                                                                                                                                                                                                                                                                |
+| —                              | `svgoConfig`                                | Replace the svgo config used when `optimize` is on.                                                                                                                                                                                                                                                                                                                                                                                           |
+| —                              | `currentColor` (default `'#000000'`)        | The color substituted for `currentColor`. The old library also ended up with black, because it maps any color it cannot parse to black.                                                                                                                                                                                                                                                                                                       |
+| —                              | `indent` (default `4`)                      | The old library always indents with 4 spaces.                                                                                                                                                                                                                                                                                                                                                                                                 |
+| —                              | `onWarn`                                    | Callback per warning, in addition to the returned `warnings`.                                                                                                                                                                                                                                                                                                                                                                                 |
+| —                              | `rules`                                     | Per-warning-code severity: `'off' \| 'warn' \| 'error'`, overrides `strict`. Unknown codes throw a `TypeError`.                                                                                                                                                                                                                                                                                                                               |
 
 ### Return value: `string` → `{ xml, warnings }`
 
@@ -140,23 +151,30 @@ If your code matched the old error messages (`/Unsupported element/`), switch to
 ### Behavioural differences that change the output
 
 These are differences in what gets drawn, not in the API. All were observed on 2026-10-05 with
-`svg2vectordrawable` 2.9.1 and the current `svg-vectordrawable` sources.
+`svg2vectordrawable` 2.9.1 and the current `svg-vectordrawable` sources; the rows on black fills,
+masks and formatting were checked again on 2026-11-11 against the published `svg-vectordrawable` 0.4.0.
 
-| Input                                            | `svg2vectordrawable` 2.9.1                                                                                                                      | `svg-vectordrawable`                                                                            |
-| ------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------- |
-| `gradientTransform`                              | Ignored (only `x1…y2` / `cx`, `cy`, `r` are read)                                                                                               | Baked into the gradient coordinates; elliptical radials are emitted inside a deformed `<group>` |
-| Non-zero `viewBox` origin                        | Ignored                                                                                                                                         | Content translated back into the viewport                                                       |
-| Presentation attributes on the root `<svg>`      | Dropped                                                                                                                                         | Inherited by the children                                                                       |
-| `clip-path` on shapes and groups                 | Dropped (`<clipPath>` is not converted)                                                                                                         | `<clip-path>` inside a `<group>`                                                                |
-| `stroke-dasharray` / `stroke-dashoffset`         | Dropped (solid stroke)                                                                                                                          | Dashes baked into the path geometry                                                             |
-| `hsl()` / `hsla()` colors                        | Black                                                                                                                                           | Converted                                                                                       |
-| Unfilled shapes                                  | No `fillColor` unless `fillBlack: true`                                                                                                         | `#FF000000` unless `fillBlackForUnfilled: false`                                                |
-| Gradient strokes (`stroke="url(#g)"`)            | Gradient emitted but `stroke-width` is not converted (Android's default width is 0); `strict` rejects it (`Unsupported attribute stroke-width`) | Emitted with its width (`<aapt:attr name="android:strokeColor">`)                               |
-| `<mask>`                                         | First child used as a clip, silently                                                                                                            | Warned (`unsupported-attribute`) when not representable                                         |
-| Attribute order, color format, number formatting | `fillColor` before `pathData`, `#FF000000` shortened to `#000`                                                                                  | `pathData` first, colors always `#AARRGGBB`                                                     |
+| Input                                               | `svg2vectordrawable` 2.9.1                                                                                                                                                                   | `svg-vectordrawable`                                                                                                                                                                                                                                                                                                       |
+| --------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `gradientTransform`                                 | Ignored (only `x1…y2` / `cx`, `cy`, `r` are read)                                                                                                                                            | Baked into the gradient coordinates; elliptical radials are emitted inside a deformed `<group>`                                                                                                                                                                                                                            |
+| Non-zero `viewBox` origin                           | Ignored                                                                                                                                                                                      | Content translated back into the viewport                                                                                                                                                                                                                                                                                  |
+| Presentation attributes on the root `<svg>`         | Dropped                                                                                                                                                                                      | Inherited by the children                                                                                                                                                                                                                                                                                                  |
+| `clip-path` on shapes and groups                    | Dropped (`<clipPath>` is not converted)                                                                                                                                                      | `<clip-path>` inside a `<group>`                                                                                                                                                                                                                                                                                           |
+| `stroke-dasharray` / `stroke-dashoffset`            | Dropped (solid stroke)                                                                                                                                                                       | Dashes baked into the path geometry                                                                                                                                                                                                                                                                                        |
+| `hsl()` / `hsla()` colors                           | Black                                                                                                                                                                                        | Converted                                                                                                                                                                                                                                                                                                                  |
+| Unfilled shapes, and shapes filled `#000` / `black` | No `fillColor` unless `fillBlack: true`: svgo 2 removes `fill="#000"` / `fill="black"` as the default value, so such a path is transparent (`fill="#000000"` survives and gives `#FF000000`) | `#FF000000` unless `fillBlackForUnfilled: false`                                                                                                                                                                                                                                                                           |
+| Gradient strokes (`stroke="url(#g)"`)               | Gradient emitted but `stroke-width` is not converted (Android's default width is 0); `strict` rejects it (`Unsupported attribute stroke-width`)                                              | Emitted with its width (`<aapt:attr name="android:strokeColor">`)                                                                                                                                                                                                                                                          |
+| `<mask>`                                            | First child used as a clip, silently                                                                                                                                                         | Converted to a `<clip-path>` (`evenodd` content too); stroked content is clipped without its strokes (`mask-approximated`). Masks that cannot be represented (luminance below white, a mask inside a mask, crossing `evenodd` contours) are ignored with an `unsupported-attribute` warning and the content is drawn whole |
+| Attribute order, number formatting                  | `fillColor` before `pathData`, `0.25` in path data                                                                                                                                           | `pathData` first, `.25` in path data                                                                                                                                                                                                                                                                                       |
 
 The last row means the XML is not byte-identical even for simple icons: regenerate snapshots or
-golden files once after migrating.
+golden files once after migrating. Colors are written `#AARRGGBB` by both libraries, so regexes that
+match colors keep working.
+
+For an ignored mask, the 2.9.1 output can be closer to the source: using the mask's first child as a
+clip is sometimes almost right. On the 2,291 icons of `brave/leo`, 2 flags render further from the
+source than with 2.9.1 (a mask inside a mask, and a mask whose luminance is below white). Compare the
+icons that get a mask warning before replacing the committed drawables.
 
 ## CLI
 
@@ -166,7 +184,7 @@ golden files once after migrating.
 | `s2v` 2.9.1                             | `svgvd`                                        | Notes                                                                                                                                                                                                                                                                                                                               |
 | --------------------------------------- | ---------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `-i, --input <file.svg>`                | positional `svgvd file.svg`                    |                                                                                                                                                                                                                                                                                                                                     |
-| `-f, --folder <dir>`                    | positional `svgvd dir/`                        | Several inputs can be given. Non-recursive in both.                                                                                                                                                                                                                                                                                 |
+| `-f, --folder <dir>`                    | positional `svgvd dir/`                        | Several inputs can be given. Non-recursive in both by default; `svgvd -r` also converts subdirectories and reproduces the tree under `-o`.                                                                                                                                                                                          |
 | `-s, --string <svg>`                    | `-s, --string <svg>`                           | `s2v` prints a `Android Vector Drawable Code:` header before the XML; `svgvd` prints the XML only. With `-o`, `s2v` appends `.xml` if missing; `svgvd` writes the file only if `-o` ends with `.xml`, otherwise prints to stdout.                                                                                                   |
 | `-o, --output <file\|dir>`              | `-o, --out <file\|dir>`                        | A path ending in `.xml` is a file (single input only), anything else a directory.                                                                                                                                                                                                                                                   |
 | `-p, --precision <n>` (default 2, 1–10) | `-p, --precision <n>` (default 3)              |                                                                                                                                                                                                                                                                                                                                     |
@@ -192,24 +210,35 @@ svgvd icons -o app/src/main/res/drawable -p 3 --android-names
 ## Migration checklist
 
 1. Replace the dependency: `npm rm svg2vectordrawable && npm i svg-vectordrawable` (Node ≥ 18). If you
-   depended on `svgo@2` only for this library, you can drop it as well; this package brings `svgo@4`.
+   depended on `svgo@2` only for this library, you can drop it as well, with any override such as
+   `"svg2vectordrawable>svgo"`; this package brings `svgo@4`. See [Before you install](#before-you-install)
+   for pnpm and TypeScript.
 2. Replace imports: `require('svg2vectordrawable')` → `const { convert } = require('svg-vectordrawable')`
    (or the ESM `import`). Browser builds: `svg-vectordrawable/browser`.
 3. Replace calls: `await svg2vectordrawable(svg, opts)` → `convert(svg, opts).xml`.
-4. Rename options: `fillBlack` → `fillBlackForUnfilled`. Decide on the defaults that changed:
-   `floatPrecision` (2 → 3) and unfilled shapes (no fill → black).
-5. Replace the file helper: `convertFile(input, output, options)` from
+4. Rename options: `fillBlack` → `fillBlackForUnfilled`. Review the defaults that changed, and prefer
+   the new ones: `floatPrecision` 3 (closer to the source than `2`, see [Options](#options)) and
+   unfilled shapes painted black.
+5. Remove post-processing written against the old output. Regexes that inject what 2.9.1 dropped
+   (`android:strokeColor` / `android:strokeWidth` on every `<path>` for Feather / Lucide icons,
+   `android:fillColor` when the fill sits on the root `<svg>`) now duplicate an attribute this library
+   already writes: `Attribute android:fillColor redefined` is not well-formed XML and the Android
+   resource compiler rejects the file. Delete them, or replace them with options (`currentColor`,
+   `tint`). Regexes anchored on attribute order also break: `android:pathData` now comes first. Check
+   the result with `xmllint --noout res/drawable/*.xml`.
+6. Replace the file helper: `convertFile(input, output, options)` from
    `src/svg-file-to-vectordrawable-file` → `convertFile(input, output, options)` from the package root
    (synchronous, returns the warnings). Batches: `convertDir`.
-6. Strict mode: replace message matching (`/Unsupported (element|attribute)/`) with
+7. Strict mode: replace message matching (`/Unsupported (element|attribute)/`) with
    `err instanceof ConversionError` / `err.warning.code`. Review which codes you actually want to fail
    on and set them with `rules`.
-7. Surface warnings: log `warnings` (or pass `onWarn`) instead of discarding them; they are how
+8. Surface warnings: log `warnings` (or pass `onWarn`) instead of discarding them; they are how
    approximations are reported outside strict mode.
-8. CLI scripts: `s2v -i a.svg -o b.xml` → `svgvd a.svg -o b.xml`; `-f dir` → positional `dir`; `-x` →
+9. CLI scripts: `s2v -i a.svg -o b.xml` → `svgvd a.svg -o b.xml`; `-f dir` → positional `dir`; `-x` →
    `--xml-tag`; `-t` → `--tint`; add `--android-names` where you relied on `s2v`'s renaming.
-9. Regenerate committed drawables and golden files once, and review the diff visually: gradients with
-   `gradientTransform`, shifted `viewBox`, Feather-style stroked icons and dashed strokes change on
-   purpose.
-10. If you build for Android below API 24: gradients (fill and stroke) are emitted through
+10. Regenerate committed drawables and golden files once, and review the diff visually: gradients with
+    `gradientTransform`, shifted `viewBox`, Feather-style stroked icons and dashed strokes change on
+    purpose; icons with a mask warning may get worse (see `<mask>` in
+    [Behavioural differences](#behavioural-differences-that-change-the-output)).
+11. If you build for Android below API 24: gradients (fill and stroke) are emitted through
     `<aapt:attr>`, which needs API 24+ (as with `svg2vectordrawable`).

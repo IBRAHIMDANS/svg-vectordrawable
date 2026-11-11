@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { readFileSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { convert } from '../src/index.js';
+import { convert, type WarningCode } from '../src/index.js';
 import { vdToSvg, parseAndroidColor } from './visual/vdToSvg.js';
 import { compareSvgs, DEFAULT_MAX_MISMATCH } from './visual/compare.js';
 
@@ -24,6 +24,20 @@ const REFERENCE_VARIANTS: Record<string, (svg: string) => string> = {
     'issue-1-react-logo.svg': (svg) => svg.replace(/\bopacity="0\.2"/, 'fill-opacity="0.2" stroke-opacity="0.2"'),
 };
 
+/**
+ * Fixtures whose conversion warns *by design* in a given mode: `EXPECTED_WARNINGS[file][optimize]`
+ * lists the exact warning codes that mode must emit (order included).
+ * - A non-empty list means the output knowingly differs from the source (documented limit, the
+ *   warning tells the user): that mode checks exactly these codes and skips the visual comparison.
+ * - An empty list means "no warning": that mode checks there is none and is still compared.
+ * - A mode left out is compared as usual, its warnings unchecked.
+ */
+const EXPECTED_WARNINGS: Record<string, Partial<Record<`${boolean}`, readonly WarningCode[]>>> = {
+    // Illustrator's default export puts paint in `<style>` classes: svgo inlines them, while
+    // optimize:false does not apply `<style>` (limit documented in the README) and says so.
+    'tool-illustrator-style-classes.svg': { true: [], false: ['unsupported-style'] },
+};
+
 function source(file: string): string {
     return readFileSync(join(dir, file), 'utf8');
 }
@@ -33,14 +47,22 @@ describe('visual regression: fixtures render like their source', () => {
         for (const optimize of [true, false]) {
             it(`${file} (optimize: ${optimize})`, () => {
                 const svg = source(file);
+                const { xml, warnings } = convert(svg, { optimize });
+                const expected = EXPECTED_WARNINGS[file]?.[`${optimize}`];
+                if (expected) expect(warnings.map((w) => w.code)).toEqual(expected);
+                if (expected?.length) return;
                 const reference = (REFERENCE_VARIANTS[file] ?? ((s: string) => s))(svg);
-                const result = compareSvgs(reference, vdToSvg(convert(svg, { optimize }).xml));
+                const result = compareSvgs(reference, vdToSvg(xml));
                 expect(result.sizeMismatch).toBeNull();
                 expect(result.inked).toBeGreaterThan(0);
                 expect(result.mismatch).toBeLessThan(DEFAULT_MAX_MISMATCH);
             });
         }
     }
+
+    it('EXPECTED_WARNINGS only names existing fixtures', () => {
+        expect(Object.keys(EXPECTED_WARNINGS).filter((f) => !files.includes(f))).toEqual([]);
+    });
 
     it('renders the dashed issue #1 logo like its raw source (dashes baked into geometry)', () => {
         const svg = source('issue-1-react-logo.svg');

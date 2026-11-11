@@ -1,12 +1,14 @@
 import { describe, expect, it } from 'vitest';
 import { dashPathData, ellipseDashPath, MAX_DASHES, parseDasharray } from '../src/dash.js';
 import { convert } from '../src/index.js';
+import { compareSvgs, DEFAULT_MAX_MISMATCH } from './visual/compare.js';
+import { vdToSvg } from './visual/vdToSvg.js';
 
 type Point = [number, number];
 
 /** Sub-paths of an absolute M/L/Q/C/Z path: each a list of segments (start point + controls + end). */
 function subpaths(d: string): Point[][][] {
-    const tokens = d.match(/[MLQCZ]|-?\d*\.?\d+/g) ?? [];
+    const tokens = d.match(/[MLQCZ]|[+-]?(?:\d+\.?\d*|\.\d+)(?:[eE][+-]?\d+)?/g) ?? [];
     const out: Point[][][] = [];
     let pen: Point = [0, 0];
     let start: Point = [0, 0];
@@ -75,7 +77,46 @@ describe('parseDasharray', () => {
     });
 
     it('is null (not resolvable) for font-relative units', () => {
-        expect(parseDasharray('1em 2', 10)).toBeNull();
+        expect(parseDasharray('1ex 2', 10)).toBeNull();
+    });
+
+    it('splits after a `%` or a `)` as the CSS tokenizer (csso writes `10% 5` as `10%5`, T-156)', () => {
+        expect(parseDasharray('10%5', 50)).toEqual([5, 5]);
+        expect(parseDasharray('10%.5', 50)).toEqual([5, 0.5]);
+        expect(parseDasharray('10%5 10%5', 50)).toEqual([5, 5, 5, 5]);
+        expect(parseDasharray('10%,5', 50)).toEqual([5, 5]);
+        expect(parseDasharray('calc(1px)2', 50)).toBeNull();
+        expect(parseDasharray('calc(1px + 2px) 3', 50)).toBeNull();
+    });
+});
+
+describe('stroke-dasharray after a percentage, both modes (T-156)', () => {
+    const svg = (style: string): string =>
+        `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M2 12h20" stroke="#000" fill="none" style="${style}"/></svg>`;
+    const pathData = (xml: string): string => /android:pathData="([^"]*)"/.exec(xml)![1]!;
+    // 10% of the normalized diagonal (24) is 2.4.
+    for (const [style, dashes] of [
+        ['stroke-dasharray: 10% 5', [2.4, 2.4, 2.4]],
+        ['stroke-dasharray: 10% 0.5', Array(6).fill(2.4)],
+        ['stroke-dasharray: 10% 5 10% 5', [2.4, 2.4, 2.4]],
+    ] as const)
+        for (const optimize of [false, true])
+            it(`dashes ${style} under strict (optimize: ${optimize})`, () => {
+                const { xml, warnings } = convert(svg(style), { optimize, strict: true });
+                expect(warnings.filter((w) => w.code !== 'large-vector')).toEqual([]);
+                const lengths = dashLengths(pathData(xml));
+                expect(lengths.slice(0, dashes.length)).toHaveLength(dashes.length);
+                lengths.slice(0, dashes.length).forEach((l, i) => expect(l).toBeCloseTo(dashes[i]!, 3));
+            });
+
+    it('a calc() dash is reported in both modes (its csso form `calc(1px)2` is not dropped as invalid)', () => {
+        for (const optimize of [false, true]) {
+            const { warnings } = convert(svg('stroke-dasharray: calc(1px) 2'), { optimize });
+            expect(
+                warnings.map((w) => w.code).filter((c) => c !== 'large-vector'),
+                String(optimize),
+            ).toEqual(['unsupported-stroke-dasharray']);
+        }
     });
 });
 
@@ -141,9 +182,147 @@ describe('dashPathData', () => {
         expect(dashPathData('M0 0h10', [0.4, 0.2], 0, TOL, { pathLength: 1 })).toBe('M0 0L4 0M6 0L10 0');
     });
 
+    it('draws pathLength="0" solid, whatever the pattern and offset (infinite scale, as browsers)', () => {
+        // wpt path/distance/pathlength-path-zero: the closed square keeps its closing join.
+        const square = 'M10 10L110 10L110 110L10 110Z';
+        expect(dashPathData(square, [1, 1], 1, TOL, { pathLength: 0 })).toBe(square);
+        expect(dashPathData('M0 0h10', [0, 3], 0, TOL, { pathLength: 0 })).toBe('M0 0L10 0');
+    });
+
+    it('ignores a negative or NaN pathLength (an error per SVG 2)', () => {
+        const plain = dashPathData('M0 0h10', [4, 2], 0, TOL);
+        expect(plain).toBe('M0 0L4 0M6 0L10 0');
+        for (const pathLength of [-4, Number.NaN])
+            expect(dashPathData('M0 0h10', [4, 2], 0, TOL, { pathLength })).toBe(plain);
+    });
+
+    it('draws a gapless pattern solid on a direct call (parseDasharray never passes one)', () => {
+        expect(parseDasharray('4 0', 10)).toEqual([]);
+        expect(dashPathData('M0 0h10', [4, 0], 0, TOL)).toBe('M0 0L10 0');
+        expect(dashPathData('M0 0h10v10h-10z', [1e-9, 0], 0, TOL)).toBe('M0 0L10 0L10 10L0 10Z');
+    });
+
+    it('draws solid, without warning, a gap that pathLength scaling underflows to 0', () => {
+        // 10 / 1e308 * 1e-30 underflows to 0 while the dash stays positive: the pattern has no gap.
+        expect(dashPathData('M0 0h10', [1, 1e-30], 0, TOL, { pathLength: 1e308 })).toBe('M0 0L10 0');
+        const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M2 12h20" stroke="#000" stroke-dasharray="1 1e-30" pathLength="1e308"/></svg>`;
+        for (const optimize of [false, true]) {
+            const { xml, warnings } = convert(svg, { optimize, strict: true });
+            expect(warnings).toEqual([]);
+            expect(xml).toMatch(/pathData="M2 12(?:L22 12|h20)"/);
+        }
+    });
+
     it('returns null past MAX_DASHES (tiny dash on a huge path)', () => {
         expect(dashPathData(`M0 0h${MAX_DASHES * 10}`, [1, 1], 0, TOL)).toBeNull();
         expect(dashPathData(`M0 0h${MAX_DASHES}`, [1e-9, 1e-9], 0, TOL)).toBeNull();
+    });
+});
+
+describe('dashPathData on elliptical arcs (measured on the true conic)', () => {
+    /** Ends of each dash (sub-path): its first point and its last point. */
+    const ends = (d: string): [Point, Point][] => subpaths(d).map((sp) => [sp[0]![0]!, sp.at(-1)!.at(-1)!]);
+    const near = (p: Point, q: Point): number => Math.hypot(p[0] - q[0], p[1] - q[1]);
+    const P = 6;
+
+    it('cuts a dashed circle at exact angles, without a parasitic dash at the start (wpt pathlength-002)', () => {
+        // r = 100: 2πr = 628.3185 < 16 × 39.27, so the last gap reaches the end: 8 dashes, each 45°.
+        // Its cubic lowering is 0.09 longer, which used to shift every cut by 0.02–0.09 and start a
+        // 0.09 dash before angle 0, merged into the first one.
+        const d = dashPathData(
+            ellipseDashPath('M20,240a100,100 0 1 0 200,0a100,100 0 1 0 -200,0z'),
+            [39.27, 39.27],
+            0,
+            TOL,
+            {
+                precision: P,
+            },
+        )!;
+        const dashes = ends(d);
+        expect(dashes).toHaveLength(8);
+        const at = (s: number): Point => [120 + 100 * Math.cos(s / 100), 240 + 100 * Math.sin(s / 100)];
+        dashes.forEach(([a, b], k) => {
+            expect(near(a, at(78.54 * k))).toBeLessThan(TOL);
+            expect(near(b, at(78.54 * k + 39.27))).toBeLessThan(TOL);
+        });
+        // Every piece stays on the circle (cubics of ≤ 90°, 2.7e-4·r radial error at most).
+        for (const sp of subpaths(d))
+            for (const seg of sp)
+                for (let t = 0; t <= 1; t += 0.125) {
+                    const [x, y] = bezier(seg, t);
+                    expect(Math.abs(Math.hypot(x - 120, y - 240) - 100)).toBeLessThan(0.03);
+                }
+    });
+
+    it('measures a path’s own arcs the same way (relative, implicit repetition)', () => {
+        const circle = ellipseDashPath('M20,240a100,100 0 1 0 200,0a100,100 0 1 0 -200,0z');
+        const path = 'm 220,240 a 100,100 0 0 1 -200,0 100,100 0 0 1 200,0 z';
+        const opts = { precision: P };
+        expect(ends(dashPathData(path, [39.27, 39.27], 0, TOL, opts)!)).toEqual(
+            ends(dashPathData(circle, [39.27, 39.27], 0, TOL, opts)!),
+        );
+    });
+
+    it('cuts a rotated ellipse arc at the arc lengths of the true ellipse', () => {
+        // Large arc of the ellipse rx = 40, ry = 15 rotated 30°, from angle −90° to 180° (sweep 1).
+        const [rx, ry, phi] = [40, 15, Math.PI / 6];
+        const at = (a: number): Point => [
+            Math.cos(phi) * rx * Math.cos(a) - Math.sin(phi) * ry * Math.sin(a),
+            Math.sin(phi) * rx * Math.cos(a) + Math.cos(phi) * ry * Math.sin(a),
+        ];
+        const [p0, p1] = [at(-Math.PI / 2), at(Math.PI)];
+        const d = dashPathData(`M${p0[0]} ${p0[1]}A${rx} ${ry} 30 1 1 ${p1[0]} ${p1[1]}`, [7, 3], 0, TOL, {
+            precision: P,
+        })!;
+        // Reference: points every 10 units of arc length, by dense sampling of the true ellipse.
+        const expected: Point[] = [];
+        let s = 0;
+        let prev = p0;
+        for (let k = 1, next = 0; k <= 200_000; k++) {
+            const q = at(-Math.PI / 2 + (k / 200_000) * 1.5 * Math.PI);
+            const step = near(prev, q);
+            while (next <= s + step) {
+                const f = (next - s) / step;
+                expected.push([prev[0] + (q[0] - prev[0]) * f, prev[1] + (q[1] - prev[1]) * f]);
+                next += 10;
+            }
+            s += step;
+            prev = q;
+        }
+        const starts = ends(d).map(([a]) => a);
+        expect(starts).toHaveLength(expected.length);
+        starts.forEach((p, k) => expect(near(p, expected[k]!)).toBeLessThan(TOL));
+    });
+
+    it('treats a zero radius as a line and scales radii too small for the chord (SVG 2 out-of-range arcs)', () => {
+        expect(dashPathData('M0 0A0 5 0 0 1 10 0', [4, 2], 0, TOL)).toBe('M0 0L4 0M6 0L10 0');
+        // r = 1 on a chord of 20 becomes the semicircle of center (10, 0), radius 10 (length 10π):
+        // dashes [0, 10], [11, 21], [22, 10π], at angle π + s/10.
+        const at = (s: number): Point => [10 + 10 * Math.cos(Math.PI + s / 10), 10 * Math.sin(Math.PI + s / 10)];
+        const dashes = ends(dashPathData('M0 0A1 1 0 0 1 20 0', [10, 1], 0, TOL, { precision: P })!);
+        expect(dashes).toHaveLength(3);
+        [0, 11, 22].forEach((s, k) => {
+            expect(near(dashes[k]![0], at(s))).toBeLessThan(TOL);
+            expect(near(dashes[k]![1], at(Math.min(s + 10, 10 * Math.PI)))).toBeLessThan(TOL);
+        });
+    });
+
+    it('never emits NaN when the center radicand underflows (den === 0)', () => {
+        // End points 1e-170 apart: lambda and den underflow to 0, which used to give sqrt(0 / 0).
+        // Written out in full (1e-170 = 0.000…01), so the path tokenizer reads it as a plain decimal.
+        const tiny = `0.${'0'.repeat(169)}1`;
+        const d = dashPathData(`M0 0A1 1 0 0 1 ${tiny} 0h10`, [4, 2], 0, TOL)!;
+        expect(d).not.toMatch(/NaN/);
+        expect(d).toBe('M0 0L4 0M6 0L10 0');
+    });
+
+    it('cuts a scaled-up flattened half ellipse like toAbsolute lowers it (shared arcCenter)', () => {
+        // Radii 1 × 0.02 rotated 30° on a chord of length √425 (lambda ≫ 1): a half ellipse whose
+        // center is the chord midpoint. A dash longer than the arc keeps it whole, ending on (20, 5).
+        const whole = ends(dashPathData('M0 0A1 0.02 30 0 1 20 5', [1000, 1], 0, TOL, { precision: P })!);
+        expect(whole).toHaveLength(1);
+        expect(near(whole[0]![0], [0, 0])).toBeLessThan(TOL);
+        expect(near(whole[0]![1], [20, 5])).toBeLessThan(TOL);
     });
 });
 
@@ -156,6 +335,61 @@ describe('ellipseDashPath', () => {
 
     it('leaves any other path unchanged', () => {
         expect(ellipseDashPath('M0 0h10')).toBe('M0 0h10');
+    });
+});
+
+describe('dash budget (MAX_DASHES)', () => {
+    // A [1, 1] pattern on a line of length 2n yields exactly n dashes.
+    const atBudget = 2 * MAX_DASHES;
+    const svg = (length: number, dasharray: string): string =>
+        `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">` +
+        `<path d="M0 0h${length}" stroke="#000" fill="none" stroke-dasharray="${dasharray}"/></svg>`;
+    const pathData = (xml: string): string => /android:pathData="([^"]*)"/.exec(xml)![1]!;
+    const timed = <T>(fn: () => T): [T, number] => {
+        const start = performance.now();
+        const result = fn();
+        return [result, performance.now() - start];
+    };
+
+    it('emits every dash when the pattern needs exactly MAX_DASHES, one more gives up', () => {
+        expect(dashPathData(`M0 0h${atBudget}`, [1, 1], 0, TOL)!.match(/M/g)).toHaveLength(MAX_DASHES);
+        expect(dashPathData(`M0 0h${atBudget + 2}`, [1, 1], 0, TOL)).toBeNull();
+    });
+
+    it('converts a pattern at the budget into dashes, without warning, in bounded time', () => {
+        for (const optimize of [true, false]) {
+            const [{ xml, warnings }, ms] = timed(() => convert(svg(atBudget, '1'), { optimize, strict: true }));
+            expect(warnings).toEqual([]);
+            expect(pathData(xml).match(/M/g)).toHaveLength(MAX_DASHES);
+            expect(ms).toBeLessThan(1000);
+        }
+    });
+
+    it('warns and falls back to the solid stroke past the budget, in bounded time', () => {
+        // svgo must not round a single tiny value to "0" (= no dashes): the pattern reaches the dasher.
+        for (const [dasharray, optimize] of [
+            ['0.0001', false],
+            ['0.0001', true],
+            ['0.001', false],
+            ['0.001', true],
+            ['1', false],
+        ] as const) {
+            const length = dasharray === '1' ? atBudget + 2 : 20_000;
+            const [{ xml, warnings }, ms] = timed(() => convert(svg(length, dasharray), { optimize }));
+            expect(warnings.map((w) => w.code)).toEqual(['unsupported-stroke-dasharray']);
+            expect(warnings[0]!.message).toContain('drawn solid');
+            expect(pathData(xml)).toBe(`M0 0h${length}`);
+            expect(xml).toContain('android:strokeColor="#FF000000"');
+            expect(ms).toBeLessThan(1000);
+        }
+    });
+
+    it('rejects an over-budget pattern under strict, the warning being lossy', () => {
+        for (const optimize of [true, false])
+            for (const dasharray of ['0.001', '0.0001'])
+                expect(() => convert(svg(20_000, dasharray), { optimize, strict: true })).toThrow(
+                    /\[unsupported-stroke-dasharray\]/,
+                );
     });
 });
 
@@ -176,5 +410,114 @@ describe('dash properties inheritance', () => {
         ).xml;
         expect(pathData(inherited)).toBe(pathData(own));
         expect(pathData(own)).toMatch(/^M0 0L3 0/); // the first dash is shortened by the offset
+    });
+});
+
+describe('pathLength="0" through convert', () => {
+    const svg = (el: string): string => `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 120 120">${el}</svg>`;
+    const pathData = (xml: string): string[] => [...xml.matchAll(/android:pathData="([^"]*)"/g)].map((m) => m[1]!);
+    const dash =
+        'pathLength="0" stroke-dasharray="1 1" stroke-dashoffset="1" fill="none" stroke="#000" stroke-width="10"';
+
+    it('draws a <path> solid in both modes (wpt pathlength-path-zero)', () => {
+        for (const optimize of [true, false]) {
+            const { xml, warnings } = convert(svg(`<path d="M10,10L110,10L110,110L10,110Z" ${dash}/>`), {
+                optimize,
+                strict: true,
+            });
+            expect(warnings).toEqual([]);
+            const [d] = pathData(xml);
+            expect(d!.match(/M/gi)).toHaveLength(1);
+            expect(d).toMatch(/z$/i);
+        }
+    });
+
+    it('draws shapes solid (optimize: false)', () => {
+        for (const el of [
+            `<rect x="10" y="10" width="100" height="100" ${dash}/>`,
+            `<circle cx="60" cy="60" r="50" ${dash}/>`,
+            `<line x1="10" y1="10" x2="110" y2="10" ${dash}/>`,
+        ]) {
+            const { xml, warnings } = convert(svg(el), { optimize: false, strict: true });
+            expect(warnings).toEqual([]);
+            const [d] = pathData(xml);
+            expect(d!.match(/M/gi)).toHaveLength(1);
+        }
+    });
+
+    it('keeps negative pathLength ignored (wpt pathlength-path-negative)', () => {
+        const neg = convert(svg(`<path d="M10,10L110,10L110,110L10,110Z" ${dash.replace('"0"', '"-4"')}/>`), {
+            optimize: false,
+        }).xml;
+        expect(pathData(neg)[0]!.match(/M/g)!.length).toBeGreaterThan(100);
+    });
+});
+
+describe('dash precision under a large group scale (T-133)', () => {
+    const SRC =
+        '<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24"><g transform="scale(1000)">' +
+        '<path d="M0.0021 0.0121h0.0204" stroke="green" stroke-width="0.0035" stroke-dasharray="0.0031 0.0021"/></g></svg>';
+
+    it('cuts at the output precision, not at 3 decimals', () => {
+        const d = dashPathData('M0.0021 0.0121h0.0204', [0.0031, 0.0021], 0, 1e-7, { precision: 4 })!;
+        expect(d).toBe(
+            'M0.0021 0.0121L0.0052 0.0121M0.0073 0.0121L0.0104 0.0121M0.0125 0.0121L0.0156 0.0121M0.0177 0.0121L0.0208 0.0121',
+        );
+    });
+
+    it('keeps the last dash within the end of the path', () => {
+        // Path ends at x = 0.0225; the 5th dash would start at 0.0229.
+        const d = dashPathData('M0.0021 0.0121h0.0204', [0.0031, 0.0019], 0, 1e-7, { precision: 4 })!;
+        const xs = [...d.matchAll(/[ML]([\d.]+) /g)].map((m) => Number(m[1]));
+        expect(Math.max(...xs)).toBeLessThanOrEqual(0.0225);
+        expect(xs.at(-1)).toBe(0.0225);
+    });
+
+    it('keeps the default output unchanged at 3 decimals', () => {
+        expect(dashPathData('M0 0h10', [3, 2], 0, 1e-3)).toBe('M0 0L3 0M5 0L8 0');
+    });
+
+    it.each([false, true])('renders like the source (optimize: %s)', (optimize) => {
+        const { xml, warnings } = convert(SRC, { optimize });
+        expect(warnings).toEqual([]);
+        const result = compareSvgs(SRC, vdToSvg(xml));
+        expect(result.sizeMismatch).toBeNull();
+        expect(result.inked).toBeGreaterThan(0);
+        expect(result.mismatch).toBeLessThan(DEFAULT_MAX_MISMATCH);
+    });
+});
+
+describe('solid fallback precision under a large group scale (T-153)', () => {
+    const D = 'M0.0011 0.0013 L0.0227 0.0019 L0.0201 0.0217';
+    const src = (transform: string, dash: string): string =>
+        `<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24"><g transform="${transform}">` +
+        `<path d="${D}" fill="none" stroke="green" stroke-width="0.001"${dash}/></g></svg>`;
+
+    it('writes both solid fallbacks at the output precision', () => {
+        const solid = 'M0.0011 0.0013L0.0227 0.0019L0.0201 0.0217';
+        expect(dashPathData(D, [0.001, 0.001], 0, 1e-7, { precision: 6, pathLength: 0 })).toBe(solid);
+        // A pattern without gap is the solid stroke.
+        expect(dashPathData(D, [0.001, 0], 0, 1e-7, { precision: 6 })).toBe(solid);
+    });
+
+    describe.each(['scale(1000)', 'scale(1000) skewX(1)'])('under %s', (transform) => {
+        const expected = src(transform, '');
+        it.each([false, true])('draws pathLength="0" like the solid stroke (optimize: %s)', (optimize) => {
+            const { xml, warnings } = convert(src(transform, ' stroke-dasharray="0.001 0.001" pathLength="0"'), {
+                optimize,
+            });
+            expect(warnings.filter((w) => w.code !== 'group-skew')).toEqual([]); // the skew is baked
+            const result = compareSvgs(expected, vdToSvg(xml));
+            expect(result.sizeMismatch).toBeNull();
+            expect(result.inked).toBeGreaterThan(0);
+            expect(result.mismatch).toBeLessThan(DEFAULT_MAX_MISMATCH);
+        });
+        it.each([false, true])('draws a gapless pattern like the solid stroke (optimize: %s)', (optimize) => {
+            const { xml, warnings } = convert(src(transform, ' stroke-dasharray="0.001 0"'), { optimize });
+            expect(warnings.filter((w) => w.code !== 'group-skew')).toEqual([]); // the skew is baked
+            const result = compareSvgs(expected, vdToSvg(xml));
+            expect(result.sizeMismatch).toBeNull();
+            expect(result.mismatch).toBeLessThan(DEFAULT_MAX_MISMATCH);
+        });
     });
 });

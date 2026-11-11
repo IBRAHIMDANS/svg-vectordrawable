@@ -3,6 +3,7 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { convert, vectorDrawableToSvg } from '../src/index.js';
+import { UNRESOLVED_COLOR } from '../src/preview.js';
 import * as browser from '../src/browser.js';
 import { vdToSvg } from './visual/vdToSvg.js';
 import { compareSvgs, renderSvg, DEFAULT_MAX_MISMATCH } from './visual/compare.js';
@@ -104,6 +105,103 @@ describe('vectorDrawableToSvg: options', () => {
     });
 });
 
+describe('vectorDrawableToSvg: color references', () => {
+    /** Renders `xml` with `options`, returning the SVG and the references reported as unresolved. */
+    function preview(xml: string, colors?: Record<string, string>, applyTint = false) {
+        const unresolved: string[] = [];
+        const svg = vectorDrawableToSvg(xml, { colors, applyTint, onUnresolvedColor: (r) => unresolved.push(r) });
+        return { svg, unresolved };
+    }
+
+    it('draws a mapped ?attr/ reference in its preview color', () => {
+        const { svg, unresolved } = preview(vd(HALF('?attr/x')), { '?attr/x': '#f00' });
+        expect(compareSvgs(svg24(HALF_SVG('#f00')), svg).mismatch).toBe(0);
+        expect(unresolved).toEqual([]);
+    });
+
+    it('draws an unmapped reference in neutral gray, reported once, without throwing', () => {
+        const xml = vd(HALF('?attr/x') + '<path android:pathData="M12,0h12v24h-12z" android:fillColor="?attr/x"/>');
+        const { svg, unresolved } = preview(xml);
+        expect(UNRESOLVED_COLOR).toBe('#FF808080');
+        expect(svg).toContain('fill="#808080"');
+        expect(compareSvgs(svg24('<rect width="24" height="24" fill="#808080"/>'), svg).mismatch).toBe(0);
+        expect(unresolved).toEqual(['?attr/x']);
+        expect(() => vectorDrawableToSvg(xml)).not.toThrow();
+    });
+
+    it('reports only the references missing from the map, in order of appearance', () => {
+        const xml = vd(
+            HALF('@color/b') +
+                '<path android:pathData="M12,0h12v24h-12z" android:strokeColor="?android:attr/a" android:strokeWidth="1" android:fillColor="@color/brand"/>',
+        );
+        expect(preview(xml, { '@color/brand': '#00f' }).unresolved).toEqual(['@color/b', '?android:attr/a']);
+    });
+
+    it('resolves references in strokes, gradient stops and the tint', () => {
+        const colors = { '@color/red': '#FFFF0000', '?attr/blue': '#0000ff' };
+        const stroke = preview(
+            vd('<path android:pathData="M0,12h24" android:strokeColor="@color/red" android:strokeWidth="2"/>'),
+            colors,
+        ).svg;
+        expect(stroke).toContain('stroke="#ff0000"');
+        const gradient = preview(
+            vd(
+                '<path android:pathData="M0,0h24v24h-24z"><aapt:attr name="android:fillColor">' +
+                    '<gradient android:startColor="@color/red" android:endColor="#FF00FF00" android:endX="24">' +
+                    '<item android:offset="0" android:color="@color/red"/><item android:offset="1" android:color="?attr/blue"/>' +
+                    '</gradient></aapt:attr></path>',
+            ),
+            colors,
+        ).svg;
+        expect(gradient).toContain(
+            '<stop offset="0" stop-color="#ff0000" stop-opacity="1"/><stop offset="1" stop-color="#0000ff"',
+        );
+        const tinted = preview(vd(HALF('#000'), ' android:tint="?attr/blue"'), colors, true).svg;
+        expect(compareSvgs(svg24(HALF_SVG('#00f')), tinted).mismatch).toBe(0);
+        expect(preview(vd(HALF('#000'), ' android:tint="?attr/blue"'), colors).svg).not.toContain('filter');
+    });
+
+    it('reads mapped values as Android literals (alpha first), multiplied by fillAlpha', () => {
+        const xml = vd(HALF('@color/half').replace('/>', ' android:fillAlpha="0.5"/>'));
+        const svg = preview(xml, { '@color/half': '#80FF0000' }).svg;
+        expect(svg).toContain(`fill="#ff0000" fill-opacity="${(0x80 / 255) * 0.5}"`);
+    });
+
+    it('rejects a malformed colors key or value with a TypeError (nothing is copied verbatim)', () => {
+        const xml = vd(HALF('?attr/x'));
+        const bad: Record<string, string>[] = [
+            { 'attr/x': '#f00' },
+            { '?attr/x': 'red' },
+            { '?attr/x': '#f00" onload="alert(1)' },
+            { '?attr/x': '?attr/y' },
+            { '?attr/x': '#12345' },
+        ];
+        for (const colors of bad)
+            expect(() => vectorDrawableToSvg(xml, { colors }), JSON.stringify(colors)).toThrow(TypeError);
+        // @ts-expect-error runtime check of a JavaScript caller
+        expect(() => vectorDrawableToSvg(xml, { colors: '#f00' })).toThrow(TypeError);
+    });
+
+    it('leaves the output of drawables without references unchanged', () => {
+        const colors = { '?attr/x': '#f00' };
+        for (const file of ['clip-path.svg', 'linear-gradient.svg', 'stroke-icon.svg']) {
+            const xml = convert(fixture(file)).xml;
+            const { svg, unresolved } = preview(xml, colors);
+            expect(svg).toBe(vectorDrawableToSvg(xml));
+            expect(unresolved).toEqual([]);
+        }
+    });
+
+    it('previews a converter output with theme references end to end', () => {
+        const source =
+            '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M0 0h12v24H0z" fill="currentColor"/></svg>';
+        const xml = convert(source, { currentColor: '?attr/colorPrimary' }).xml;
+        expect(xml).toContain('?attr/colorPrimary');
+        const { svg } = preview(xml, { '?attr/colorPrimary': '#f00' });
+        expect(compareSvgs(svg24(HALF_SVG('#f00')), svg).mismatch).toBe(0);
+    });
+});
+
 describe('vectorDrawableToSvg: unsupported input throws a clear Error', () => {
     const gradient = (type: string) =>
         `<path android:pathData="M0,0h24v24h-24z"><aapt:attr name="android:fillColor">` +
@@ -111,12 +209,16 @@ describe('vectorDrawableToSvg: unsupported input throws a clear Error', () => {
         `</aapt:attr></path>`;
     const cases: [string, () => string, RegExp][] = [
         ['a sweep gradient', () => vectorDrawableToSvg(vd(gradient('sweep'))), /sweep.*no SVG equivalent/],
-        ['a color resource', () => vectorDrawableToSvg(vd(HALF('@color/red'))), /Unsupported Android color: @color/],
+        ['a color name', () => vectorDrawableToSvg(vd(HALF('red'))), /Unsupported Android color: red/],
         [
-            'a theme tint with applyTint',
-            () =>
-                vectorDrawableToSvg(vd(HALF('#000'), ' android:tint="?attr/colorControlNormal"'), { applyTint: true }),
-            /Unsupported Android color: \?attr/,
+            'a malformed reference (not a color resource)',
+            () => vectorDrawableToSvg(vd(HALF('@drawable/red'))),
+            /Unsupported Android color: @drawable\/red/,
+        ],
+        [
+            'a reference without its type',
+            () => vectorDrawableToSvg(vd(HALF('#000'), ' android:tint="?colorControlNormal"'), { applyTint: true }),
+            /Unsupported Android color: \?colorControlNormal/,
         ],
         [
             'an unknown tintMode',
@@ -137,10 +239,35 @@ describe('vectorDrawableToSvg: unsupported input throws a clear Error', () => {
         ],
         ['a non-numeric attribute', () => vectorDrawableToSvg(vd('', ' android:alpha="half"')), /android:alpha="half"/],
         ['a non-positive density', () => vectorDrawableToSvg(vd(''), { density: 0 }), /density/],
+        [
+            'a non-numeric size',
+            () => vectorDrawableToSvg(vd('').replace('android:width="24dp"', 'android:width="abc"')),
+            /android:width="abc" is not a positive size/,
+        ],
+        [
+            'a character reference outside Unicode',
+            () => vectorDrawableToSvg(vd('<path android:pathData="&#x110000;"/>')),
+            /Invalid character reference &#x110000;/,
+        ],
     ];
     for (const [label, run, message] of cases) {
         it(label, () => expect(run).toThrow(message));
     }
+});
+
+describe('vectorDrawableToSvg: attribute values are never copied verbatim into the SVG', () => {
+    const stroked = (attr: string) =>
+        vd(`<path android:pathData="M0 0h9v9z" android:strokeColor="#000" android:strokeWidth="1" ${attr}/>`);
+
+    it.each(['strokeLineCap', 'strokeLineJoin'])('rejects an injected android:%s', (name) => {
+        const xml = stroked(`android:${name}="round&quot; onload=&quot;alert(1)"`);
+        expect(() => vectorDrawableToSvg(xml)).toThrow(`Unsupported android:${name}`);
+    });
+
+    it('keeps the valid keywords', () => {
+        const svg = vectorDrawableToSvg(stroked('android:strokeLineCap="square" android:strokeLineJoin="bevel"'));
+        expect(svg).toContain('stroke-linecap="square" stroke-linejoin="bevel"');
+    });
 });
 
 describe('vectorDrawableToSvg: packaging', () => {

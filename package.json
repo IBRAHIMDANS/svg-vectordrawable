@@ -1,13 +1,31 @@
 {
     "name": "svg-vectordrawable",
-    "version": "0.2.0",
+    "version": "0.4.0",
     "description": "Convert SVG to Android VectorDrawable XML. AST-based (via svgo), with gradients (incl. gradientTransform), clip-path, groups and full CSS color support. Fails loud on constructs a VectorDrawable cannot represent.",
     "type": "module",
+    "main": "./dist/index.cjs",
+    "module": "./dist/index.js",
+    "types": "./dist/index.d.cts",
+    "typesVersions": {
+        "*": {
+            "browser": [
+                "./dist/browser.d.ts"
+            ],
+            "browser-lite": [
+                "./dist/browser-lite.d.ts"
+            ]
+        }
+    },
     "exports": {
         ".": {
-            "types": "./dist/index.d.ts",
-            "import": "./dist/index.js",
-            "require": "./dist/index.cjs"
+            "import": {
+                "types": "./dist/index.d.ts",
+                "default": "./dist/index.js"
+            },
+            "require": {
+                "types": "./dist/index.d.cts",
+                "default": "./dist/index.cjs"
+            }
         },
         "./browser": {
             "types": "./dist/browser.d.ts",
@@ -16,7 +34,8 @@
         "./browser-lite": {
             "types": "./dist/browser-lite.d.ts",
             "import": "./dist/browser-lite.js"
-        }
+        },
+        "./package.json": "./package.json"
     },
     "bin": {
         "svgvd": "dist/cli.js"
@@ -26,18 +45,20 @@
     ],
     "sideEffects": false,
     "scripts": {
-        "build": "tsup",
+        "build": "node -e \"require('node:fs').rmSync('dist', { recursive: true, force: true })\" && tsup && node scripts/fix-dts-svgo.mjs",
         "test": "vitest run",
         "test:watch": "vitest",
         "test:coverage": "vitest run --coverage",
         "test:visual": "vitest run test/visual.test.ts",
         "typecheck": "tsc --noEmit",
+        "check:types": "d=$(mktemp -d) && pnpm pack --pack-destination \"$d\" > /dev/null && npx --yes @arethetypeswrong/cli@0.18.5 \"$d\"/*.tgz --ignore-rules cjs-resolves-to-esm",
         "lint": "eslint .",
         "lint:fix": "eslint . --fix",
         "format": "prettier --write .",
         "format:check": "prettier --check .",
         "validate:aapt2": "node scripts/aapt2-validate.mjs",
         "validate:corpus": "node scripts/corpus.mjs",
+        "validate:wpt": "node scripts/wpt-corpus.mjs",
         "validate:android": "node android-render/prepare.mjs && cd android-render && ./gradlew :render:testDebugUnitTest --console=plain && cd .. && node android-render/compare.mjs",
         "validate": "pnpm run build && pnpm run validate:aapt2 && pnpm run validate:corpus",
         "prepublishOnly": "pnpm run build",
@@ -48,10 +69,18 @@
         "android",
         "vectordrawable",
         "vector-drawable",
+        "android-vector-drawable",
+        "drawable",
+        "svg-to-vectordrawable",
+        "svg2vectordrawable",
+        "svg2vector",
+        "svg-converter",
         "gradient",
         "gradientTransform",
+        "clip-path",
         "figma",
         "converter",
+        "cli",
         "svgo"
     ],
     "license": "MIT",
@@ -64,24 +93,37 @@
     "bugs": {
         "url": "https://github.com/IBRAHIMDANS/svg-vectordrawable/issues"
     },
-    "packageManager": "pnpm@12.9.1",
+    "packageManager": "pnpm@12.18.0",
     "engines": {
-        "node": ">=18"
+        "node": ">=20"
     },
     "dependencies": {
         "svgo": "^4.1.0"
     },
+    "peerDependencies": {
+        "@resvg/resvg-js": "^2.6.2",
+        "opentype.js": "^2.0.0"
+    },
+    "peerDependenciesMeta": {
+        "@resvg/resvg-js": {
+            "optional": true
+        },
+        "opentype.js": {
+            "optional": true
+        }
+    },
     "devDependencies": {
         "@eslint/js": "^10.0.1",
         "@resvg/resvg-js": "^2.6.2",
-        "@types/node": "^26.6.4",
-        "@vitest/coverage-v8": "^5.0.3",
-        "eslint": "^10.12.0",
-        "globals": "^17.13.0",
-        "prettier": "^3.9.9",
-        "tsup": "^8.5.1",
+        "@types/node": "^26.6.6",
+        "@vitest/coverage-v8": "^5.1.0",
+        "eslint": "^10.14.0",
+        "globals": "^17.14.0",
+        "opentype.js": "^2.0.0",
+        "prettier": "^3.9.10",
+        "tsup": "^9.0.0",
         "typescript": "^5.6.0",
-        "typescript-eslint": "^8.71.1",
-        "vitest": "^5.0.3"
+        "typescript-eslint": "^8.72.2",
+        "vitest": "^5.1.0"
     }
 }

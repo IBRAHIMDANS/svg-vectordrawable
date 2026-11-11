@@ -11,8 +11,8 @@ import {
 const svg = (body: string, attrs = 'viewBox="0 0 24 24"'): string =>
     `<svg xmlns="http://www.w3.org/2000/svg" ${attrs}>${body}</svg>`;
 
-/** `lossy`: a dash pattern in `em` cannot be resolved; the stroke is drawn solid. */
-const LOSSY = svg('<path d="M0 0L24 24" stroke="#000" stroke-dasharray="1em"/>');
+/** `lossy`: a dash pattern in `ex` cannot be resolved; the stroke is drawn solid. */
+const LOSSY = svg('<path d="M0 0L24 24" stroke="#000" stroke-dasharray="1ex"/>');
 /** `approximation`: group opacity folded onto overlapping children. */
 const APPROX = svg('<g opacity="0.5"><rect width="12" height="12"/><rect x="6" y="6" width="12" height="12"/></g>');
 /** `info`: a 512dp vector. */
@@ -43,6 +43,7 @@ describe('WARNING_CATEGORIES', () => {
             'missing-gradient',
             'unsupported-attribute',
             'unsupported-clip-path',
+            'unsupported-color-reference',
             'unsupported-element',
             'unsupported-paint',
             'unsupported-stroke-dasharray',
@@ -54,9 +55,10 @@ describe('WARNING_CATEGORIES', () => {
             'gradient-bbox-unavailable',
             'gradient-under-skew',
             'group-skew',
+            'mask-approximated',
             'opacity-approximated',
         ]);
-        expect(by('info')).toEqual(['large-vector', 'long-path-data', 'min-sdk-exceeded']);
+        expect(by('info')).toEqual(['invalid-path-data', 'large-vector', 'long-path-data', 'min-sdk-exceeded']);
     });
 });
 
@@ -114,5 +116,64 @@ describe('strict presets', () => {
     it('rejects an unknown preset', () => {
         expect(() => convert(LOSSY, { strict: 'approximation' as unknown as StrictMode })).toThrow(TypeError);
         expect(() => convert(LOSSY, { strict: 'true' as unknown as StrictMode })).toThrow(TypeError);
+    });
+});
+
+describe('invalid-path-data (info, off by default)', () => {
+    const TYPO = svg('<path d="M0 0h10v10 x 3 3"/>');
+    const TRAILING = svg('<path d="M0 0h10v10z L 5"/>');
+    const enabled = { rules: { 'invalid-path-data': 'warn' } } as const;
+    const modes = [true, false];
+
+    it('is muted by default: no warning, output unchanged, in both modes', () => {
+        for (const optimize of modes) {
+            const r = convert(TYPO, { optimize });
+            expect(r.warnings).toEqual([]);
+            expect(r.xml).toBe(convert(TYPO, { optimize, ...enabled }).xml);
+            expect(r.xml).toContain('android:pathData="M0 0h10v10"');
+            expect(convert(TRAILING, { optimize }).warnings).toEqual([]);
+        }
+    });
+
+    it('with the rule: one warning per d in error, same message in both modes', () => {
+        const messages = modes.map((optimize) => {
+            const r = convert(TYPO, { optimize, ...enabled });
+            expect(r.warnings.map((w) => w.code)).toEqual(['invalid-path-data']);
+            return r.warnings[0]!.message;
+        });
+        expect(messages[0]).toBe(messages[1]);
+        expect(messages[0]).toContain('character 12 ("x 3 3")');
+        for (const optimize of modes)
+            expect(convert(TRAILING, { optimize, ...enabled }).warnings.map((w) => w.message)).toEqual([
+                expect.stringContaining('character 13 ("L 5")'),
+            ]);
+    });
+
+    it('reports once per message, and distinct errors apart', () => {
+        const twice = svg('<path d="M0 0h10v10 x 3 3"/><path d="M0 0h10v10 x 3 3" transform="translate(5)"/>');
+        const two = svg('<path d="M0 0h10v10 x 3 3"/><path d="M0 0h5v5 # 1"/>');
+        for (const optimize of modes) {
+            expect(convert(twice, { optimize, ...enabled }).warnings).toHaveLength(1);
+            expect(convert(two, { optimize, ...enabled }).warnings).toHaveLength(2);
+        }
+    });
+
+    it('stays silent on valid data, on data that draws nothing (empty-path) and on a CSS d in error', () => {
+        for (const optimize of modes) {
+            expect(convert(svg('<path d="M0 0h10v10z"/>'), { optimize, ...enabled }).warnings).toEqual([]);
+            expect(convert(svg('<path d="M0 0 L"/>'), { optimize, ...enabled }).warnings.map((w) => w.code)).toEqual([
+                'empty-path',
+            ]);
+            const css = svg('<path d="M0 0h10v10z" style="d: path(\'M0 0h5v5 x\')"/>');
+            expect(convert(css, { optimize, ...enabled }).warnings).toEqual([]);
+        }
+    });
+
+    it('strict does not escalate it; rules can', () => {
+        for (const optimize of modes) {
+            expect(convert(TYPO, { optimize, strict: true }).warnings).toEqual([]);
+            expect(convert(TYPO, { optimize, strict: true, ...enabled }).warnings).toHaveLength(1);
+            expect(() => convert(TYPO, { optimize, rules: { 'invalid-path-data': 'error' } })).toThrow(ConversionError);
+        }
     });
 });

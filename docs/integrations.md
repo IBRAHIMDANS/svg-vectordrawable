@@ -16,8 +16,21 @@ an ESM browser build under `svg-vectordrawable/browser` (`convert` only, no file
 > Sections marked **Example — not published** are sketches to copy into your project. They are not
 > packages you can install.
 
-> `rules`, `ConversionError`, `--rule` and `--android-names` are listed under `[Unreleased]` in the
-> changelog: they need the release after 0.1.1.
+`rules`, `ConversionError`, `--rule` and `--android-names` are available since 0.2.0.
+
+## Plugins and MCP server
+
+Ready-made integrations live in [`integrations/`](../integrations), each with its own README. They are
+merged in this repository. The Gradle plugin (0.1.0) is submitted to the Gradle Plugin Portal, pending review; the Vite plugin,
+the MCP server and the Figma plugin are **not published yet**: until they are, build them from source as their
+READMEs describe.
+
+| Integration                                              | Package / plugin id                        | What it does                                                                                |
+| -------------------------------------------------------- | ------------------------------------------ | ------------------------------------------------------------------------------------------- |
+| [Gradle plugin](../integrations/gradle-plugin/README.md) | `io.github.ibrahimdans.svg-vectordrawable` | Converts a folder of SVGs into generated `res/drawable` resources for every Android variant |
+| [Vite plugin](../integrations/vite-plugin/README.md)     | `vite-plugin-svg-vectordrawable`           | Converts a folder of SVGs into a `res/drawable` folder at build time and in watch mode      |
+| [MCP server](../integrations/mcp-server/README.md)       | `svg-vectordrawable-mcp`                   | Lets an AI assistant convert SVG to VectorDrawable and preview a VectorDrawable as SVG      |
+| [Figma plugin](../integrations/figma-plugin/README.md)   | (Figma Community, not listed yet)          | Converts the selected Figma layers to VectorDrawable XML inside Figma, offline              |
 
 ## Node build script
 
@@ -110,19 +123,35 @@ export async function* generateVectorDrawable(imageInput, fileName, context) {
 Choosing the rules: `strict: true` alone rejects every approximation. Codes worth reviewing for app
 icons:
 
-| Code                    | Effect if downgraded to `'warn'`                                                                                                                                               |
-| ----------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `opacity-approximated`  | Group `opacity` over overlapping children: the overlaps render darker than in the SVG                                                                                          |
-| `gradient-approximated` | Radial focal point (`fx`/`fy`) ignored, or elliptical radial on a path that is also stroked                                                                                    |
-| `group-skew`            | The skew is baked into the path geometry; stroke widths get one uniform scale factor (√\|det\|), so strokes under a strong skew keep a constant width instead of being sheared |
-| `empty-path`            | None visible: a shape without geometry is skipped                                                                                                                              |
+| Code                    | Effect if downgraded to `'warn'`                                                                                                                                                         |
+| ----------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `opacity-approximated`  | Group `opacity` over overlapping children: the overlaps render darker than in the SVG                                                                                                    |
+| `gradient-approximated` | Radial focal point (`fx`/`fy`) ignored, elliptical radial on a path that is also stroked, or `linearRGB` mid-tones interpolated in sRGB (over 64 stops, or a stop mapped to a reference) |
+| `mask-approximated`     | A `<mask>` with stroked content clips without its strokes: the masked area differs along the stroked outlines                                                                            |
+| `group-skew`            | The skew is baked into the path geometry; stroke widths get one uniform scale factor (√\|det\|), so strokes under a strong skew keep a constant width instead of being sheared           |
+| `empty-path`            | None visible: a shape without geometry is skipped                                                                                                                                        |
 
-Keep `unsupported-element`, `unsupported-attribute`, `unsupported-paint`, `unsupported-clip-path` and
-`unsupported-style` as errors: they mean something is missing from the drawable.
+Keep `unsupported-element`, `unsupported-attribute`, `unsupported-paint`, `unsupported-color-reference`,
+`unsupported-clip-path` and `unsupported-style` as errors: they mean something is missing from the drawable.
 
 Gradients in VectorDrawable require API 24+, which adaptive icons (API 26+) always satisfy.
 
 ## Gradle (Android project)
+
+**Plugin (0.1.0, submitted to the Gradle Plugin Portal, pending review):** until it is accepted,
+`id(…) version "0.1.0"` does not resolve; use it from a clone with
+`includeBuild("<clone>/integrations/gradle-plugin")` in the `pluginManagement` block of
+`settings.gradle.kts` (as [its example](../integrations/gradle-plugin/example/settings.gradle.kts) does)
+and no version in `plugins`. The [Gradle plugin](../integrations/gradle-plugin/README.md)
+(`id("io.github.ibrahimdans.svg-vectordrawable")`) registers a cacheable
+`convert<Variant>SvgToVectorDrawable` task per Android variant, wired before the resource merge, and
+passes the variant's `minSdk`. It runs the `svgvd` CLI, so it needs **Node.js 18+** on the `PATH` and
+`svg-vectordrawable` installed in the folder the CLI runs in (the root project by default). The
+`command` property changes how the CLI is started (default `npx --no-install svgvd`, `npx.cmd` on
+Windows), for instance `listOf("node", "tools/node_modules/svg-vectordrawable/dist/cli.js")`; see its
+README for `sourceDir`, `strict`, `androidNames`, `extraArgs`, `workingDir` and `cliFiles`.
+
+### Without the plugin
 
 Call the CLI from an `Exec` task that runs before the build. `--android-names` makes the output file
 names valid resource names (`[a-z][a-z0-9_]*`, not a Java keyword) and fails before writing anything
@@ -162,6 +191,15 @@ tasks.named("preBuild") { dependsOn(convertSvgIcons) }
   versions also offer `androidComponents { onVariants { … } }` for generated resources.
 
 ## Vite
+
+**Plugin (not published yet):** the [Vite plugin](../integrations/vite-plugin/README.md)
+(`vite-plugin-svg-vectordrawable`, also a Rollup plugin) converts every `*.svg` of an `input` folder
+into an `output` folder such as `android/app/src/main/res/drawable`, incrementally and in watch mode.
+Use it when the web project and the Android app share the same icons.
+
+### Without the plugin: import the XML as a string
+
+A different use: the XML as a JavaScript value rather than files on disk.
 
 **Example — not published.** A plugin that turns `import xml from './icon.svg?vd'` into the
 VectorDrawable XML string (for instance in a web tool that previews or exports Android drawables):
@@ -240,7 +278,7 @@ no other rule (asset modules, `@svgr/webpack`, …) also matches `*.svg?vd`.
 ## CI
 
 Use the CLI as a gate. It converts every file, prints `✗ file: [code] message` for each failure and
-exits with 1 if any failed.
+exits with 1 if any failed. `-r` / `--recursive` also converts subdirectories.
 
 ```sh
 # Fail on anything lossy, tolerate approximated group opacity.
@@ -259,5 +297,102 @@ GitHub Actions step:
 - run: npx svgvd design/icons -o build/drawable --strict --android-names
 ```
 
+For a machine-readable result, `--json` prints a report on stdout (human-readable lines stay on
+stderr) and keeps the exit code; `--dry-run` converts without writing, to lint a design folder:
+
+```sh
+npx svgvd design/icons -r --strict=lossy --dry-run --json > svgvd-report.json
+# Files that failed, with the escalated warning code when there is one:
+jq -r '.[] | select(.error) | "\(.input): \(.error.code // "-") \(.error.message)"' svgvd-report.json
+# Warning counts by code:
+jq -r '[.[].warnings[].code] | group_by(.) | map("\(.[0]): \(length)") | .[]' svgvd-report.json
+# With --fallback-png: files rendered to PNG, the rejecting warning and the PNGs written:
+jq -r '.[] | select(.fallback) | "\(.input): \(.fallback.reason.code) → \(.fallback.outputs | join(", "))"' svgvd-report.json
+```
+
+Each entry is `{ input, output, warnings, minSdk, error, fallback }`: `warnings` hold `code`,
+`category` (`lossy`, `approximation`, `info`), `message` and `node`; `error` is `null` or
+`{ message, code?, category? }`; `output` is the file written (or that `--dry-run` would write),
+`null` on error. `fallback` is `null`, or `{ outputs, reason }` for a file that `--fallback-png`
+rendered to PNG instead of failing: `outputs` lists the PNGs, `reason` is the warning that rejected
+the conversion, and `output`, `error` and `minSdk` are then all `null` (the file does not count as
+failed). With `--android-names`, a resource name collision reports every file as failed and
+writes nothing.
+
+The CLI also reads stdin (`svgvd -`, or no input when stdin is not a terminal) and writes to stdout,
+or to `-o file.xml`:
+
+```sh
+curl -s https://example.com/icon.svg | npx svgvd - --strict -o app/src/main/res/drawable/icon.xml
+```
+
 To also check that the generated XML compiles, run `aapt2 compile` / `aapt2 link` on the output, as
 this repository does in `scripts/aapt2-validate.mjs`, or simply build the Android app.
+
+## MCP server
+
+**Not published yet.** The [MCP server](../integrations/mcp-server/README.md)
+(`svg-vectordrawable-mcp`, stdio, Node.js 18+) lets an AI assistant use the library. It exposes two
+tools:
+
+- `convert`: SVG markup → `{ xml, warnings, minSdk }`, with the options `strict` (`true`, `false` or
+  `"lossy"`), `currentColor`, `floatPrecision`, `minSdk` and `tint`;
+- `preview`: VectorDrawable XML → `{ svg }`, with `density` and `applyTint`.
+
+Inputs are limited to 2 MB, and each call runs in a worker thread stopped after 10 seconds
+(`SVGVD_MCP_TIMEOUT_MS` changes it). The server reads no files and opens no network connection. Once
+published, it starts with `npx -y svg-vectordrawable-mcp`, for instance in Claude Code:
+
+```sh
+claude mcp add svg-vectordrawable -- npx -y svg-vectordrawable-mcp
+```
+
+Until then, build it from `integrations/mcp-server` (`pnpm install && pnpm run build`) and register
+`node <path>/integrations/mcp-server/dist/index.js` as the command.
+
+## Figma plugin
+
+**Not published yet** on the Figma Community. The [Figma plugin](../integrations/figma-plugin/README.md)
+converts the selected layers with the `browser-lite` build, inside Figma and without network access:
+it shows the XML, the warnings and a preview, and copies or downloads the drawables (a `.zip` for
+several layers). Its README explains how to build it and import it as a development plugin.
+
+## Publishing the integrations
+
+For maintainers. [`release-integrations.yml`](../.github/workflows/release-integrations.yml) publishes
+one integration per run, independently of the library (`release.yml`, tags `vX.Y.Z`). Each integration
+has its own version and tag prefix:
+
+| Integration   | Version read from                             | Tag             | Published to                                                     |
+| ------------- | --------------------------------------------- | --------------- | ---------------------------------------------------------------- |
+| MCP server    | `integrations/mcp-server/package.json`        | `mcp-vX.Y.Z`    | npm, `svg-vectordrawable-mcp`                                    |
+| Vite plugin   | `integrations/vite-plugin/package.json`       | `vite-vX.Y.Z`   | npm, `vite-plugin-svg-vectordrawable`                            |
+| Gradle plugin | `integrations/gradle-plugin/build.gradle.kts` | `gradle-vX.Y.Z` | Gradle Plugin Portal, `io.github.ibrahimdans.svg-vectordrawable` |
+
+The job fails before publishing when the tag does not match the version in the file, then installs the
+integration in its own folder (`pnpm install --frozen-lockfile`), runs its typecheck and tests (Gradle:
+`./gradlew build`, with JDK 21 and the Android SDK) and publishes.
+
+To release, bump the version in the file above, merge, then tag that commit and push the tag:
+
+```sh
+git tag mcp-v0.1.0 && git push origin mcp-v0.1.0        # MCP server
+git tag vite-v0.1.0 && git push origin vite-v0.1.0      # Vite plugin
+git tag gradle-v0.2.0 && git push origin gradle-v0.2.0  # Gradle plugin
+```
+
+**Dry run first.** Actions → "Release integrations" → "Run workflow", pick the integration; `dry-run` is
+checked by default and runs `npm publish --dry-run` or `./gradlew publishPlugins --validate-only`
+after the build and tests. A dry run can start from any branch; a real run (`dry-run` unchecked) must
+start from the integration's tag ("Use workflow from: `mcp-vX.Y.Z`"), otherwise it fails.
+
+**Secrets.** `NPM_TOKEN` (npm automation or granular token allowed to publish both packages),
+`GRADLE_PUBLISH_KEY` and `GRADLE_PUBLISH_SECRET` (Plugin Portal API key, passed as
+`gradle.publish.key` / `gradle.publish.secret`).
+
+**Switching npm to Trusted Publishing.** The library publishes through OIDC without a token, but npm
+only lets you add a Trusted Publisher to a package that already exists, so the first release of each
+npm package uses `NPM_TOKEN`. After it, on npmjs.com → package → Settings → Trusted Publisher, add
+GitHub Actions with this repository and the workflow file `release-integrations.yml`; then remove the
+`NODE_AUTH_TOKEN` line from the job (keep `id-token: write`), and once both packages are switched,
+delete the `NPM_TOKEN` secret.

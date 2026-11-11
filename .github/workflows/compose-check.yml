@@ -1,0 +1,39 @@
+name: Compose check
+
+# Compiles the Kotlin written by toImageVector (every test fixture, hand-written paint / clip / id cases
+# and large icons that need the split into private functions) against Compose Multiplatform on the
+# desktop JVM, then runs a Main that builds every ImageVector (scripts/compose-check). Slow (~200 MB of
+# downloads, 1–2 min with a warm cache): manual, weekly, and on PRs touching the Compose output only.
+on:
+    workflow_dispatch:
+    schedule:
+        - cron: '17 4 * * 1'
+    pull_request:
+        paths:
+            - 'src/compose.ts'
+            - 'scripts/compose-check/**'
+            - '.github/workflows/compose-check.yml'
+
+jobs:
+    compose-check:
+        runs-on: ubuntu-latest
+        timeout-minutes: 20
+        steps:
+            - uses: actions/checkout@v4
+            - uses: pnpm/action-setup@v6
+            - uses: actions/setup-node@v4
+              with:
+                  node-version: 22
+                  cache: pnpm
+            - uses: actions/setup-java@v4
+              with:
+                  distribution: temurin
+                  java-version: 21
+            # No wrapper in scripts/compose-check: setup-gradle installs this exact Gradle version.
+            - uses: gradle/actions/setup-gradle@v4
+              with:
+                  gradle-version: 9.8.0
+            - run: pnpm install --frozen-lockfile
+            - run: pnpm run build
+            - run: node scripts/compose-check/generate.mjs
+            - run: gradle -p scripts/compose-check run --console=plain

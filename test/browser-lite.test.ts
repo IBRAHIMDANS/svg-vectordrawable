@@ -77,6 +77,14 @@ describe('browser-lite entry', () => {
         expect(lite.WARNING_CODES).toEqual(main.WARNING_CODES);
     });
 
+    it('exports UNRESOLVED_COLOR from every entry', async () => {
+        const { UNRESOLVED_COLOR } = await import('../src/preview.js');
+        const main = await import('../src/browser.js');
+        const node = await import('../src/index.js');
+        expect(UNRESOLVED_COLOR).toBe('#FF808080');
+        for (const entry of [lite, main, node]) expect(entry.UNRESOLVED_COLOR).toBe(UNRESOLVED_COLOR);
+    });
+
     it('fails loud on malformed XML', () => {
         for (const svg of [
             '<svg><g></svg>',
@@ -89,6 +97,15 @@ describe('browser-lite entry', () => {
             '<svg>&nbsp;</svg>',
         ])
             expect(() => lite.convert(svg), svg).toThrow(/Invalid SVG/);
+    });
+
+    it('refuses an entity expansion bomb, like svgo', () => {
+        const doctype =
+            `<!DOCTYPE svg [<!ENTITY d "xxxxxxxxxx"><!ENTITY c "${'&d;'.repeat(100)}">` +
+            `<!ENTITY b "${'&c;'.repeat(100)}"><!ENTITY a "${'&b;'.repeat(100)}">]>`;
+        const svg = `${doctype}<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><title>&a;</title><path d="M2 2h20v20H2z"/></svg>`;
+        expect(() => lite.convert(svg)).toThrow(/entity count exceeds max entity count/);
+        expect(() => convertMain(svg)).toThrow(/entity count exceeds max entity count/);
     });
 });
 

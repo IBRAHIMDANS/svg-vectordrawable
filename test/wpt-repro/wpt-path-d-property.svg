@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100">
+  <!-- Reduced from web-platform-tests/wpt svg/path/property/priority.svg at commit 76f5455a0a266f098dd8bd888a8a84b0cad0350d.
+       Copyright (c) web-platform-tests contributors. 3-Clause BSD License:
+       https://github.com/web-platform-tests/wpt/blob/master/LICENSE.md
+       Defect: the CSS `d` property (a `<style>` rule or the `style` attribute) overrides the `d`
+       attribute (SVG 2 §9.3.1, Chrome, Firefox), but the converter drew the attribute without any
+       warning. resvg ignores `d` in CSS too, so the visual harness cannot see it: compare with the
+       expected rendering written by hand (both paths moved to x = 20, y = 10 / 80). -->
+  <style>
+    path { stroke-width: 3; stroke: blue; }
+    #top { d: path('M 20 10 h 70'); }
+  </style>
+  <path id="top" d="M 10 20 h 70"/>
+  <path d="M 10 90 h 70" style="d: path('M 20 80 h 70')"/>
+</svg>

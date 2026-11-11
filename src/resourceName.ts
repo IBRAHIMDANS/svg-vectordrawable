@@ -89,17 +89,22 @@ export interface NameCollision {
     inputs: string[];
 }
 
-/** Groups the inputs that map to the same name, in input order; empty when all names are distinct. */
+/**
+ * Groups the inputs that map to the same name, in input order; empty when all names are distinct.
+ * Names are compared case-insensitively, since `A.xml` and `a.xml` are one file on a case-insensitive
+ * file system (macOS, Windows): a group whose names differ only by case is named after each of them,
+ * as written (`A.xml, a.xml`).
+ */
 export function findNameCollisions(entries: readonly { input: string; name: string }[]): NameCollision[] {
-    const byName = new Map<string, string[]>();
-    for (const { input, name } of entries) byName.set(name, [...(byName.get(name) ?? []), input]);
-    return [...byName].filter(([, inputs]) => inputs.length > 1).map(([name, inputs]) => ({ name, inputs }));
-}
-
-/** Throws a single error listing every collision, if any. */
-export function assertNoNameCollisions(entries: readonly { input: string; name: string }[]): void {
-    const collisions = findNameCollisions(entries);
-    if (collisions.length === 0) return;
-    const lines = collisions.map((c) => `  ${c.name}: ${c.inputs.join(', ')}`);
-    throw new Error(`Android resource name collision (nothing written):\n${lines.join('\n')}`);
+    const byKey = new Map<string, { names: string[]; inputs: string[] }>();
+    for (const { input, name } of entries) {
+        const key = name.toLowerCase();
+        const group = byKey.get(key) ?? { names: [], inputs: [] };
+        if (!group.names.includes(name)) group.names.push(name);
+        group.inputs.push(input);
+        byKey.set(key, group);
+    }
+    return [...byKey.values()]
+        .filter(({ inputs }) => inputs.length > 1)
+        .map(({ names, inputs }) => ({ name: names.join(', '), inputs }));
 }

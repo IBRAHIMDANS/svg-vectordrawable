@@ -1,0 +1,5 @@
+# Makes this folder its own workspace root (own lockfile, independent of the repository root):
+# run a plain `pnpm install` here. `--ignore-workspace` would also skip the settings below.
+# The library is ours: its fresh releases may skip pnpm's minimum release age.
+minimumReleaseAgeExclude:
+  - svg-vectordrawable@0.4.0

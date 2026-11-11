@@ -1,0 +1,52 @@
+{
+    "name": "svg-vectordrawable-mcp",
+    "version": "0.1.0",
+    "description": "MCP server (stdio) that converts SVG to Android VectorDrawable XML and previews VectorDrawable as SVG, powered by svg-vectordrawable.",
+    "type": "module",
+    "bin": {
+        "svg-vectordrawable-mcp": "dist/index.js"
+    },
+    "files": [
+        "dist"
+    ],
+    "scripts": {
+        "build": "tsc -p tsconfig.json",
+        "typecheck": "tsc -p tsconfig.json --noEmit",
+        "test": "pnpm run build && node --test test/server.e2e.mjs",
+        "prepublishOnly": "pnpm run build"
+    },
+    "keywords": [
+        "mcp",
+        "model-context-protocol",
+        "mcp-server",
+        "svg",
+        "android",
+        "vectordrawable",
+        "vector-drawable",
+        "svg2vector",
+        "converter"
+    ],
+    "license": "MIT",
+    "author": "Ibrahima Dansoko <ibrahimdansoko@gmail.com>",
+    "repository": {
+        "type": "git",
+        "url": "git+https://github.com/IBRAHIMDANS/svg-vectordrawable.git",
+        "directory": "integrations/mcp-server"
+    },
+    "homepage": "https://github.com/IBRAHIMDANS/svg-vectordrawable/tree/main/integrations/mcp-server#readme",
+    "bugs": {
+        "url": "https://github.com/IBRAHIMDANS/svg-vectordrawable/issues"
+    },
+    "engines": {
+        "node": ">=18"
+    },
+    "dependencies": {
+        "@modelcontextprotocol/sdk": "^1.32.2",
+        "svg-vectordrawable": "^0.4.0",
+        "zod": "^4.6.7"
+    },
+    "devDependencies": {
+        "@types/node": "^22.0.0",
+        "typescript": "~5.9.3"
+    }
+}

@@ -1,0 +1,5 @@
+blank_issues_enabled: true
+contact_links:
+    - name: Question or idea
+      url: https://github.com/IBRAHIMDANS/svg-vectordrawable/discussions
+      about: Ask how to convert a file, share an idea or a result in GitHub Discussions.

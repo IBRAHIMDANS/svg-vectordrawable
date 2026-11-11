@@ -1,5 +1,5 @@
-import { describe, expect, it, vi } from 'vitest';
-import { convert, ConversionError } from '../src/index.js';
+import { beforeAll, describe, expect, it, vi } from 'vitest';
+import { convert, ConversionError, vectorDrawableToSvg } from '../src/index.js';
 import { compareSvgs, DEFAULT_MAX_MISMATCH } from './visual/compare.js';
 import { vdToSvg } from './visual/vdToSvg.js';
 
@@ -109,10 +109,10 @@ describe('gradients', () => {
         expect(xml).toContain('android:endX="10"');
     });
 
-    it('warns and falls back to black on a missing gradient', () => {
+    it('warns and paints nothing on a missing gradient', () => {
         const onWarn = vi.fn();
         const { xml } = convert(svg('<path d="M0 0z" fill="url(#nope)"/>'), { optimize: false, onWarn });
-        expect(xml).toContain('android:fillColor="#FF000000"');
+        expect(xml).not.toContain('fillColor');
         expect(onWarn).toHaveBeenCalledWith(expect.objectContaining({ code: 'missing-gradient' }));
     });
 });
@@ -204,7 +204,7 @@ describe('gradient strokes', () => {
     });
 
     it('warns on dash arrays and opacity on fill+stroke exactly as for a color stroke', () => {
-        const dashed = `<defs>${linearDef}</defs><path d="M2 12h20" fill="none" stroke="url(#g)" stroke-dasharray="1em"/>`;
+        const dashed = `<defs>${linearDef}</defs><path d="M2 12h20" fill="none" stroke="url(#g)" stroke-dasharray="1ex"/>`;
         expect(codes(svg(dashed))).toEqual(['unsupported-stroke-dasharray']);
         const both = `<defs>${linearDef}</defs><path d="M2 2h20v20H2z" fill="#0f0" stroke="url(#g)" opacity="0.5"/>`;
         expect(codes(svg(both))).toEqual(['opacity-approximated']);
@@ -299,7 +299,8 @@ describe('inheritance & groups', () => {
             optimize: false,
             onWarn,
         });
-        expect(onWarn).toHaveBeenCalledWith(expect.objectContaining({ code: 'group-skew' }));
+        // Baking a fill is exact: no group-skew (only a stroke is approximated).
+        expect(onWarn).not.toHaveBeenCalledWith(expect.objectContaining({ code: 'group-skew' }));
         expect(xml).not.toContain('<group');
         expect(xml).toMatch(/5[ ,]10/); // skewed endpoint baked into the path
     });
@@ -319,7 +320,7 @@ describe('fail-loud on unsupported', () => {
 
     it('warns on a dash pattern it cannot resolve (font-relative units) and draws the stroke solid', () => {
         const onWarn = vi.fn();
-        const { xml } = convert(svg('<path d="M0 0h10" stroke="#000" stroke-dasharray="1em"/>'), {
+        const { xml } = convert(svg('<path d="M0 0h10" stroke="#000" stroke-dasharray="1ex"/>'), {
             optimize: false,
             onWarn,
         });
@@ -344,6 +345,17 @@ describe('fail-loud on unsupported', () => {
             raw,
         );
         expect(warnings).toEqual([]);
+    });
+
+    it.each([false, true])('silently ignores <script> (optimize: %s), also inside a group', (optimize) => {
+        const doc = svg(
+            '<script>alert(1)</script><script href="x.js"/>' +
+                '<g opacity="0.5"><script>x</script><path d="M0 0h4v4z"/></g><path d="M5 5h4v4z"/>',
+        );
+        const { xml, warnings } = convert(doc, { optimize, strict: true });
+        expect(warnings).toEqual([]);
+        expect(xml).not.toContain('script');
+        expect(xml.match(/<path\b/g)).toHaveLength(2);
     });
 
     it('throws in strict mode', () => {
@@ -721,7 +733,7 @@ describe('inherit, <a>, nested <svg>, baked stroke, tint escaping', () => {
 
 describe('severity rules', () => {
     // A dash pattern in font-relative units cannot be resolved, so it still warns.
-    const dashed = svg('<path d="M0 0h10" stroke="#000" stroke-dasharray="1em"/>');
+    const dashed = svg('<path d="M0 0h10" stroke="#000" stroke-dasharray="1ex"/>');
 
     it('throws a ConversionError carrying the warning when a rule is "error"', () => {
         try {
@@ -787,10 +799,16 @@ describe('units & percentages', () => {
         expect(xml).toContain('android:height="96dp"');
     });
 
-    it('falls back to the viewBox size for font-relative root width/height', () => {
-        const { xml } = convert(svg('<path d="M0 0h1v1z"/>', 'viewBox="0 0 24 24" width="2em" height="3ex"'), raw);
+    it('falls back to the viewBox size for font-dependent root width/height (ex, ch)', () => {
+        const { xml } = convert(svg('<path d="M0 0h1v1z"/>', 'viewBox="0 0 24 24" width="2ch" height="3ex"'), raw);
         expect(xml).toContain('android:width="24dp"');
         expect(xml).toContain('android:height="24dp"');
+    });
+
+    it('resolves em on the root at 16px and derives the other side from the viewBox ratio', () => {
+        const { xml } = convert(svg('<path d="M0 0h1v1z"/>', 'viewBox="0 0 24 24" width="2em" height="3ex"'), raw);
+        expect(xml).toContain('android:width="32dp"');
+        expect(xml).toContain('android:height="32dp"');
     });
 
     it('resolves a percentage stroke-width against the normalized viewport diagonal', () => {
@@ -988,7 +1006,6 @@ describe('elliptical radial fill rendered exactly in a transformed group', () =>
             svg(
                 `<defs>${figma('translate(12 12) scale(10 4)')}</defs><g transform="skewX(20)"><path d="M-4 0h24v24H-4z" fill="url(#r)"/></g>`,
             ),
-            ['group-skew'],
         );
     });
 
@@ -998,7 +1015,6 @@ describe('elliptical radial fill rendered exactly in a transformed group', () =>
                 `<defs><radialGradient id="r" cx="12" cy="12" r="9" gradientUnits="userSpaceOnUse">${stops}</radialGradient></defs>` +
                     `<g transform="skewX(25)"><path d="M-6 0h24v24H-6z" fill="url(#r)"/></g>`,
             ),
-            ['group-skew'],
         );
     });
 
@@ -1064,11 +1080,14 @@ describe('elliptical radial fill rendered exactly in a transformed group', () =>
         expect(xml).toContain('android:scaleY="0.4"');
     });
 
-    it('keeps the fallback for a singular gradientTransform', () => {
+    it('drops a gradient whose gradientTransform is singular (no fallback color: missing-gradient)', () => {
+        // CSS Transforms 1 §8: a non-invertible transform displays nothing; the old output was a
+        // radial of radius 0, which Android rejects.
         const doc = svg(`<defs>${figma('translate(12 12) scale(10 0)')}</defs><path d="${full}" fill="url(#r)"/>`);
         const { xml, warnings } = convert(doc, raw);
-        expect(warnings.map((w) => w.code)).toEqual(['gradient-approximated']);
+        expect(warnings.map((w) => w.code)).toEqual(['missing-gradient']);
         expect(xml).not.toContain('<group');
+        expect(xml).not.toContain('<gradient');
     });
 
     it('leaves a uniform radial unchanged (no group)', () => {
@@ -1175,7 +1194,6 @@ describe('clip-equivalent masks', () => {
                     '<g transform="skewX(15)" mask="url(#m)"><path d="M0 0h20v20H0z" fill="#f0f"/></g>',
             ),
             1,
-            ['group-skew'],
         );
     });
 
@@ -1239,18 +1257,22 @@ describe('clip-equivalent masks', () => {
     });
 
     it.each([
-        ['a gray fill', '<rect width="10" height="10" fill="#808080"/>', /not white/],
-        ['the default black fill', '<rect width="10" height="10"/>', /not white/],
-        ['a semi-transparent white', '<rect width="10" height="10" fill="#fff" fill-opacity="0.5"/>', /translucent/],
-        ['an rgba white', '<rect width="10" height="10" fill="rgba(255,255,255,0.5)"/>', /translucent/],
-        ['a group opacity', '<g opacity="0.5"><rect width="10" height="10" fill="#fff"/></g>', /translucent/],
-        ['a stroke', '<rect width="10" height="10" fill="#fff" stroke="#fff"/>', /stroke/],
+        [
+            'non-uniform values',
+            '<rect width="5" height="10" fill="#fff"/><rect x="5" width="5" height="10" fill="#808080"/>',
+            /not uniform/,
+        ],
+        [
+            'overlapping translucent shapes',
+            '<rect width="8" height="8" fill="#fff" fill-opacity="0.5"/><rect x="4" y="4" width="8" height="8" fill="#fff" fill-opacity="0.5"/>',
+            /translucent content with overlapping shapes/,
+        ],
+        ['only a stroke', '<rect width="10" height="10" fill="none" stroke="#fff"/>', /only paints strokes/],
         [
             'a gradient fill',
             '<linearGradient id="g"><stop stop-color="#fff"/><stop offset="1" stop-color="#000"/></linearGradient><rect width="10" height="10" fill="url(#g)"/>',
             /gradient|pattern/,
         ],
-        ['an evenodd fill rule', '<path d="M0 0h10v10H0zM2 2h6v6H2z" fill="#fff" fill-rule="evenodd"/>', /evenodd/],
         ['a filter inside', '<rect width="10" height="10" fill="#fff" filter="url(#f)"/>', /filter/],
         ['text inside', '<rect width="10" height="10" fill="#fff"/><text>x</text>', /<text>/],
         ['currentColor (unknown root color)', '<rect width="10" height="10" fill="currentColor"/>', /solid color/],
@@ -1258,22 +1280,57 @@ describe('clip-equivalent masks', () => {
         expectRejected(svg(`<mask id="m">${content}</mask>${square}`), reason);
     });
 
-    it('keeps the warning for an alpha mask with translucent content', () => {
-        expectRejected(
-            svg(
-                `<mask id="m" mask-type="alpha"><rect width="10" height="10" fill="#000" opacity="0.4"/></mask>${square}`,
-            ),
-            /translucent/,
-        );
+    it("rejects mask-approximated under strict: true, accepts it under strict: 'lossy'", () => {
+        const doc = svg(`<mask id="m"><rect width="10" height="10" fill="#fff" stroke="#fff"/></mask>${square}`);
+        for (const optimize of [false, true]) {
+            const lossy = convert(doc, { optimize, strict: 'lossy' });
+            expect(lossy.warnings.map((w) => w.code)).toEqual(['mask-approximated']);
+            expect(clipCount(lossy.xml)).toBe(1);
+            let error: unknown;
+            try {
+                convert(doc, { optimize, strict: true });
+            } catch (err) {
+                error = err;
+            }
+            expect(error).toBeInstanceOf(ConversionError);
+            expect((error as ConversionError).warning.code).toBe('mask-approximated');
+        }
     });
 
-    it('keeps the warning for an unknown mask and an empty mask', () => {
+    // A uniform mask value (luminance × alpha, or alpha alone in mask-type: alpha) is a clip plus an
+    // opacity (TASK-092): converted without warning, the value carried by the leaves' alpha.
+    it.each([
+        ['a gray fill', '<rect width="10" height="10" fill="#808080"/>', 0.502],
+        ['a semi-transparent white', '<rect width="10" height="10" fill="#fff" fill-opacity="0.5"/>', 0.5],
+        ['an rgba white', '<rect width="10" height="10" fill="rgba(255,255,255,0.5)"/>', 0.5],
+        ['a group opacity', '<g opacity="0.5"><rect width="10" height="10" fill="#fff"/></g>', 0.5],
+        ['an alpha mask with translucent content', '<rect width="10" height="10" fill="#000" opacity="0.4"/>', 0.4],
+    ])('converts a mask with %s as a clip and an opacity', (name, content, alpha) => {
+        const type = name.startsWith('an alpha mask') ? ' mask-type="alpha"' : '';
+        const doc = svg(`<mask id="m"${type}>${content}</mask>${square}`);
+        for (const optimize of [false, true]) {
+            const { xml, warnings } = convert(doc, { optimize, strict: true });
+            expect(warnings).toEqual([]);
+            expect(clipCount(xml)).toBe(1);
+            expect(Number(/android:fillAlpha="([\d.]+)"/.exec(xml)?.[1])).toBeCloseTo(alpha, 2);
+        }
+    });
+
+    it('converts a mask with the default black fill: the masked element is hidden', () => {
+        const doc = svg(`<mask id="m"><rect width="10" height="10"/></mask>${square}`);
+        for (const optimize of [false, true]) {
+            const { warnings } = convert(doc, { optimize, strict: true });
+            expect(warnings).toEqual([]);
+        }
+    });
+
+    it('keeps the warning for an unknown mask', () => {
         expectRejected(svg(`<path d="M0 0h24v24H0z" fill="#f00" mask="url(#nope)"/>`), /unknown mask/);
-        expectRejected(svg(`<mask id="m"><rect width="0" height="5" fill="#fff"/></mask>${square}`), /empty/);
     });
 
     it('still throws in strict mode for a mask that is not clip-equivalent', () => {
-        const doc = svg(`<mask id="m"><rect width="10" height="10" fill="#808080"/></mask>${square}`);
+        const twoValues = '<rect width="5" height="10" fill="#fff"/><rect x="5" width="5" height="10" fill="#808080"/>';
+        const doc = svg(`<mask id="m">${twoValues}</mask>${square}`);
         expect(() => convert(doc, { optimize: false, strict: true })).toThrow(ConversionError);
     });
 });
@@ -1307,5 +1364,432 @@ describe('evenodd clip paths (rewritten to an equivalent nonzero geometry)', () 
         const crossing = `<clipPath id="c"><path d="M2 2h12v12H2zM8 8h12v12H8z" clip-rule="evenodd"/></clipPath>${fill} clip-path="url(#c)"/>`;
         const { warnings } = convert(doc(crossing), raw);
         expect(warnings).toContainEqual(expect.objectContaining({ code: 'unsupported-clip-path' }));
+    });
+});
+
+describe('invalid options and sizes are rejected instead of producing broken XML', () => {
+    const plain = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M2.123456 2h20v20H2z"/></svg>';
+
+    it.each([Number.NaN, -1, 1.5, 21, Number.POSITIVE_INFINITY])('rejects floatPrecision %s', (floatPrecision) => {
+        expect(() => convert(plain, { floatPrecision })).toThrow(TypeError);
+    });
+
+    it('accepts floatPrecision 0 and 20', () => {
+        expect(convert(plain, { floatPrecision: 0 }).xml).toContain('android:pathData="M2 2h20v20H2z"');
+        expect(convert(plain, { floatPrecision: 20, optimize: false }).xml).toContain('M2.123456 2');
+    });
+
+    it.each([-1, 1.5, Number.NaN])('rejects indent %s', (indent) => {
+        expect(() => convert(plain, { indent })).toThrow(TypeError);
+    });
+
+    it.each(['wat', 'none', 'currentColor', ''])('rejects currentColor %j', (currentColor) => {
+        expect(() => convert(plain, { currentColor })).toThrow(TypeError);
+    });
+
+    it.each(['-5', '0'])('ignores width="%s" (falls back to the viewBox)', (width) => {
+        const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="10" viewBox="0 0 20 10"><path d="M0 0h9v9z"/></svg>`;
+        const { xml } = convert(svg);
+        expect(xml).toContain('android:width="20dp"');
+        expect(xml).toContain('android:viewportWidth="20"');
+    });
+
+    it('ignores a negative width without a viewBox (falls back to 24)', () => {
+        const { xml } = convert(
+            '<svg xmlns="http://www.w3.org/2000/svg" width="-5" height="10"><path d="M0 0h9v9z"/></svg>',
+        );
+        expect(xml).toContain('android:width="24dp"');
+        expect(xml).not.toContain('-5');
+    });
+});
+
+describe('autoMirrored and size override (width / height in dp)', () => {
+    const icon = svg('<path d="M2 2h20v20H2z"/>');
+    const wide = svg('<path d="M0 0h20v10H0z"/>', 'width="40" height="20" viewBox="0 0 20 10"');
+    const attr = (xml: string, name: string): string | undefined =>
+        new RegExp(`android:${name}="([^"]*)"`).exec(xml)?.[1];
+    const codes = (result: { warnings: { code: string }[] }): string[] => result.warnings.map((w) => w.code);
+    const body = (xml: string): string => xml.slice(xml.indexOf('<path'));
+
+    it('adds android:autoMirrored="true" only when enabled', () => {
+        expect(convert(icon, { ...raw, autoMirrored: true }).xml).toContain('android:autoMirrored="true"');
+        expect(convert(icon, raw).xml).not.toContain('autoMirrored');
+        expect(convert(icon, { ...raw, autoMirrored: false }).xml).not.toContain('autoMirrored');
+    });
+
+    it('leaves the default output byte-identical when the options are unset', () => {
+        expect(convert(wide, { ...raw, width: undefined, height: undefined, autoMirrored: false }).xml).toBe(
+            convert(wide, raw).xml,
+        );
+    });
+
+    it('replaces width and height without touching the viewport', () => {
+        const { xml } = convert(icon, { ...raw, width: 48, height: 32 });
+        expect([attr(xml, 'width'), attr(xml, 'height')]).toEqual(['48dp', '32dp']);
+        expect([attr(xml, 'viewportWidth'), attr(xml, 'viewportHeight')]).toEqual(['24', '24']);
+        expect(body(xml)).toBe(body(convert(icon, raw).xml));
+    });
+
+    it('keeps the aspect ratio when only one dimension is given', () => {
+        const byWidth = convert(wide, { ...raw, width: 100 }).xml;
+        expect([attr(byWidth, 'width'), attr(byWidth, 'height')]).toEqual(['100dp', '50dp']);
+        const byHeight = convert(wide, { ...raw, height: 5 }).xml;
+        expect([attr(byHeight, 'width'), attr(byHeight, 'height')]).toEqual(['10dp', '5dp']);
+        expect([attr(byHeight, 'viewportWidth'), attr(byHeight, 'viewportHeight')]).toEqual(['20', '10']);
+    });
+
+    it('follows the rendered size ratio, not the viewport, under preserveAspectRatio="none"', () => {
+        const stretched = svg(
+            '<path d="M0 0h24v12H0z"/>',
+            'width="24" height="24" viewBox="0 0 24 12" preserveAspectRatio="none"',
+        );
+        const { xml } = convert(stretched, { ...raw, width: 48 });
+        expect([attr(xml, 'width'), attr(xml, 'height')]).toEqual(['48dp', '48dp']);
+        expect([attr(xml, 'viewportWidth'), attr(xml, 'viewportHeight')]).toEqual(['24', '12']);
+    });
+
+    it('rounds a derived dimension to floatPrecision', () => {
+        const third = svg('<path d="M0 0h3v1H0z"/>', 'viewBox="0 0 3 1"');
+        expect(attr(convert(third, { ...raw, width: 10 }).xml, 'height')).toBe('3.333dp');
+        expect(attr(convert(third, { ...raw, width: 10, floatPrecision: 1 }).xml, 'height')).toBe('3.3dp');
+    });
+
+    it('evaluates large-vector on the final size', () => {
+        const big = svg('<path d="M0 0h9v9z"/>', 'viewBox="0 0 512 512"');
+        expect(codes(convert(big, raw))).toEqual(['large-vector']);
+        expect(codes(convert(big, { ...raw, width: 24 }))).toEqual([]);
+        const huge = convert(icon, { ...raw, height: 480 });
+        expect(codes(huge)).toEqual(['large-vector']);
+        expect(huge.warnings[0]!.message).toContain('480×480dp');
+    });
+
+    it.each([0, -24, Number.NaN, Number.POSITIVE_INFINITY, '48' as unknown as number])(
+        'rejects width / height %s',
+        (dp) => {
+            expect(() => convert(icon, { width: dp })).toThrow(/Invalid width/);
+            expect(() => convert(icon, { height: dp })).toThrow(TypeError);
+        },
+    );
+});
+
+describe('Android color references (currentColor / colorMap)', () => {
+    const path = (attrs: string): string => svg(`<path d="M0 0h24v24H0z" ${attrs}/>`);
+    const themed = { optimize: false, currentColor: '?attr/colorPrimary' } as const;
+
+    it('emits a currentColor reference as is on fill and stroke', () => {
+        const { xml, warnings } = convert(path('fill="currentColor" stroke="currentColor"'), themed);
+        expect(xml).toContain('android:fillColor="?attr/colorPrimary"');
+        expect(xml).toContain('android:strokeColor="?attr/colorPrimary"');
+        expect(xml).not.toContain('android:fillAlpha');
+        expect(warnings).toEqual([]);
+    });
+
+    it('carries fill-opacity, stroke-opacity and opacity to fillAlpha / strokeAlpha', () => {
+        const { xml } = convert(
+            path('fill="currentColor" fill-opacity="0.5" stroke="currentColor" stroke-opacity="0.25"'),
+            themed,
+        );
+        expect(xml).toContain('android:fillColor="?attr/colorPrimary"');
+        expect(xml).toContain('android:fillAlpha="0.5"');
+        expect(xml).toContain('android:strokeAlpha="0.25"');
+        const group = convert(svg('<g opacity="0.5"><path d="M0 0h9v9z" fill="currentColor"/></g>'), themed).xml;
+        expect(group).toContain('android:fillAlpha="0.5"');
+    });
+
+    it('lets a `color` set in the SVG override the reference', () => {
+        const { xml } = convert(svg('<g color="#f00"><path d="M0 0h9v9z" fill="currentColor"/></g>'), themed);
+        expect(xml).toContain('android:fillColor="#FFFF0000"');
+    });
+
+    it('never emits a reference written in the SVG itself', () => {
+        const { xml } = convert(path('fill="@color/evil"'), themed);
+        expect(xml).not.toContain('@color/evil');
+    });
+
+    it.each(['?android:attr/colorAccent', '@color/icon_tint', '@android:color/white', '@com.example.lib:color/a.b_2'])(
+        'accepts the reference %s',
+        (currentColor) => {
+            const { xml } = convert(path('fill="currentColor"'), { optimize: false, currentColor });
+            expect(xml).toContain(`android:fillColor="${currentColor}"`);
+        },
+    );
+
+    it.each([
+        '?attr/',
+        '?colorPrimary',
+        '?android:colorPrimary',
+        '@color/',
+        '@color/1brand',
+        '@color/brand-dark',
+        '@color/brand x',
+        '@drawable/icon',
+        '@colors/brand',
+        '?attr/color/primary',
+        '@:color/brand',
+        '@@color/brand',
+    ])('rejects the malformed reference %j (TypeError)', (currentColor) => {
+        expect(() => convert(path('fill="currentColor"'), { currentColor })).toThrow(/malformed reference/);
+        expect(() => convert(path('fill="#f00"'), { colorMap: { '#f00': currentColor } })).toThrow(TypeError);
+    });
+
+    it('maps literal colors whatever their notation (#f00, red, rgb(255,0,0))', () => {
+        const input = svg(
+            '<path d="M0 0h1v1z" fill="#f00"/><path d="M1 0h1v1z" fill="red"/>' +
+                '<path d="M2 0h1v1z" fill="rgb(255,0,0)"/><path d="M3 0h1v1z" fill="none" stroke="#FF0000"/>' +
+                '<path d="M4 0h1v1z" fill="#00f"/>',
+        );
+        for (const key of ['#f00', 'red', 'rgb(255, 0, 0)', '#FF0000', 'hsl(0, 100%, 50%)']) {
+            const { xml } = convert(input, { optimize: false, colorMap: { [key]: '@color/brand' } });
+            expect(xml.match(/android:fillColor="@color\/brand"/g)).toHaveLength(3);
+            expect(xml).toContain('android:strokeColor="@color/brand"');
+            expect(xml).toContain('android:fillColor="#FF0000FF"');
+        }
+    });
+
+    it('maps through svgo normalization and the currentColor literal', () => {
+        const input = path('fill="#1A73E8" stroke="currentColor"');
+        const { xml } = convert(input, {
+            currentColor: '#000',
+            colorMap: { '#1a73e8': '@color/brand', black: '?attr/ink' },
+        });
+        expect(xml).toContain('android:fillColor="@color/brand"');
+        expect(xml).toContain('android:strokeColor="?attr/ink"');
+    });
+
+    it("moves a mapped color's own alpha to fillAlpha / strokeAlpha (an opaque key matches any alpha)", () => {
+        const input = path('fill="rgba(255,0,0,0.5)" fill-opacity="0.5" stroke="#f008"');
+        const { xml } = convert(input, { optimize: false, colorMap: { red: '@color/brand' } });
+        expect(xml).toContain('android:fillColor="@color/brand"');
+        expect(xml).toContain('android:fillAlpha="0.251"'); // 0.5 × 128/255
+        expect(xml).toContain('android:strokeColor="@color/brand"');
+        expect(xml).toContain('android:strokeAlpha="0.533"'); // 0x88 / 255
+    });
+
+    it('prefers an exact #AARRGGBB key over the opaque one', () => {
+        const input = svg('<path d="M0 0h1v1z" fill="#f008"/><path d="M1 0h1v1z" fill="#f00"/>');
+        const { xml } = convert(input, {
+            optimize: false,
+            colorMap: { '#f00': '@color/brand', '#ff000088': '@color/brand_translucent' },
+        });
+        expect(xml).toContain('android:fillColor="@color/brand_translucent"');
+        expect(xml).toContain('android:fillAlpha="0.533"');
+        expect(xml).toContain('android:fillColor="@color/brand"');
+    });
+
+    it('does not match an opaque color with a translucent key', () => {
+        const { xml } = convert(path('fill="#f00"'), { optimize: false, colorMap: { '#f008': '@color/brand' } });
+        expect(xml).toContain('android:fillColor="#FFFF0000"');
+    });
+
+    it('drops a path whose mapped color is fully transparent', () => {
+        const { xml } = convert(path('fill="transparent"'), { optimize: false, colorMap: { '#000': '@color/ink' } });
+        expect(xml).not.toContain('<path');
+    });
+
+    it('rejects invalid colorMap keys, values and conflicts (TypeError)', () => {
+        const input = path('fill="#f00"');
+        const map =
+            (colorMap: unknown): (() => unknown) =>
+            () =>
+                convert(input, { colorMap: colorMap as Record<string, string> });
+        expect(map({ wat: '@color/brand' })).toThrow(/Invalid colorMap key/);
+        expect(map({ currentColor: '@color/brand' })).toThrow(/Invalid colorMap key/);
+        expect(map({ '#f00': '#00f' })).toThrow(/Invalid colorMap value/);
+        expect(map({ '#f00': 3 })).toThrow(/Invalid colorMap value/);
+        expect(map({ '#f00': '@color/a', red: '@color/b' })).toThrow(/twice/);
+        expect(map([])).toThrow(/Invalid colorMap/);
+        expect(map(null)).toThrow(/Invalid colorMap/);
+        expect((map({ '#f00': '@color/a', red: ' @color/a ' })() as { xml: string }).xml).toContain('"@color/a"');
+        expect(() => convert(input, { currentColor: 42 as unknown as string })).toThrow(TypeError);
+    });
+
+    it('keeps the default output byte-identical with an empty colorMap', () => {
+        const input = svg('<path d="M0 0h9v9z" fill="#f008" stroke="currentColor" opacity="0.3"/>');
+        expect(convert(input, { colorMap: {} }).xml).toBe(convert(input).xml);
+    });
+
+    describe('gradient stops', () => {
+        const gradient = (stops: string): string =>
+            svg(
+                `<defs><linearGradient id="g" gradientUnits="userSpaceOnUse" x2="24">${stops}</linearGradient></defs>` +
+                    '<path d="M0 0h24v24H0z" fill="url(#g)"/>',
+            );
+
+        it('emits opaque stops as references (aapt2 accepts them in <item android:color>)', () => {
+            const input = gradient('<stop offset="0" stop-color="#f00"/><stop offset="1" stop-color="currentColor"/>');
+            const { xml, warnings } = convert(input, { ...themed, colorMap: { red: '@color/brand' } });
+            expect(xml).toContain('<item android:offset="0" android:color="@color/brand" />');
+            expect(xml).toContain('<item android:offset="1" android:color="?attr/colorPrimary" />');
+            expect(warnings).toEqual([]);
+        });
+
+        it('keeps the literal of translucent stops, warning once per gradient', () => {
+            const input = gradient(
+                '<stop offset="0" stop-color="#f00" stop-opacity="0.5"/>' +
+                    '<stop offset="0.5" stop-color="currentColor" stop-opacity="0"/>' +
+                    '<stop offset="1" stop-color="#f00"/>',
+            );
+            const options = { ...themed, colorMap: { red: '@color/brand' } };
+            const { xml, warnings } = convert(input, options);
+            expect(xml).toContain('<item android:offset="0" android:color="#80FF0000" />');
+            expect(xml).toContain('<item android:offset="0.5" android:color="#00000000" />'); // black stands in
+            expect(xml).toContain('<item android:offset="1" android:color="@color/brand" />');
+            expect(warnings.map((w) => w.code)).toEqual(['unsupported-color-reference']);
+            expect(warnings[0]!.message).toContain('"g"');
+            expect(() => convert(input, { ...options, strict: 'lossy' })).toThrow(ConversionError);
+            expect(() => convert(input, { ...options, strict: 'lossy' })).toThrow(/^\[unsupported-color-reference\]/);
+        });
+
+        it('silences unsupported-color-reference with rules, leaving unsupported-paint alone', () => {
+            const input = gradient(
+                '<stop offset="0" stop-color="#f00" stop-opacity="0.5"/><stop offset="1" stop-color="env(--x)"/>',
+            );
+            const options = { ...themed, colorMap: { red: '@color/brand' } };
+            expect(convert(input, options).warnings.map((w) => w.code)).toEqual([
+                'unsupported-color-reference',
+                'unsupported-paint',
+            ]);
+            const quiet = convert(input, { ...options, rules: { 'unsupported-color-reference': 'off' } });
+            expect(quiet.warnings.map((w) => w.code)).toEqual(['unsupported-paint']);
+            expect(() =>
+                convert(input, { ...options, strict: 'lossy', rules: { 'unsupported-paint': 'off' } }),
+            ).toThrow(/^\[unsupported-color-reference\]/);
+        });
+    });
+
+    it('vectorDrawableToSvg previews a reference in gray unless options.colors maps it', () => {
+        const { xml } = convert(path('fill="currentColor"'), themed);
+        const unresolved: string[] = [];
+        expect(vectorDrawableToSvg(xml, { onUnresolvedColor: (r) => unresolved.push(r) })).toContain('fill="#808080"');
+        expect(unresolved).toEqual(['?attr/colorPrimary']);
+        expect(vectorDrawableToSvg(xml, { colors: { '?attr/colorPrimary': '#f00' } })).toContain('fill="#ff0000"');
+    });
+});
+
+describe('custom svgoConfig with a CSS transform', () => {
+    // svgo's raw preset moves the group translation under the rect, where the CSS scale (folded in
+    // after svgo) applies to it too: the output is misplaced (wpt styling/render/transform-origin.svg).
+    const svg =
+        '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 150 100">' +
+        '<g transform="translate(70, 65)"><rect width="20" height="5" fill="cyan" style="transform: scale(2, 3)"/></g></svg>';
+    const reference = svg.replace('style="transform: scale(2, 3)"', 'transform="scale(2 3)"');
+    const asStyleRule = svg
+        .replace('style="transform: scale(2, 3)"', 'class="k"')
+        .replace('</svg>', '<style>.k { transform: scale(2, 3) }</style></svg>');
+    const preset = { plugins: ['preset-default' as const] };
+    const safe = {
+        plugins: [
+            {
+                name: 'preset-default' as const,
+                params: {
+                    overrides: {
+                        moveElemsAttrsToGroup: false as const,
+                        moveGroupAttrsToElems: false as const,
+                        collapseGroups: false as const,
+                        removeNonInheritableGroupAttrs: false as const,
+                        convertPathData: { applyTransforms: false },
+                    },
+                },
+            },
+        ],
+    };
+    const codes = (svgoConfig: object, source = svg, optimize = true): string[] =>
+        convert(source, { svgoConfig, optimize }).warnings.map((w) => w.code);
+
+    for (const [label, source] of [
+        ['style attribute', svg],
+        ['<style> rule', asStyleRule],
+    ] as const)
+        it(`warns (unsupported-style) when the raw preset-default runs on a CSS transform (${label})`, () => {
+            const { xml, warnings } = convert(source, { svgoConfig: preset });
+            expect(warnings.map((w) => w.code)).toEqual(['unsupported-style']);
+            expect(warnings[0]?.message).toContain("preset-default's");
+            expect(warnings[0]?.message).toContain('collapseGroups');
+            // The warning is warranted: the output is wrong.
+            expect(compareSvgs(reference, vdToSvg(xml)).mismatch).toBeGreaterThan(0.5);
+            expect(() => convert(source, { svgoConfig: preset, strict: true })).toThrow(ConversionError);
+        });
+
+    it('names a transform-moving plugin listed on its own', () => {
+        const { warnings } = convert(svg, { svgoConfig: { plugins: ['collapseGroups'] } });
+        expect(warnings.map((w) => w.message)).toEqual([expect.stringContaining('runs collapseGroups,')]);
+    });
+
+    it('warns for a config without plugins, which svgo runs with preset-default', () => {
+        expect(codes({})).toEqual(['unsupported-style']);
+        expect(codes({ plugins: [] })).toEqual([]);
+    });
+
+    it('does not warn once the advised plugins are disabled, and renders like the source', () => {
+        for (const source of [svg, asStyleRule]) {
+            const { xml, warnings } = convert(source, { svgoConfig: safe });
+            expect(warnings).toEqual([]);
+            expect(compareSvgs(reference, vdToSvg(xml)).mismatch).toBeLessThan(DEFAULT_MAX_MISMATCH);
+        }
+    });
+
+    it('does not warn without a CSS transform, with optimize: false, or with plugins that move nothing', () => {
+        expect(codes(preset, reference)).toEqual([]);
+        expect(codes(preset, svg, false)).toEqual([]);
+        const harmless = {
+            plugins: ['convertColors', { name: 'convertPathData', params: { applyTransforms: false } }],
+        };
+        expect(codes(harmless)).toEqual([]);
+    });
+});
+
+describe('root and elements with a prefix bound to the SVG namespace (T-164)', () => {
+    /** The browser-lite entry as its bundle sees it: `svgo` replaced by svgo-lite (see browser-lite.test.ts). */
+    let lite: typeof import('../src/browser-lite.js');
+    beforeAll(async () => {
+        vi.resetModules();
+        vi.doMock('svgo', () => import('../src/svgo-lite.js'));
+        lite = await import('../src/browser-lite.js');
+        vi.doUnmock('svgo');
+    });
+
+    const SVG_NS = 'http://www.w3.org/2000/svg';
+    const reference = svg('<path d="M2 2h20v20H2z" fill="red"/>');
+    const expectLikeReference = (doc: string): void => {
+        for (const optimize of [true, false]) {
+            const { xml, warnings } = convert(doc, { optimize, strict: true });
+            expect(warnings).toEqual([]);
+            expect(xml).toBe(convert(reference, { optimize }).xml);
+            expect(compareSvgs(reference, vdToSvg(xml)).mismatch).toBeLessThan(DEFAULT_MAX_MISMATCH);
+        }
+        expect(lite.convert(doc, { strict: true }).xml).toBe(lite.convert(reference).xml);
+    };
+
+    it('converts the ElementTree root <ns0:svg> like the unprefixed source, both modes and browser-lite', () => {
+        expectLikeReference(
+            `<ns0:svg xmlns:ns0="${SVG_NS}" viewBox="0 0 24 24"><ns0:path d="M2 2h20v20H2z" fill="red"/></ns0:svg>`,
+        );
+    });
+
+    it('converts a prefixed child of an unprefixed root, nested groups and an XLink prefix renamed', () => {
+        expectLikeReference(
+            svg('<s:g><s:path d="M2 2h20v20H2z" fill="red"/></s:g>', `xmlns:s="${SVG_NS}" viewBox="0 0 24 24"`),
+        );
+        expectLikeReference(
+            `<svg:svg xmlns:svg="${SVG_NS}" xmlns:xl="http://www.w3.org/1999/xlink" viewBox="0 0 24 24">` +
+                '<svg:defs><svg:path id="p" d="M2 2h20v20H2z" fill="red"/></svg:defs><svg:use xl:href="#p"/></svg:svg>',
+        );
+    });
+
+    it('leaves a prefix bound to another namespace alone: the element stays foreign', () => {
+        const foreign = svg(
+            '<s:path d="M2 2h20v20H2z" fill="red"/>',
+            'xmlns:s="http://example.com/ns" viewBox="0 0 24 24"',
+        );
+        for (const optimize of [true, false])
+            expect(convert(foreign, { optimize, strict: true }).xml).not.toContain('<path');
+        expect(lite.convert(foreign).xml).not.toContain('<path');
+        const foreignRoot = '<ns0:svg xmlns:ns0="http://example.com/ns" viewBox="0 0 24 24"/>';
+        for (const optimize of [true, false]) expect(() => convert(foreignRoot, { optimize })).toThrow(/No <svg> root/);
+        // bound to SVG on one element, to another namespace on another: left alone everywhere
+        const rebound = svg(
+            `<g xmlns:s="${SVG_NS}"><s:path d="M2 2h20v20H2z"/></g><g xmlns:s="http://example.com/ns"><s:path d="M2 2h9v9H2z"/></g>`,
+        );
+        for (const optimize of [true, false]) expect(convert(rebound, { optimize }).xml).not.toContain('<path');
     });
 });

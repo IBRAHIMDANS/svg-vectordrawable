@@ -1,4 +1,10 @@
-/** User units (px) per absolute unit, at the CSS reference of 96 px per inch. */
+/** The initial CSS `font-size` (`medium`), in px: what `em` / `rem` resolve against here. */
+const FONT_SIZE_PX = 16;
+
+/**
+ * User units (px) per unit: absolute units at the CSS reference of 96 px per inch, `em` / `rem` at
+ * `FONT_SIZE_PX`.
+ */
 const UNIT_PX: Record<string, number> = {
     '': 1,
     px: 1,
@@ -7,13 +13,26 @@ const UNIT_PX: Record<string, number> = {
     mm: 96 / 25.4,
     pt: 4 / 3,
     pc: 16,
+    em: FONT_SIZE_PX,
+    rem: FONT_SIZE_PX,
 };
 
 const LENGTH_RE = /^([+-]?(?:\d+\.?\d*|\.\d+)(?:e[+-]?\d+)?)([a-z]*|%)$/i;
 
 /**
+ * A CSS length the converter cannot resolve but a browser can: a unit that depends on fonts, the
+ * viewport or a container, `Q`, a percentage, or a function (`calc()`, `var()`…). Anything else
+ * (`abc`, `10abc`) is not a length at all.
+ */
+export const VALID_UNRESOLVED_LENGTH =
+    /^(?:[+-]?(?:\d+\.?\d*|\.\d+)(?:e[+-]?\d+)?(?:%|r?(?:ex|ch|ic|cap|lh)|[sld]?v(?:w|h|i|b|min|max)|cq(?:w|h|i|b|min|max)|q)|[a-z-]+\(.*\))$/i;
+
+/**
  * Parses an SVG length into user units. `%` resolves against `ref` (NaN when no reference is
- * given). Font-relative units (`em`, `ex`) and anything unparseable yield NaN, so callers fall back.
+ * given). `em` and `rem` count 16 px, the initial font-size a browser uses for an SVG document:
+ * a `font-size` set on the element or an ancestor is not read, so `em` under a changed font-size is
+ * approximate. `ex`, `ch` (they depend on font metrics) and anything unparseable yield NaN, so
+ * callers fall back.
  */
 export function parseLength(v: string | undefined, ref?: number): number {
     const m = v === undefined ? null : LENGTH_RE.exec(v.trim());

@@ -7,12 +7,13 @@ import {
     transformPathData,
     windingSign,
 } from '../src/pathData.js';
+import { closedSubpathCount } from '../src/pathContours.js';
 import { IDENTITY, type Matrix } from '../src/transform.js';
 import { compareSvgs, DEFAULT_MAX_MISMATCH } from './visual/compare.js';
 
 /** Extracts all numbers from a path string, for tolerant coordinate assertions. */
 function nums(d: string): number[] {
-    return (d.match(/-?(?:\d*\.\d+|\d+\.?)(?:[eE][+-]?\d+)?/g) ?? []).map(Number);
+    return (d.match(/[+-]?(?:\d+\.?\d*|\.\d+)(?:[eE][+-]?\d+)?/g) ?? []).map(Number);
 }
 
 /** The (x, y) of the very last coordinate pair in a path string. */
@@ -207,7 +208,9 @@ describe('normalizeArcFlags', () => {
     });
 
     it('leaves the rest of the path untouched', () => {
-        expect(normalizeArcFlags('M0,0L5-5a2 2 0 0110 0c1.5.5 2 2 3 3z')).toBe('M0,0L5-5a2 2 0 0 1 10 0c1.5.5 2 2 3 3z');
+        expect(normalizeArcFlags('M0,0L5-5a2 2 0 0110 0c1.5.5 2 2 3 3z')).toBe(
+            'M0,0L5-5a2 2 0 0 1 10 0c1.5.5 2 2 3 3z',
+        );
     });
 
     it('returns a path without arcs strictly unchanged', () => {
@@ -244,7 +247,7 @@ describe('evenOddToNonZero', () => {
         expectRuleMatters(d);
         const out = expectEquivalent(d);
         expect(out).not.toBe(d);
-        expect(out).toBe('M2 2L22 2L22 22L2 22L2 2ZM7 7L7 17L17 17L17 7L7 7Z');
+        expect(out).toBe('M2 2H22V22H2ZM7 7V17H17V7Z');
         expect(windingSign(out)).toBe(1);
     });
 
@@ -300,14 +303,34 @@ describe('evenOddToNonZero', () => {
 
     it.each([
         ['overlapping squares', 'M2 2h12v12H2zM8 8h12v12H8z'],
-        ['squares sharing an edge', 'M2 2h10v10H2zM12 2h10v10H12z'],
-        ['squares touching at a corner', 'M2 2h10v10H2zM12 12h10v10H12z'],
-        ['a hole touching its outer contour', 'M2 2h20v20H2zM2 7h10v10H2z'],
         ['a self-intersecting figure-eight', 'M2 2L22 22H2L22 2z'],
         ['a contour touching itself', 'M2 2h20v20H12V12H22V22H2z'],
         ['overlapping circles', 'M2 12a6 6 0 1 0 12 0a6 6 0 1 0 -12 0zM10 12a6 6 0 1 0 12 0a6 6 0 1 0 -12 0z'],
     ])('returns null for %s', (_, d) => {
         expect(evenOddToNonZero(d)).toBeNull();
+    });
+
+    it('rounds the rewritten numbers to the given precision (3 decimals by default)', () => {
+        const d = 'M0 0h20.123456v20H0zM5 5h10v10H5z';
+        expect(evenOddToNonZero(d)).toContain('H20.123V');
+        expect(evenOddToNonZero(d, undefined, 5)).toContain('H20.12346V');
+        expect(evenOddToNonZero(d, undefined, 1)).toContain('H20.1V');
+    });
+
+    it('writes compact data (shorter of absolute and relative, H/V, no closing line) at the same points', () => {
+        const d = 'M0.1 0.2h20.3v19.7H0.1zM5.15 5.25h9.9v9.9H5.15z';
+        const out = expectEquivalent(d);
+        expect(out).toBe('M.1.2H20.4V19.9H.1ZM5.15 5.25v9.9h9.9V5.25Z');
+        expect(transformPathData(out, IDENTITY)).toBe(
+            'M0.1 0.2L20.4 0.2L20.4 19.9L0.1 19.9ZM5.15 5.25L5.15 15.15L15.05 15.15L15.05 5.25Z',
+        );
+        // Relative offsets come from the rounded pen: no drift once rounded to 1 decimal.
+        const curved = 'M0.04 0.06h10.04v10.03H0.04zM2.04 2.06c1 0 5 1 5.04 5.03l-5.04 0z';
+        const rounded = evenOddToNonZero(curved, undefined, 1)!;
+        expect(rounded).toBe('M0 .1H10.1v10H0ZM2 2.1v5H7.1C7 3.1 3 2.1 2 2.1Z');
+        expect(transformPathData(rounded, IDENTITY)).toBe(
+            'M0 0.1L10.1 0.1L10.1 10.1L0 10.1ZM2 2.1L2 7.1L7.1 7.1C7 3.1 3 2.1 2 2.1Z',
+        );
     });
 
     it('gives up (null) beyond the segment cap', () => {
@@ -340,8 +363,26 @@ describe('windingSign / reversePathData', () => {
     it('reverses every contour exactly (lines, quadratics, cubics)', () => {
         const d = 'M0 0L10 0Q15 5 10 10C8 12 2 12 0 10z';
         const r = reversePathData(d);
-        expect(r).toBe('M0 0L0 10C2 12 8 12 10 10Q15 5 10 0L0 0Z');
+        expect(r).toBe('M0 0V10c2 2 8 2 10 0q5-5 0-10Z');
         expect(windingSign(r)).toBe(-windingSign(d)!);
-        expect(reversePathData(r)).toBe('M0 0L10 0Q15 5 10 10C8 12 2 12 0 10L0 0Z');
+        expect(reversePathData(r)).toBe('M0 0H10q5 5 0 10c-2 2-8 2-10 0Z');
+        expect(transformPathData(reversePathData(r), IDENTITY)).toBe('M0 0L10 0Q15 5 10 10C8 12 2 12 0 10Z');
+    });
+});
+
+describe('closedSubpathCount', () => {
+    it('counts subpaths that are all closed', () => {
+        expect(closedSubpathCount('M2 2h20v20H2zM7 7h10v10H7z')).toBe(2);
+        expect(closedSubpathCount('M2 2h20v20H2zm5 5h10v10H7z')).toBe(2); // subpath after z without moveto
+        expect(closedSubpathCount('M2 12a10 10 0 1 0 20 0a10 10 0 1 0 -20 0z')).toBe(1);
+        expect(closedSubpathCount('M0 0M2 2h20v20H2z')).toBe(1); // a lone moveto draws nothing
+        expect(closedSubpathCount('')).toBe(0);
+    });
+
+    it('returns null for an open subpath or a closepath closing nothing', () => {
+        expect(closedSubpathCount('M2 2h20v20H2zM7 7h10v10H7')).toBeNull();
+        expect(closedSubpathCount('M2 2h20v20H2M7 7h10v10H7z')).toBeNull();
+        expect(closedSubpathCount('M2 2h20v20H2zz')).toBeNull();
+        expect(closedSubpathCount('M2 2z')).toBeNull();
     });
 });
