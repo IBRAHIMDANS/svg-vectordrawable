@@ -1,3 +1,5 @@
+import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import { convert } from '../src/index.js';
 import {
@@ -10,6 +12,8 @@ import {
 import type { BBox, XastElement } from '../src/ast.js';
 import { applyPoint, IDENTITY, multiply, parseTransform, type Matrix } from '../src/transform.js';
 import type { Warning } from '../src/types.js';
+import { compareSvgs, DEFAULT_MAX_MISMATCH } from './visual/compare.js';
+import { vdToSvg } from './visual/vdToSvg.js';
 
 const noWarn = (_w: Warning): void => {};
 
@@ -372,4 +376,101 @@ describe('resolveEllipticalRadial — exact elliptical radial in a transformed g
         expect(resolveEllipticalRadial(raw('radial', circle, 'scale(10 0)'), null, VIEWPORT, 3)).toBeNull();
         expect(resolveEllipticalRadial(raw('radial', {}, undefined, true), null, VIEWPORT, 3)).toBeNull();
     });
+});
+
+describe('gradient coordinates with absolute units', () => {
+    it('resolves an absolute unit in objectBoundingBox units to user units (1in → 96, not 1)', () => {
+        const bbox = { x: 10, y: 0, width: 2, height: 4 };
+        const { coords } = resolve(raw('linear', { x1: '0', y1: '0', x2: '1in', y2: '0' }, undefined, true), bbox);
+        expect(coords).toEqual({ startX: 10, startY: 0, endX: 10 + 96 * 2, endY: 0 });
+    });
+
+    it('resolves absolute units in userSpaceOnUse and radial coordinates', () => {
+        expect(resolve(raw('linear', { x1: '1pc', y1: '3pt', x2: '25.4mm', y2: '2.54cm' })).coords).toEqual({
+            startX: 16,
+            startY: 4,
+            endX: 96,
+            endY: 96,
+        });
+        expect(resolve(raw('radial', { cx: '6pt', cy: '12px', r: '0.125in' })).coords).toEqual({
+            centerX: 8,
+            centerY: 12,
+            gradientRadius: 12,
+        });
+    });
+
+    it('keeps percentages, plain numbers and font-relative units as before', () => {
+        const g = raw('linear', { x1: '25%', y1: '0.5', x2: '2em', y2: '' }, undefined, true);
+        const { coords } = resolve(g, { x: 0, y: 0, width: 8, height: 8 });
+        expect(coords).toEqual({ startX: 2, startY: 4, endX: 16, endY: 0 });
+    });
+});
+
+describe('collectGradients — non-invertible gradientTransform', () => {
+    const stops = [stop({ offset: '0', 'stop-color': '#ff0' }), stop({ offset: '1', 'stop-color': '#f00' })];
+    const radial = (id: string, attributes: Record<string, string>): XastElement => ({
+        ...linear(id, stops, attributes),
+        name: 'radialGradient',
+    });
+    const collected = (...els: XastElement[]): string[] => [...collectGradients(els, '#000', noWarn).keys()];
+
+    it('leaves out a linear or radial gradient whose gradientTransform is singular', () => {
+        for (const transform of ['scale(0)', 'matrix(0 0 0 0 0 0)', 'scale(2 0)', 'matrix(1 2 2 4 5 6)']) {
+            expect(collected(linear('l', stops, { gradientTransform: transform }))).toEqual([]);
+            expect(collected(radial('r', { gradientTransform: transform }))).toEqual([]);
+        }
+    });
+
+    it('applies to a gradientTransform inherited through href', () => {
+        const base = linear('base', stops, { gradientTransform: 'scale(0)' });
+        expect(collected(base, linear('child', [], { href: '#base' }))).toEqual([]);
+        expect(collected(base, linear('own', [], { href: '#base', gradientTransform: 'scale(2)' }))).toEqual(['own']);
+    });
+
+    it('keeps a tiny but invertible gradientTransform', () => {
+        expect(collected(radial('r', { gradientTransform: 'scale(1e-6)' }))).toEqual(['r']);
+    });
+
+    it('lets the paint use its fallback color, or report the reference, end to end', () => {
+        const svg = (fill: string, stroke = 'none'): string =>
+            `<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24">` +
+            `<linearGradient id="g" gradientTransform="scale(0)"><stop stop-color="#f00"/></linearGradient>` +
+            `<rect width="24" height="24" fill="${fill}" stroke="${stroke}"/></svg>`;
+        const withFallback = convert(svg('url(#g) #00f'));
+        expect(withFallback.xml).toContain('android:fillColor="#FF0000FF"');
+        expect(withFallback.xml).not.toContain('<gradient');
+        expect(withFallback.warnings).toEqual([]);
+        // No fallback: the reference is reported like an unknown one (SVG 2 paints nothing).
+        expect(convert(svg('none', 'url(#g)')).warnings.map((w) => w.code)).toEqual(['missing-gradient']);
+    });
+});
+
+describe('wpt reproductions render like their wpt reference', () => {
+    const repro = (name: string): string =>
+        readFileSync(fileURLToPath(new URL(`wpt-repro/${name}`, import.meta.url)), 'utf8');
+    const cases: [file: string, reference: string][] = [
+        [
+            // reference/gradient-objectBoundingBox-absolute-units-ref.svg: x2="96" instead of "1in"
+            'wpt-gradient-bbox-absolute-units.svg',
+            repro('wpt-gradient-bbox-absolute-units.svg').replace('x2="1in"', 'x2="96"'),
+        ],
+        [
+            // reference/green-100x100.svg, sized like the reproduction
+            'wpt-gradient-transform-singular.svg',
+            '<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100"><rect width="100" height="100" fill="green"/></svg>',
+        ],
+    ];
+
+    for (const [file, reference] of cases) {
+        for (const optimize of [true, false]) {
+            it(`${file} (optimize: ${optimize})`, () => {
+                const { xml, warnings } = convert(repro(file), { optimize, strict: true });
+                expect(warnings).toEqual([]);
+                const result = compareSvgs(reference, vdToSvg(xml));
+                expect(result.sizeMismatch).toBeNull();
+                expect(result.inked).toBeGreaterThan(0);
+                expect(result.mismatch).toBeLessThan(DEFAULT_MAX_MISMATCH);
+            });
+        }
+    }
 });
