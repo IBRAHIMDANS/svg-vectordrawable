@@ -4,6 +4,9 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { convert, ConversionError, type Warning } from '../src/index.js';
 import { toAndroidColor } from '../src/color.js';
+import { roundPathNumbers } from '../src/paint.js';
+import { toAbsolute } from '../src/pathAbsolute.js';
+import { parsePath } from '../src/pathParse.js';
 import { vdToSvg } from './visual/vdToSvg.js';
 import { compareSvgs, DEFAULT_MAX_MISMATCH } from './visual/compare.js';
 
@@ -292,5 +295,78 @@ describe.each([true, false])('invalid gradient paint servers (optimize: %s)', (o
         ]);
         expect(xml).toContain('android:fillColor="#FF000000"');
         expect(xml).not.toContain('strokeColor');
+    });
+});
+
+describe('roundPathNumbers: rounding in absolute coordinates', () => {
+    /** Absolute end point of every drawing command (S, T and arcs lowered to C and Q). */
+    const points = (d: string): [number, number][] =>
+        toAbsolute(parsePath(d))
+            .filter(({ cmd }) => cmd !== 'Z')
+            .map(({ args }) => [args[args.length - 2]!, args[args.length - 1]!]);
+    /** Largest gap between the end points of two paths with the same commands. */
+    const drift = (a: string, b: string): number => {
+        const [pa, pb] = [points(a), points(b)];
+        expect(pa).toHaveLength(pb.length);
+        return Math.max(0, ...pa.flatMap(([x, y], i) => [Math.abs(x - pb[i]![0]), Math.abs(y - pb[i]![1])]));
+    };
+    /** Deterministic pseudo-random numbers in [0, 1) (LCG), so a failure is reproducible. */
+    const random = (seed: number) => () => (seed = (seed * 1664525 + 1013904223) % 2 ** 32) / 2 ** 32;
+
+    it('does not let relative rounding errors add up (measured on the icon corpus: up to 0.99 unit at precision 1)', () => {
+        // Rounded one by one, every 0.14 becomes 0.1 and the end point lands at 0.4 instead of 0.42.
+        expect(roundPathNumbers('M0 0l0.14 0l0.14 0l0.14 0', 1)).toBe('M0 0l0.1 0l0.2 0l0.1 0');
+        expect(roundPathNumbers('M0.05 0h1.04h1.04v.06', 1)).toBe('M0.1 0h1h1v0.1');
+        // Control points are rounded in absolute space too; a short number is kept as written.
+        expect(roundPathNumbers('M0 0c.14 .14 .28 .28 .42 .42s.14 .1 .28 .28', 1)).toBe(
+            'M0 0c0.1 0.1 0.3 0.3 0.4 0.4s0.2 .1 0.3 0.3',
+        );
+    });
+
+    it.each([0, 1, 2])('keeps every point within half a unit of precision %i of the source', (precision) => {
+        const next = random(precision + 1);
+        const number = (): string => ((next() - 0.5) * 6).toFixed(3);
+        const commands = ['l', 'h', 'v', 'c', 's', 'q', 't', 'L', 'C', 'z m'];
+        const arity: Record<string, number> = { l: 2, h: 1, v: 1, c: 6, s: 4, q: 4, t: 2, L: 2, C: 6, 'z m': 2 };
+        for (let run = 0; run < 50; run++) {
+            let d = `M${number()} ${number()}`;
+            for (let i = 0; i < 60; i++) {
+                const cmd = commands[Math.floor(next() * commands.length)]!;
+                d += `${cmd}${Array.from({ length: arity[cmd]! }, number).join(' ')}`;
+            }
+            const rounded = roundPathNumbers(d, precision);
+            expect(drift(rounded, d)).toBeLessThanOrEqual(0.5 * 10 ** -precision + 1e-9);
+            expect(rounded.match(/\.\d+/g)?.every((decimals) => decimals.length - 1 <= precision) ?? true).toBe(true);
+        }
+    });
+
+    it('rounds a half-ellipse arc so that it stays one', () => {
+        // Rounded as is, the radii no longer reach across the chord (12.72√2 < 18): the center leaves the midpoint.
+        expect(roundPathNumbers('M5.636 5.636a9 9 0 1 1 12.728 12.728A9 9 0 0 1 5.636 5.636', 2)).toBe(
+            'M5.64 5.64a8.99 8.99 0 1 1 12.72 12.72A8.99 8.99 0 0 1 5.64 5.64',
+        );
+        // A rotated half-ellipse (the rotation's sign matters): 4 2 would leave a center offset.
+        expect(roundPathNumbers('M1.06 6.04a4 2 -30 1 1 6.928 -4', 1)).toBe('M1.1 6a3.9 1.9 -30 1 1 6.9 -4');
+        // A genuine arc keeps its rounded radii (its center is far from the chord midpoint).
+        expect(roundPathNumbers('M5.75 15A8.015 8.015 0 1 0 15 2', 1)).toBe('M5.8 15A8 8 0 1 0 15 2');
+    });
+
+    it('leaves malformed data rounded number by number', () => {
+        expect(roundPathNumbers('0.14 M0 0l0.14 0x0.14l0.14 0', 1)).toBe('0.1 M0 0l0.1 0x0.1l0.1 0');
+        expect(roundPathNumbers('M0 0l0.14 0z0.14 0.14', 1)).toBe('M0 0l0.1 0z0.1 0.1');
+    });
+
+    it.each([
+        // Relative staircase: rounded one by one, 0.994 → 0.99 drifts by 0.004 a step (2.9 % mismatch).
+        [2, `<path d="M2 2${'l.994 .47l.994 -.47'.repeat(10)}" stroke="#000" fill="none"/>`],
+        // heroicons magnifying-glass: two half circles, 9.8 % mismatch once a rounded chord falls short of the diameter.
+        [
+            2,
+            '<path d="m21 21-5.197-5.197m0 0A7.5 7.5 0 1 0 5.196 5.196a7.5 7.5 0 0 0 10.607 10.607Z" stroke="#000" stroke-width="1.5" fill="none"/>',
+        ],
+    ])('renders like the source at floatPrecision %i (visual harness)', (floatPrecision, body) => {
+        const source = svg(body);
+        const result = compareSvgs(source, vdToSvg(convert(source, { floatPrecision }).xml));
+        expect(result.mismatch).toBeLessThan(DEFAULT_MAX_MISMATCH);
     });
 });
