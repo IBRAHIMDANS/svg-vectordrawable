@@ -461,3 +461,38 @@ describe('normalize: curves are not rewritten as arcs (svgo makeArcs)', () => {
         expect(pathData(convert(doc('<path d="M5 12a7 7 0 0 1 14 0z"/>')).xml)).toMatch(/a/i);
     });
 });
+
+describe('normalize: <symbol> geometry (SVG 2) survives svgo', () => {
+    // svgo's removeUnknownsAndDefaults strips x / y / width / height from <symbol> (SVG 1.1).
+    const doc = (symbolAttrs: string): string =>
+        '<svg width="500" height="500" xmlns="http://www.w3.org/2000/svg"><defs>' +
+        `<symbol id="sym" ${symbolAttrs}><rect width="400" height="400" fill="green"/></symbol>` +
+        '</defs><use href="#sym"/></svg>';
+    const green100 =
+        '<svg width="500" height="500" xmlns="http://www.w3.org/2000/svg">' +
+        '<rect width="100" height="100" fill="green"/></svg>';
+    const render = (input: string, optimize: boolean): string => vdToSvg(convert(input, { optimize }).xml);
+
+    it('clips a symbol without viewBox to its width / height in both modes', () => {
+        const input = doc('width="100" height="100"');
+        for (const optimize of [true, false]) {
+            const result = compareSvgs(green100, render(input, optimize));
+            expect(result.inked, `optimize: ${optimize}`).toBeGreaterThan(0);
+            expect(result.mismatch, `optimize: ${optimize}`).toBe(0);
+        }
+    });
+
+    it('keeps x / y / width / height on the symbol in svgo output', () => {
+        const json = JSON.stringify(parseSvg(doc('x="1" y="2" width="100" height="100"'), true));
+        for (const attr of ['"x":"1"', '"y":"2"', '"width":"100"', '"height":"100"']) expect(json).toContain(attr);
+    });
+
+    it('renders a symbol with viewBox alike in both modes', () => {
+        for (const attrs of ['viewBox="0 0 800 800"', 'viewBox="0 0 800 800" width="100" height="100"']) {
+            const input = doc(attrs);
+            const result = compareSvgs(render(input, false), render(input, true));
+            expect(result.inked, attrs).toBeGreaterThan(0);
+            expect(result.mismatch, attrs).toBe(0);
+        }
+    });
+});
