@@ -77,18 +77,36 @@ export interface RootLayout {
     assumed: ('width' | 'height')[];
 }
 
+/**
+ * Font size behind `em` / `rem` on the root `<svg>`: the CSS initial `font-size` (`medium`), 16 px in
+ * every browser. On the root element both units resolve against it (`rem` is the root's own font
+ * size). A `font-size` set on the root itself is not read. `ex` / `ch` depend on the font metrics:
+ * left undefined.
+ */
+const ROOT_FONT_SIZE = 16;
+
+/** A number then `em` / `rem`; the number (ending in a digit or `.`: no unit) is left to `parseLength`. */
+const FONT_RELATIVE = /^(.*[\d.])r?em$/i;
+
+/** `parseLength` for the root `<svg>`, with `em` / `rem` resolved at `ROOT_FONT_SIZE`. */
+function rootLength(raw: string | undefined): number {
+    const fontRelative = raw === undefined ? null : FONT_RELATIVE.exec(raw.trim());
+    return fontRelative ? parseLength(fontRelative[1]) * ROOT_FONT_SIZE : parseLength(raw);
+}
+
 /** A length that defines a size: positive and finite, otherwise NaN (falsy, like an unparseable one). */
 function positiveLength(raw: string | undefined): number {
-    const value = parseLength(raw);
+    const value = rootLength(raw);
     return value > 0 && Number.isFinite(value) ? value : NaN;
 }
 
 /**
- * Lays out the root `<svg>`. A percentage, a font-relative unit, a zero or negative length (or a
- * missing value) does not define a size. With a viewBox, a single defined dimension sets the other
- * through the viewBox aspect ratio, whatever preserveAspectRatio (SVG 2 §8.12 intrinsic sizing,
- * CSS replaced-element sizing); with neither defined, the size is the viewBox's. Without a viewBox,
- * each undefined dimension is 24. Throws on a viewBox whose width or height is not positive.
+ * Lays out the root `<svg>`. `em` / `rem` count 16 px (`ROOT_FONT_SIZE`); a percentage, `ex` / `ch`,
+ * a zero or negative length (or a missing value) does not define a size. With a viewBox, a single
+ * defined dimension sets the other through the viewBox aspect ratio, whatever preserveAspectRatio
+ * (SVG 2 §8.12 intrinsic sizing, CSS replaced-element sizing); with neither defined, the size is the
+ * viewBox's. Without a viewBox, each undefined dimension is 24 (reported through `assumed`). Throws
+ * on a viewBox whose width or height is not positive.
  */
 export function rootLayout(attrs: Record<string, string>): RootLayout {
     const parsed = viewBoxNumbers(attrs.viewBox?.trim() || undefined);
