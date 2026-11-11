@@ -1,4 +1,5 @@
 import type { XastElement } from './ast.js';
+import { toAndroidColor } from './color.js';
 import { parseStyle } from './style.js';
 import { IDENTITY, multiply, parseTransform, type Matrix } from './transform.js';
 import { parseLength, parseOpacity } from './units.js';
@@ -34,6 +35,14 @@ export interface Inherited {
     fillServer?: ContextServer;
     /** Set when `stroke` is a paint server taken from a context element (see `fillServer`). */
     strokeServer?: ContextServer;
+    /**
+     * The `fill` declaration ignored as invalid (trimmed) on the way to the computed `fill`: on this
+     * element, or on an ancestor whose value it inherits. paint.ts reports it; undefined once an
+     * element declares a valid `fill`.
+     */
+    fillInvalid?: string;
+    /** The ignored `stroke` declaration (see `fillInvalid`). */
+    strokeInvalid?: string;
 }
 
 /** A `<use>` instance as the context element of its content. */
@@ -95,11 +104,47 @@ function contextResolved(
     return nested ? { paint: value } : { paint, server: { keyword, context } };
 }
 
+/**
+ * true when a `fill` / `stroke` value is one the converter can use: `none`, a `url()` reference
+ * (its fallback color is checked by paint.ts), a context paint keyword, or a color it can parse.
+ * Anything else (`env()`, `var()`, `color-mix()`, a typo…) is an invalid declaration: CSS ignores
+ * it, so the next declaration in the cascade (the presentation attribute) or the parent's value applies.
+ */
+function isUsablePaint(value: string): boolean {
+    const v = value.trim();
+    return /^none$/i.test(v) || URL_PAINT.test(v) || CONTEXT_PAINT.test(v) || toAndroidColor(v, 1, '#000000') !== null;
+}
+
+/** CSS-wide keywords that resolve to the parent's value for an inherited property. */
+const INHERIT_KEYWORDS = new Set(['inherit', 'unset', 'revert', 'revert-layer']);
+
+/**
+ * The `fill` / `stroke` declaration that applies on `el`: the inline `style` one, else the
+ * attribute, skipping invalid values (`invalid`: the first one skipped). `inherit`, `unset` and
+ * `revert` stand for the parent's value (`value` undefined; both properties are inherited);
+ * `initial` resets it (`initial: true`: black fill, no stroke).
+ */
+function paintDeclaration(
+    style: Record<string, string>,
+    attrs: Record<string, string>,
+    prop: 'fill' | 'stroke',
+): { value?: string; invalid?: string; initial?: boolean } {
+    let invalid: string | undefined;
+    for (const v of [style[prop], attrs[prop]]) {
+        if (v === undefined) continue;
+        const keyword = v.trim().toLowerCase();
+        if (INHERIT_KEYWORDS.has(keyword)) return { invalid };
+        if (keyword === 'initial') return { invalid, initial: true };
+        if (isUsablePaint(v)) return { value: v, invalid };
+        invalid ??= v.trim();
+    }
+    return { invalid };
+}
+
+/** Inherited properties other than `fill` / `stroke` (see {@link paintDeclaration}). */
 const INHERITABLE = [
-    'fill',
     'fill-opacity',
     'fill-rule',
-    'stroke',
     'stroke-opacity',
     'stroke-width',
     'stroke-linecap',
@@ -127,15 +172,27 @@ export function resolveStyle(el: XastElement, parent: Inherited): Inherited {
     const style = parseStyle(attrs.style);
     const get = (name: string): string | undefined => style[name] ?? attrs[name];
     const next: Inherited = { ...parent };
+    for (const prop of ['fill', 'stroke'] as const) {
+        const { value, invalid, initial } = paintDeclaration(style, attrs, prop);
+        const declared = invalid !== undefined || value !== undefined || initial === true;
+        if (prop === 'fill') {
+            if (initial) next.fill = next.fillServer = undefined;
+            else if (value !== undefined)
+                ({ paint: next.fill, server: next.fillServer } = contextResolved(value, parent.context));
+            if (declared) next.fillInvalid = invalid;
+        } else {
+            if (initial) next.stroke = next.strokeServer = undefined;
+            else if (value !== undefined)
+                ({ paint: next.stroke, server: next.strokeServer } = contextResolved(value, parent.context));
+            if (declared) next.strokeInvalid = invalid;
+        }
+    }
     for (const prop of INHERITABLE) {
         const v = get(prop);
         // `inherit` keeps the parent's computed value, which `next` already holds.
         if (v === undefined || v.trim() === 'inherit') continue;
-        if (prop === 'fill') ({ paint: next.fill, server: next.fillServer } = contextResolved(v, parent.context));
-        else if (prop === 'fill-opacity') next.fillOpacity = parseOpacity(v);
+        if (prop === 'fill-opacity') next.fillOpacity = parseOpacity(v);
         else if (prop === 'fill-rule') next.fillRule = v;
-        else if (prop === 'stroke')
-            ({ paint: next.stroke, server: next.strokeServer } = contextResolved(v, parent.context));
         else if (prop === 'stroke-opacity') next.strokeOpacity = parseOpacity(v);
         else if (prop === 'stroke-width') next.strokeWidth = v;
         else if (prop === 'stroke-linecap') next.strokeLinecap = v;
