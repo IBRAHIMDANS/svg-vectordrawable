@@ -67,4 +67,12 @@ export default tseslint.config(
             globals: { ...globals.node },
         },
     },
+    // MCP server (standalone package built on the published library): Node code, tsc output ignored.
+    { ignores: ['integrations/mcp-server/dist'] },
+    {
+        files: ['integrations/mcp-server/**/*.{ts,mjs}'],
+        languageOptions: {
+            globals: { ...globals.node },
+        },
+    },
 );
