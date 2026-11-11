@@ -1,0 +1,17 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100">
+  <!-- Reduced from web-platform-tests/wpt svg/pservers/reftests/gradient-transform-02.svg at commit 76f5455a0a266f098dd8bd888a8a84b0cad0350d.
+       Copyright (c) web-platform-tests contributors. 3-Clause BSD License:
+       https://github.com/web-platform-tests/wpt/blob/master/LICENSE.md
+       Defect: a non-invertible gradientTransform (scale(0), zero matrix) must fall back to the paint's
+       fallback color (expected: green 100x100); the converter emits a zero-radius gradient instead. -->
+  <radialGradient id="scale0" gradientTransform="scale(0)">
+    <stop offset="0" stop-color="yellow"/>
+    <stop offset="1" stop-color="red"/>
+  </radialGradient>
+  <rect width="50" height="100" fill="url(#scale0) green"/>
+  <radialGradient id="matrix0" gradientTransform="matrix(0, 0, 0, 0, 0, 0)">
+    <stop offset="0" stop-color="yellow"/>
+    <stop offset="1" stop-color="red"/>
+  </radialGradient>
+  <rect x="50" width="50" height="100" fill="url(#matrix0) green"/>
+</svg>

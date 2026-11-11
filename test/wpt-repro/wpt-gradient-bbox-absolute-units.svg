@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="200" height="200">
+  <!-- Reduced from web-platform-tests/wpt svg/pservers/reftests/gradient-objectBoundingBox-absolute-units.svg at commit 76f5455a0a266f098dd8bd888a8a84b0cad0350d.
+       Copyright (c) web-platform-tests contributors. 3-Clause BSD License:
+       https://github.com/web-platform-tests/wpt/blob/master/LICENSE.md
+       Defect: with optimize: false, an absolute unit in objectBoundingBox gradient coordinates is not
+       resolved (x2="1in" read as 1 instead of 96): the gradient spans the box instead of staying blue.
+       optimize: true is correct. -->
+  <defs>
+    <linearGradient id="grad" gradientUnits="objectBoundingBox" x1="0" y1="0" x2="1in" y2="0">
+      <stop offset="0" stop-color="blue"/>
+      <stop offset="1" stop-color="lime"/>
+    </linearGradient>
+  </defs>
+  <rect width="200" height="200" fill="url(#grad)"/>
+</svg>

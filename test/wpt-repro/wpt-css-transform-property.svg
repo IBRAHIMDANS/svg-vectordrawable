@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="300" height="200" viewBox="0 0 300 200">
+  <!-- Reduced from web-platform-tests/wpt svg/styling/render/transform-origin.svg at commit 76f5455a0a266f098dd8bd888a8a84b0cad0350d.
+       Copyright (c) web-platform-tests contributors. 3-Clause BSD License:
+       https://github.com/web-platform-tests/wpt/blob/master/LICENSE.md
+       Defect: the CSS transform property (style attribute, or a <style> rule that svgo inlines) is
+       silently ignored: the rect is drawn unscaled. No warning, not rejected by strict. -->
+  <g transform="translate(140, 130)">
+    <rect x="0" y="0" width="40" height="10" fill="cyan" style="transform: scale(2, 3)"/>
+  </g>
+</svg>
