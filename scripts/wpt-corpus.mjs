@@ -96,6 +96,8 @@ const KNOWN_ARTEFACTS = new Map([
     ['styling/render/transform-origin-not-explicit-style-visual.svg', RESVG_TRANSFORM_ORIGIN_ATTR],
     ['struct/reftests/use-symbol-inline-css-003.svg', RESVG_SYMBOL_SIZE],
     ['painting/reftests/paint-context-003.svg', RESVG_CONTEXT_PAINT],
+    // context-fill is a gradient from the <use>: the reference bakes it into each shape's bounding box.
+    ['painting/reftests/paint-context-007.svg', RESVG_CONTEXT_PAINT],
 ]);
 
 /**
