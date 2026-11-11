@@ -113,7 +113,7 @@ export function convert(svg: string, options: ConvertOptions = {}): ConvertResul
         onWarn?.(w);
     };
 
-    const root = parseSvg(svg, optimize, svgoConfig);
+    const root = parseSvg(svg, optimize, svgoConfig, floatPrecision);
     resolveUses(root); // inline <use> references so the walker sees concrete geometry
     const svgEl = (root.children ?? []).find((c) => c.type === 'element' && c.name === 'svg');
     if (!svgEl) throw new Error('No <svg> root element found');

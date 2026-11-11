@@ -1,5 +1,10 @@
+import { readFileSync, readdirSync } from 'node:fs';
+import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import { convert } from '../src/index.js';
+import type { XastElement } from '../src/ast.js';
+import { parseSvg } from '../src/normalize.js';
 
 const svg = (inner: string): string => `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000 1000">${inner}</svg>`;
 
@@ -73,5 +78,78 @@ describe('normalize: user svgoConfig', () => {
             plugins: [{ name: 'preset-default' as const, params: { overrides: { mergePaths: false as const } } }],
         };
         expect(countPaths(convert(svg(twoMergeable), { svgoConfig }).xml)).toBe(2);
+    });
+});
+
+describe('normalize: floatPrecision', () => {
+    const fixtures = join(fileURLToPath(new URL('.', import.meta.url)), 'fixtures');
+
+    /** Attributes of the first `<path>` in svgo's output tree. */
+    const firstPath = (inner: string, floatPrecision?: number): Record<string, string> => {
+        const find = (node: XastElement): XastElement | undefined =>
+            node.name === 'path' ? node : (node.children ?? []).map(find).find(Boolean);
+        const root = parseSvg(svg(inner), true, undefined, floatPrecision);
+        return find({ type: 'root', children: root.children })?.attributes ?? {};
+    };
+
+    it('keeps svgo at 3 decimals by default', () => {
+        expect(firstPath('<path d="M2.123456 2L10.987654 3.333333z"/>').d).toBe('m2.123 2 8.865 1.333z');
+    });
+
+    it('hands a precision above 3 to svgo', () => {
+        expect(firstPath('<path d="M2.123456 2L10.987654 3.333333z"/>', 6).d).toBe('m2.123456 2 8.864198 1.333333z');
+    });
+
+    it('applies it to shapes converted to paths', () => {
+        const rect = '<rect x="1.123456" y="2.654321" width="3.111111" height="4.222222"/>';
+        expect(firstPath(rect, 6).d).toBe('M1.123456 2.654321h3.111111v4.222222H1.123456z');
+    });
+
+    it('keeps baked transforms finer than coordinates', () => {
+        // The stroke scale goes through svgo's transformPrecision (5 by default): 1.23457 × 1.123456
+        // would give 1.386987 instead of 1.386983.
+        const scaled =
+            '<g transform="scale(1.23456789)"><path fill="none" stroke="#000" stroke-width="1.123456" d="M1.111111 1L5 5"/></g>';
+        const path = firstPath(scaled, 6);
+        expect(path.d).toBe('m1.371742 1.234568 4.801097 4.938271');
+        expect(Number(path['stroke-width']).toFixed(6)).toBe('1.386983');
+    });
+
+    it('never lets svgo fall back to integer rounding at the upper bound', () => {
+        expect(firstPath('<path d="M2.123456 2L10.987654 3.333333z"/>', 20).d).toBe('M2.123456 2 10.987654 3.333333z');
+    });
+
+    it('leaves svgo untouched at 3 and below', () => {
+        for (const file of readdirSync(fixtures).filter((f) => f.endsWith('.svg'))) {
+            const source = readFileSync(join(fixtures, file), 'utf8');
+            const reference = JSON.stringify(parseSvg(source, true));
+            for (const floatPrecision of [0, 1, 2, 3])
+                expect(JSON.stringify(parseSvg(source, true, undefined, floatPrecision)), file).toBe(reference);
+        }
+    });
+
+    it('does not touch a caller-supplied svgoConfig', () => {
+        const root = parseSvg(
+            svg('<path d="M2.123456 2L10.987654 3.333333z"/>'),
+            true,
+            { plugins: ['preset-default'] },
+            6,
+        );
+        expect(JSON.stringify(root)).toContain('"d":"m2.123 2 8.865 1.333z"');
+    });
+});
+
+describe('convert() forwards floatPrecision to svgo', () => {
+    const input =
+        '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M2.123456 2L10.987654 3.333333z"/></svg>';
+
+    it('keeps 6 decimals with optimize: true', () => {
+        expect(convert(input, { floatPrecision: 6 }).xml).toContain('2.123456');
+    });
+
+    it('keeps the default 3-decimal output', () => {
+        const xml = convert(input).xml;
+        expect(xml).toContain('2.123');
+        expect(xml).not.toContain('2.1234');
     });
 });
