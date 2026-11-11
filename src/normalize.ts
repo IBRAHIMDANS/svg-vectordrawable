@@ -66,19 +66,44 @@ function exceedsPathDataLength(svg: string, limit: number): boolean {
  */
 const MAY_DASH = /stroke-dasharray/;
 
-function defaultConfigFor(svg: string): Config {
+/** svgo's own default `floatPrecision`: up to it, svgo's rounding is left exactly as it is. */
+const SVGO_FLOAT_PRECISION = 3;
+/** Above it, svgo's path and transform rounding falls back to `Math.round` (integers). */
+const SVGO_MAX_FLOAT_PRECISION = 19;
+/** svgo keeps scale / matrix factors 2 decimals finer than coordinates (5 vs 3 by default). */
+const TRANSFORM_EXTRA_PRECISION = 2;
+
+function defaultConfigFor(svg: string, floatPrecision: number): Config {
     const overrides: Record<string, unknown> = { ...DEFAULT_OVERRIDES };
     if (exceedsDrawableCount(svg, MERGE_PATHS_MAX_ELEMENTS)) overrides.mergePaths = false;
     if (exceedsPathDataLength(svg, CONVERT_PATH_DATA_MAX_LENGTH)) overrides.convertPathData = false;
     if (MAY_DASH.test(svg)) overrides.convertShapeToPath = { convertArcs: false };
-    return { plugins: [{ name: 'preset-default', params: { overrides } }] } as Config;
+    const params: Record<string, unknown> = { overrides };
+    if (floatPrecision > SVGO_FLOAT_PRECISION) {
+        // The preset hands `floatPrecision` to every plugin that rounds (cleanupNumericValues,
+        // convertPathData, convertTransform, convertShapeToPath, mergePaths); the transform
+        // precision is a separate parameter, raised so that it stays finer than coordinates.
+        const precision = Math.min(floatPrecision, SVGO_MAX_FLOAT_PRECISION);
+        const transformPrecision = precision + TRANSFORM_EXTRA_PRECISION;
+        params.floatPrecision = precision;
+        overrides.convertTransform = { transformPrecision };
+        if (overrides.convertPathData !== false)
+            overrides.convertPathData = { ...DEFAULT_OVERRIDES.convertPathData, transformPrecision };
+    }
+    return { plugins: [{ name: 'preset-default', params }] } as Config;
 }
 
 /**
  * Parses (and optionally normalizes) an SVG string into svgo's AST, reusing svgo as the XML
  * parser — no third-party parser needed. The capture plugin grabs the tree in the same pass.
+ * `floatPrecision` only tunes the default svgo config; a caller-supplied `svgoConfig` is used as-is.
  */
-export function parseSvg(svg: string, optimizeFlag: boolean, svgoConfig?: Config): XastRoot {
+export function parseSvg(
+    svg: string,
+    optimizeFlag: boolean,
+    svgoConfig?: Config,
+    floatPrecision = SVGO_FLOAT_PRECISION,
+): XastRoot {
     let captured: XastRoot | null = null;
     const capture = {
         name: 'svgvd-capture',
@@ -88,7 +113,7 @@ export function parseSvg(svg: string, optimizeFlag: boolean, svgoConfig?: Config
         },
     };
 
-    const base = optimizeFlag ? (svgoConfig ?? defaultConfigFor(svg)) : { plugins: [] };
+    const base = optimizeFlag ? (svgoConfig ?? defaultConfigFor(svg, floatPrecision)) : { plugins: [] };
     const plugins = [...(base.plugins ?? []), capture] as Config['plugins'];
 
     try {
