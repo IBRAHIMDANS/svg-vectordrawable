@@ -1,3 +1,4 @@
+import { styleDeclarations } from './style.js';
 import { parseLength } from './units.js';
 
 type Attrs = Record<string, string>;
@@ -15,7 +16,59 @@ export interface ShapeOptions {
     precision?: number;
 }
 
-export function shapeToPathData(name: string, attrs: Attrs, options: ShapeOptions = {}): string | null {
+/**
+ * SVG 2 geometry properties of each shape, with their CSS grammar: `position` is any
+ * `<length-percentage>`, `size` a non-negative one (or `auto` for a rect's width / height, which
+ * computes to 0), `radius` a non-negative one or `auto`.
+ */
+type GeometryKind = 'position' | 'size' | 'radius';
+const GEOMETRY_PROPERTIES: Record<string, Record<string, GeometryKind>> = {
+    rect: { x: 'position', y: 'position', width: 'size', height: 'size', rx: 'radius', ry: 'radius' },
+    circle: { cx: 'position', cy: 'position', r: 'size' },
+    ellipse: { cx: 'position', cy: 'position', rx: 'radius', ry: 'radius' },
+};
+/** CSS-wide keywords that resolve to the initial value here (geometry properties are not inherited). */
+const INITIAL_KEYWORDS = new Set(['initial', 'unset', 'revert', 'revert-layer']);
+const IMPORTANT = /\s*!\s*important\s*$/i;
+
+/**
+ * The value a geometry declaration computes to, as an attribute value the switch below reads, or
+ * undefined when the declaration is invalid (CSS then drops it and the attribute applies). Lengths
+ * the converter cannot resolve (`ex`, `ch`, `calc()`…) count as invalid.
+ */
+function cssGeometryValue(name: string, kind: GeometryKind, raw: string): string | undefined {
+    const value = raw.replace(IMPORTANT, '').trim();
+    const keyword = value.toLowerCase();
+    if (INITIAL_KEYWORDS.has(keyword)) return kind === 'radius' ? 'auto' : '0';
+    if (keyword === 'auto') {
+        if (kind === 'radius') return 'auto';
+        if (name === 'rect' && kind === 'size') return '0';
+        return undefined;
+    }
+    const length = parseLength(value, 1); // any reference: only validity matters here
+    if (Number.isNaN(length) || (kind !== 'position' && length < 0)) return undefined;
+    return value;
+}
+
+/**
+ * Applies the geometry properties of the inline `style` over the attributes of the same name: in
+ * SVG 2 they are CSS properties, so a valid declaration wins over the attribute (the last valid one
+ * when repeated). svgo inlines `<style>` rules into `style` first when optimizing.
+ */
+function withCssGeometry(name: string, attrs: Attrs): Attrs {
+    const properties = GEOMETRY_PROPERTIES[name];
+    if (!properties || !attrs.style) return attrs;
+    let resolved: Attrs | undefined;
+    for (const [key, raw] of styleDeclarations(attrs.style)) {
+        const kind = properties[key];
+        const value = kind && cssGeometryValue(name, kind, raw);
+        if (value !== undefined) (resolved ??= { ...attrs })[key] = value;
+    }
+    return resolved ?? attrs;
+}
+
+export function shapeToPathData(name: string, ownAttrs: Attrs, options: ShapeOptions = {}): string | null {
+    const attrs = withCssGeometry(name, ownAttrs);
     const { viewport, precision = 3 } = options;
     const f = 10 ** precision;
     /** Rounds away float noise (`0.49999999999999994`); integers print unchanged. */
@@ -64,8 +117,13 @@ export function shapeToPathData(name: string, attrs: Attrs, options: ShapeOption
             return p`M${cx - r},${cy}a${r},${r} 0 1 0 ${2 * r},0a${r},${r} 0 1 0 ${-2 * r},0z`;
         }
         case 'ellipse': {
-            const rx = n('rx', 'x');
-            const ry = n('ry', 'y');
+            // An `auto` radius takes the other one (both `auto` → 0, not rendered).
+            const radius = (key: string, axis: 'x' | 'y'): number | undefined =>
+                attrs[key]?.trim().toLowerCase() === 'auto' ? undefined : n(key, axis);
+            const rxUsed = radius('rx', 'x');
+            const ryUsed = radius('ry', 'y');
+            const rx = rxUsed ?? ryUsed ?? 0;
+            const ry = ryUsed ?? rxUsed ?? 0;
             if (rx <= 0 || ry <= 0) return null;
             const cx = n('cx', 'x');
             const cy = n('cy', 'y');
