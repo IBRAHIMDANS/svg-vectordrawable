@@ -1,5 +1,11 @@
 # svg-vectordrawable
 
+[![npm version](https://img.shields.io/npm/v/svg-vectordrawable)](https://www.npmjs.com/package/svg-vectordrawable)
+[![npm downloads](https://img.shields.io/npm/dm/svg-vectordrawable)](https://www.npmjs.com/package/svg-vectordrawable)
+[![CI](https://github.com/IBRAHIMDANS/svg-vectordrawable/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/IBRAHIMDANS/svg-vectordrawable/actions/workflows/ci.yml)
+[![types included](https://img.shields.io/npm/types/svg-vectordrawable)](https://www.npmjs.com/package/svg-vectordrawable)
+[![license](https://img.shields.io/npm/l/svg-vectordrawable)](LICENSE)
+
 Convert SVG to **Android VectorDrawable** XML — robustly, across SVGs from any editor.
 
 Built on [svgo](https://github.com/svg/svgo) (v4) for parsing and normalization, with a hand‑written
