@@ -1075,11 +1075,14 @@ describe('elliptical radial fill rendered exactly in a transformed group', () =>
         expect(xml).toContain('android:scaleY="0.4"');
     });
 
-    it('keeps the fallback for a singular gradientTransform', () => {
+    it('drops a gradient whose gradientTransform is singular (no fallback color: missing-gradient)', () => {
+        // CSS Transforms 1 §8: a non-invertible transform displays nothing; the old output was a
+        // radial of radius 0, which Android rejects.
         const doc = svg(`<defs>${figma('translate(12 12) scale(10 0)')}</defs><path d="${full}" fill="url(#r)"/>`);
         const { xml, warnings } = convert(doc, raw);
-        expect(warnings.map((w) => w.code)).toEqual(['gradient-approximated']);
+        expect(warnings.map((w) => w.code)).toEqual(['missing-gradient']);
         expect(xml).not.toContain('<group');
+        expect(xml).not.toContain('<gradient');
     });
 
     it('leaves a uniform radial unchanged (no group)', () => {

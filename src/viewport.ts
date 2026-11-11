@@ -1,6 +1,6 @@
 import type { Viewport, XastElement } from './ast.js';
 import { presentation } from './style.js';
-import { IDENTITY, multiply, type Matrix } from './transform.js';
+import { IDENTITY, isIdentity, multiply, parseTransform, type Matrix } from './transform.js';
 import { parseLength } from './units.js';
 
 export type { Viewport };
@@ -70,6 +70,11 @@ export interface RootLayout {
     offsetY: number;
     /** The viewBox size: the reference for percentage lengths. */
     viewBox: Viewport;
+    /**
+     * Dimensions the SVG leaves undefined (no viewBox and no usable `width` / `height`), each assumed
+     * to be 24. Empty for a sized root.
+     */
+    assumed: ('width' | 'height')[];
 }
 
 /** A length that defines a size: positive and finite, otherwise NaN (falsy, like an unparseable one). */
@@ -118,7 +123,32 @@ export function rootLayout(attrs: Record<string, string>): RootLayout {
         offsetX: alignX - minX,
         offsetY: alignY - minY,
         viewBox: { width: vpW, height: vpH },
+        assumed: hasViewBox
+            ? []
+            : (['width', 'height'] as const).filter((d) => !(d === 'width' ? attrWidth : attrHeight)),
     };
+}
+
+const translation = (e: number, f: number): Matrix => ({ ...IDENTITY, e, f });
+
+/**
+ * The `transform` of the root `<svg>` (SVG 2), as one matrix in the `<vector>`'s viewport
+ * coordinates that also carries the layout offset (viewBox origin, aspect-ratio alignment): the
+ * content goes through the offset first. The transform applies to the CSS box of the outermost
+ * `<svg>`, i.e. in px of its width×height, around its centre (`transform-origin` initial value
+ * `50% 50%` for an element with a CSS layout box). Null when absent, unparseable or the identity.
+ */
+export function rootTransform(attrs: Record<string, string>, layout: RootLayout): Matrix | null {
+    const t = parseTransform(attrs.transform);
+    if (!t || isIdentity(t)) return null;
+    const { width, height, viewportWidth, viewportHeight } = layout;
+    const cx = width / 2;
+    const cy = height / 2;
+    const centred = multiply(translation(cx, cy), multiply(t, translation(-cx, -cy)));
+    // viewport units → px → transformed px → viewport units.
+    const toPx: Matrix = { ...IDENTITY, a: width / viewportWidth, d: height / viewportHeight };
+    const fromPx: Matrix = { ...IDENTITY, a: viewportWidth / width, d: viewportHeight / height };
+    return multiply(fromPx, multiply(centred, multiply(toPx, translation(layout.offsetX, layout.offsetY))));
 }
 
 /** Viewport of a nested `<svg>` in its parent's user space. */
