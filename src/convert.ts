@@ -200,7 +200,7 @@ export function convert(svg: string, options: ConvertOptions = {}): ConvertResul
         step,
         fillBlackForUnfilled,
         colors,
-        gradients: collectGradients(gradientEls, currentColor, warn, colors),
+        gradients: collectGradients(gradientEls, currentColor, warn, colors, svgEl),
         gradientIds: new Set(gradientEls.map((g) => g.attributes?.id)),
         patternIds: new Set(
             elementsNamed(svgEl, 'pattern')

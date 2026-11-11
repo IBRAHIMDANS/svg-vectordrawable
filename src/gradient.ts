@@ -27,7 +27,7 @@ export interface RawGradient {
     tileMode?: TileMode;
     /**
      * Reports, on the first call only, what the gradient loses in a VectorDrawable (an unparseable
-     * stop color, `linearRGB` interpolation, SMIL animations). Called on each use, so a gradient
+     * stop color, `linearRGB` interpolation the stops cannot match, SMIL animations). Called on each use, so a gradient
      * that is never painted reports nothing, in both `optimize` modes.
      */
     report?: () => void;
@@ -156,6 +156,143 @@ function specifiedAttrs(el: XastElement): Record<string, string> {
     return Object.fromEntries(Object.entries(el.attributes ?? {}).filter(([k, v]) => VALID[k]?.(v) ?? true));
 }
 
+/** `color-interpolation` keywords that set the property; anything else defers to the parent. */
+const INTERPOLATION_VALUES = new Set(['auto', 'srgb', 'linearrgb', 'initial']);
+
+/**
+ * true when `color-interpolation` computes to `linearRGB` on the gradient element: the property is
+ * inherited (SVG 2 painting, "Inherited: yes"), so it comes from `el` or, failing that, from its nearest
+ * document ancestor (`ancestors`, nearest first) that sets it. `inherit`, `unset` and invalid values
+ * defer to the parent; `auto` / `initial` mean sRGB. It does not flow through `href`: a template
+ * supplies attributes and stops, while properties cascade along the document tree only.
+ */
+function isLinearRgb(el: XastElement, ancestors: readonly XastElement[]): boolean {
+    for (const node of [el, ...ancestors]) {
+        const value = presentation(node, 'color-interpolation')?.trim().toLowerCase();
+        if (value !== undefined && INTERPOLATION_VALUES.has(value)) return value === 'linearrgb';
+    }
+    return false;
+}
+
+/** Encoded sRGB component (0–1) → linear light. */
+const toLinear = (c: number): number => (c <= 0.04045 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4);
+/** Linear light (0–1) → encoded sRGB component. */
+const toEncoded = (l: number): number => (l <= 0.0031308 ? 12.92 * l : 1.055 * l ** (1 / 2.4) - 0.055);
+
+/**
+ * Largest residual a `linearRGB` gradient may keep, in 8-bit channel units: 1 % of 255. Below it the
+ * intermediate stops make the sRGB interpolation of VectorDrawable match linear-light interpolation.
+ */
+const LINEAR_RGB_TOLERANCE = 2.55;
+/**
+ * Candidate offsets per stop segment, uniformly spaced; the fit is checked on
+ * {@link LINEAR_RGB_SAMPLES} points per candidate interval. The grid must be fine at the dark end,
+ * where the sRGB curve is steepest: with 64 candidates the first interval of black → white alone
+ * deviates by 4.9 units, with 256 by 0.1. Measured: black → white (the worst channel swing) then
+ * needs 6 intermediate stops, white → blue 6, blue → red 10, red → yellow 6.
+ */
+const LINEAR_RGB_GRID = 256;
+/** Error samples per grid interval (the interval ends included). */
+const LINEAR_RGB_SAMPLES = 4;
+/**
+ * Cap on the items of an expanded gradient (9 alternating black / white stops already need 57);
+ * beyond it the declared stops are kept and the approximation is reported.
+ */
+const LINEAR_RGB_MAX_STOPS = 64;
+
+/** `#AARRGGBB` → [a, r, g, b] in 0–255, or null for anything else (a color resource reference). */
+function argb(color: string): number[] | null {
+    if (!/^#[0-9a-f]{8}$/i.test(color)) return null;
+    return [1, 3, 5, 7].map((i) => parseInt(color.slice(i, i + 2), 16));
+}
+
+const toHex = (channels: number[]): string =>
+    '#' + channels.map((c) => Math.round(c).toString(16).padStart(2, '0').toUpperCase()).join('');
+
+/**
+ * Intermediate stops strictly between (o0, c0) and (o1, c1), [a, r, g, b] 0–255, sampled from the
+ * exact linear-light blend: color channels are converted to linear light, interpolated and
+ * converted back; alpha is linear either way. Greedy fit on a {@link LINEAR_RGB_GRID} grid: from
+ * each emitted stop, the next one is the farthest candidate (binary search) such that the sRGB
+ * chord between the two stops as emitted (offset rounded to 4 decimals, color rounded to 8 bits)
+ * stays below {@link LINEAR_RGB_TOLERANCE} at every sample in between. A segment already within
+ * tolerance gets none.
+ */
+function linearRgbSegment(o0: number, c0: number[], o1: number, c1: number[]): GradientStop[] {
+    if (o1 - o0 < 1e-4) return []; // a hard stop: nothing is interpolated
+    const l0 = c0.map((c, k) => (k === 0 ? c / 255 : toLinear(c / 255)));
+    const l1 = c1.map((c, k) => (k === 0 ? c / 255 : toLinear(c / 255)));
+    /** The exact blend at offset x. */
+    const exact = (x: number): number[] =>
+        l0.map((l, k) => {
+            const v = l + ((l1[k]! - l) * (x - o0)) / (o1 - o0);
+            return 255 * (k === 0 ? v : toEncoded(v));
+        });
+    const n = LINEAR_RGB_GRID * LINEAR_RGB_SAMPLES;
+    const samples = Array.from({ length: n + 1 }, (_, k) => {
+        const x = o0 + ((o1 - o0) * k) / n;
+        return { x, color: exact(x) };
+    });
+    /** The stop emitted at grid index j. */
+    const at = (j: number): GradientStop & { channels: number[] } => {
+        if (j === LINEAR_RGB_GRID) return { offset: o1, color: '', channels: c1 };
+        const offset = round(o0 + ((o1 - o0) * j) / LINEAR_RGB_GRID, 4);
+        const channels = exact(offset).map(Math.round);
+        return { offset, color: toHex(channels), channels };
+    };
+    /** true when the chord from stop `a` (grid index ia) to grid index ib stays within tolerance. */
+    const fits = (ia: number, a: { offset: number; channels: number[] }, ib: number): boolean => {
+        const b = at(ib);
+        if (b.offset <= a.offset) return true; // rounded onto `a`: never emitted
+        for (let k = ia * LINEAR_RGB_SAMPLES; k <= ib * LINEAR_RGB_SAMPLES; k++) {
+            const { x, color } = samples[k]!;
+            const u = Math.min(1, Math.max(0, (x - a.offset) / (b.offset - a.offset)));
+            for (let ch = 0; ch < 4; ch++) {
+                const chord = a.channels[ch]! + (b.channels[ch]! - a.channels[ch]!) * u;
+                if (Math.abs(chord - color[ch]!) >= LINEAR_RGB_TOLERANCE) return false;
+            }
+        }
+        return true;
+    };
+    const out: GradientStop[] = [];
+    let from = 0;
+    let fromStop = { offset: o0, channels: c0 };
+    while (from < LINEAR_RGB_GRID && !fits(from, fromStop, LINEAR_RGB_GRID)) {
+        // the farthest grid index that fits: from + 1 always qualifies (one interval is tiny)
+        let lo = from + 1;
+        let hi = LINEAR_RGB_GRID;
+        while (hi - lo > 1) {
+            const mid = (lo + hi) >> 1;
+            if (fits(from, fromStop, mid)) lo = mid;
+            else hi = mid;
+        }
+        const stop = at(lo);
+        if (stop.offset > fromStop.offset && stop.offset < o1) {
+            out.push({ offset: stop.offset, color: stop.color });
+            fromStop = stop;
+        }
+        from = lo;
+    }
+    return out;
+}
+
+/**
+ * Stops of a `linearRGB` gradient for the sRGB interpolation of VectorDrawable: every segment gets
+ * the intermediate stops of {@link linearRgbSegment}, so the rendering stays within 1 % of the
+ * linear-light one. Returns null when a stop is not a literal color (a `@color/` reference) or the
+ * result exceeds {@link LINEAR_RGB_MAX_STOPS} items.
+ */
+export function linearRgbStops(stops: readonly GradientStop[]): GradientStop[] | null {
+    const parsed = stops.map((s) => argb(s.color));
+    if (parsed.some((c) => c === null)) return null;
+    const out: GradientStop[] = [stops[0]!];
+    for (let i = 1; i < stops.length; i++) {
+        out.push(...linearRgbSegment(stops[i - 1]!.offset, parsed[i - 1]!, stops[i]!.offset, parsed[i]!), stops[i]!);
+        if (out.length > LINEAR_RGB_MAX_STOPS) return null;
+    }
+    return out;
+}
+
 /** Calls `fn` on the first call only. */
 function once(fn: () => void): () => void {
     let done = false;
@@ -180,7 +317,26 @@ export function collectGradients(
     warn: (w: Warning) => void,
     /** Android references for stop colors (`currentColor` / `colorMap` options); literals without it. */
     colors?: ColorRefs,
+    /**
+     * The document root the gradients belong to, so inherited properties (`color-interpolation`)
+     * are read from their ancestors too; without it only the gradient element itself is read.
+     */
+    root?: XastElement,
 ): Map<string, RawGradient> {
+    const parents = new Map<XastElement, XastElement>();
+    const link = (node: XastElement): void => {
+        for (const child of node.children ?? []) {
+            parents.set(child, node);
+            link(child);
+        }
+    };
+    if (root) link(root);
+    /** Document ancestors of `el`, nearest first. */
+    const ancestors = (el: XastElement): XastElement[] => {
+        const out: XastElement[] = [];
+        for (let p = parents.get(el); p; p = parents.get(p)) out.push(p);
+        return out;
+    };
     const byId = new Map<string, XastElement>();
     for (const el of gradientEls) {
         const id = el.attributes?.id;
@@ -221,15 +377,19 @@ export function collectGradients(
             });
             return colors ? colors.stop('#000000', opacity, id)! : toAndroidColor('#000000', opacity, currentColor)!;
         };
-        const stops = normalizeStops(
+        const declared = normalizeStops(
             stopEls.map((s) => {
                 const opacity = presentation(s, 'stop-opacity');
                 const color = stopColor(s, opacity !== undefined ? parseFloat(opacity) : undefined);
                 return { offset: parseOffset(presentation(s, 'offset')), color };
             }),
         );
-        if (stops.length === 0) continue;
-        if (presentation(el, 'color-interpolation')?.trim().toLowerCase() === 'linearrgb')
+        if (declared.length === 0) continue;
+        const linear = isLinearRgb(el, ancestors(el));
+        // linearRGB: intermediate stops make the sRGB rendering match; reported when they cannot.
+        const expanded = linear ? linearRgbStops(declared) : declared;
+        const stops = expanded ?? declared;
+        if (!expanded)
             notes.push({
                 code: 'gradient-approximated',
                 message: `Gradient "${id}" has color-interpolation="linearRGB": VectorDrawable interpolates in sRGB, so the mid-tones differ.`,
