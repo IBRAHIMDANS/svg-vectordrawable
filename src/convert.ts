@@ -10,7 +10,7 @@ import { checkGroupOpacity } from './groupOpacity.js';
 import { initialStyle, resolveStyle } from './inherited.js';
 import { parseSvg } from './normalize.js';
 import { walk } from './render.js';
-import { parseStyle, presentation } from './style.js';
+import { applyCssProperties, parseStyle, presentation } from './style.js';
 import { parseOpacity } from './units.js';
 import { resolveUses } from './useResolver.js';
 import { formatMatrix } from './transform.js';
@@ -138,6 +138,8 @@ export function convert(svg: string, options: ConvertOptions = {}): ConvertResul
     };
 
     const root = parseSvg(svg, optimize, svgoConfig, floatPrecision);
+    // Fold CSS transforms into attributes before <use> expansion, so that clones inherit them.
+    applyCssProperties(root, warn);
     resolveUses(root); // inline <use> references so the walker sees concrete geometry
     const svgEl = (root.children ?? []).find((c) => c.type === 'element' && c.name === 'svg');
     if (!svgEl) throw new Error('No <svg> root element found');

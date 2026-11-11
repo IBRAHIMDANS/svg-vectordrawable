@@ -81,6 +81,15 @@ const MAY_HAVE_PATH_LENGTH = /\spathLength\s*=/;
  */
 const MAY_HAVE_NEGATIVE_SIZE = /\s(?:width|height|r|rx|ry)\s*=\s*["']\s*-/;
 
+/**
+ * svgo moves `transform` between groups and their children (`moveElemsAttrsToGroup`,
+ * `moveGroupAttrsToElems`, `collapseGroups`) and bakes it into path data (`convertPathData`)
+ * without reading the CSS `transform` property nor `transform-origin`, which the converter folds
+ * into the attribute after svgo (`applyCssProperties`); `removeNonInheritableGroupAttrs` drops
+ * `transform-origin` from groups. Keep the transforms where they are authored when one may be set.
+ */
+const MAY_HAVE_CSS_TRANSFORM = /(?<![\w-])transform\s*:|transform-(?:origin|box)/;
+
 /** svgo's own default `floatPrecision`: up to it, svgo's rounding is left exactly as it is. */
 const SVGO_FLOAT_PRECISION = 3;
 /** Above it, svgo's path and transform rounding falls back to `Math.round` (integers). */
@@ -105,6 +114,14 @@ function defaultConfigFor(svg: string, floatPrecision: number): Config {
         }
     }
     if (MAY_HAVE_NEGATIVE_SIZE.test(svg)) overrides.convertShapeToPath = false;
+    if (MAY_HAVE_CSS_TRANSFORM.test(svg)) {
+        overrides.moveElemsAttrsToGroup = false;
+        overrides.moveGroupAttrsToElems = false;
+        overrides.collapseGroups = false;
+        overrides.removeNonInheritableGroupAttrs = false;
+        if (overrides.convertPathData !== false)
+            overrides.convertPathData = { ...DEFAULT_OVERRIDES.convertPathData, applyTransforms: false };
+    }
     const params: Record<string, unknown> = { overrides };
     if (floatPrecision > SVGO_FLOAT_PRECISION) {
         // The preset hands `floatPrecision` to every plugin that rounds (cleanupNumericValues,
@@ -115,7 +132,7 @@ function defaultConfigFor(svg: string, floatPrecision: number): Config {
         params.floatPrecision = precision;
         overrides.convertTransform = { transformPrecision };
         if (overrides.convertPathData !== false)
-            overrides.convertPathData = { ...DEFAULT_OVERRIDES.convertPathData, transformPrecision };
+            overrides.convertPathData = { ...(overrides.convertPathData as object), transformPrecision };
     }
     return { plugins: [{ name: 'preset-default', params }] } as Config;
 }
