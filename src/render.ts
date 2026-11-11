@@ -179,7 +179,7 @@ function renderGroup(
     const matrix = parseTransform(el.attributes?.transform);
     const dec = matrix ? decompose(matrix) : null;
     // clipPathUnits="userSpaceOnUse" lives in the group's own user space (after its transform).
-    const clipD = ctx.clips.resolve(el.attributes ?? {});
+    const clipD = ctx.clips.resolve(el, style);
     // A sheared transform (or any transform nested under a baked one) can't be an
     // Android <group>; bake the matrix into descendant geometry instead.
     if (matrix && dec && !bake && !dec.hasSkew) {
@@ -224,7 +224,7 @@ function renderLeaf(
     if (d) {
         if (isHidden(style)) return null;
         const body = renderPath(ctx, d, el, style, pad, bake);
-        const clipD = ctx.clips.resolve(el.attributes ?? {}); // reports an unusable clip even when unpainted
+        const clipD = ctx.clips.resolve(el, style); // reports an unusable clip even when unpainted
         if (!body) return null; // paints nothing: no clip wrapper either
         const clip = clipD && bake ? transformPathData(clipD, bake) : clipD;
         return clip ? wrapClip(clip, body, pad, ctx.step) : body;

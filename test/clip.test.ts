@@ -131,17 +131,22 @@ describe('non-rendering children of a <clipPath> (TASK-069)', () => {
 });
 
 describe('clip-path values other than url(#id) (TASK-073)', () => {
-    // CSS basic shapes need the element's reference box (fill-box: its bbox), which the clip
-    // resolver does not measure: they are reported, like an external reference, never dropped silently.
+    // Values left out of the basic-shape conversion (TASK-077) are reported, like an external
+    // reference, never dropped silently.
     const UNSUPPORTED = [
-        'inset(10%)',
-        'circle(5px at 12px 12px)',
-        'ellipse(50% 25%) fill-box',
-        'polygon(0 0, 24px 0, 0 24px)',
         "path('M0 0H24V24Z')",
         'fill-box',
         'url(other.svg#c)',
         'url(https://example.com/clips.svg#c)',
+        'inset(10% round 2px)',
+        'circle(5px) view-box',
+        'circle(closest-corner)',
+        'circle(at left 2px top)',
+        'fill-box circle() stroke-box',
+        'inset(60%)',
+        'circle(-1px)',
+        'polygon(0 0, 24px)',
+        'xywh(0 0 10px 10px)',
     ];
     const ON_CIRCLE = (decl: string): string => svg(`<circle cx="12" cy="12" r="11" fill="#E53935" ${decl}/>`);
 
@@ -166,10 +171,11 @@ describe('clip-path values other than url(#id) (TASK-073)', () => {
                 expect(w!.message).toMatch(/external/);
             });
 
-            it('reports a basic shape on a group once, and renders the content unclipped', () => {
-                const doc = svg(`<g clip-path="circle(50%)">${CIRCLE}<rect width="6" height="6"/></g>`);
+            it('reports a basic shape on a stroked group once, and renders the content unclipped', () => {
+                // Default reference box: stroke-box, larger than the geometry once a stroke is painted.
+                const doc = svg(`<g clip-path="circle(50%)" stroke="#000">${CIRCLE}<rect width="6" height="6"/></g>`);
                 expect(codes(doc, optimize)).toEqual(['unsupported-clip-path']);
-                expectRendersLike(doc, optimize, svg(`<g>${CIRCLE}<rect width="6" height="6"/></g>`));
+                expectRendersLike(doc, optimize, svg(`<g stroke="#000">${CIRCLE}<rect width="6" height="6"/></g>`));
             });
 
             for (const value of ['none', 'None', 'initial', 'unset']) {
@@ -180,6 +186,189 @@ describe('clip-path values other than url(#id) (TASK-073)', () => {
                 });
             }
         });
+    }
+});
+
+describe('CSS basic shapes in clip-path (TASK-077)', () => {
+    // resvg 2.6 ignores basic shapes (it renders the element unclipped): every reference is the same
+    // element clipped by the equivalent explicit <clipPath>, computed by hand from the reference box.
+    // The element's bbox (fill-box) is 2,4 20×16: percentages of x and y differ.
+    const RECT = 'x="2" y="4" width="20" height="16" fill="#E53935"';
+    const shaped = (value: string, decl: 'attr' | 'style' = 'attr', extra = ''): string =>
+        svg(`<rect ${RECT}${extra} ${decl === 'attr' ? `clip-path="${value}"` : `style="clip-path:${value}"`}/>`);
+    const clipped = (clipContent: string, extra = ''): string =>
+        svg(`<clipPath id="ref">${clipContent}</clipPath><rect ${RECT}${extra} clip-path="url(#ref)"/>`);
+
+    const CASES: [string, string][] = [
+        ['inset(10%)', '<rect x="4" y="5.6" width="16" height="12.8"/>'],
+        ['inset(2px 4px)', '<rect x="6" y="6" width="12" height="12"/>'],
+        ['inset(1px 2px 3px 4px)', '<rect x="6" y="5" width="14" height="12"/>'],
+        ['inset(0 25% 50%)', '<rect x="7" y="4" width="10" height="8"/>'],
+        // √((20² + 16²) / 2) = √328.
+        ['circle(50%)', `<circle cx="12" cy="12" r="${Math.sqrt(328) / 2}"/>`],
+        ['circle()', '<circle cx="12" cy="12" r="8"/>'],
+        ['circle(closest-side at 25% 25%)', '<circle cx="7" cy="8" r="4"/>'],
+        ['circle(farthest-side at left top)', '<circle cx="2" cy="4" r="20"/>'],
+        ['circle(5px at 12px 4px)', '<circle cx="14" cy="8" r="5"/>'],
+        ['circle(6px at bottom)', '<circle cx="12" cy="20" r="6"/>'],
+        ['ellipse(50% 25%) fill-box', '<ellipse cx="12" cy="12" rx="10" ry="4"/>'],
+        ['ellipse()', '<ellipse cx="12" cy="12" rx="10" ry="8"/>'],
+        ['ellipse(closest-side farthest-side at 25% 75%)', '<ellipse cx="7" cy="16" rx="5" ry="12"/>'],
+        ['polygon(0 0, 100% 0, 0 100%)', '<polygon points="2,4 22,4 2,20"/>'],
+        ['polygon(nonzero, 50% 0, 100% 100%, 0 100%)', '<polygon points="12,4 22,20 2,20"/>'],
+        ['polygon(evenodd, 2px 2px, 18px 2px, 18px 14px, 2px 14px)', '<polygon points="4,6 20,6 20,18 4,18"/>'],
+        ['content-box inset(10%)', '<rect x="4" y="5.6" width="16" height="12.8"/>'],
+        ['border-box circle()', '<circle cx="12" cy="12" r="8"/>'],
+        ['circle() stroke-box', '<circle cx="12" cy="12" r="8"/>'],
+        ['CIRCLE(50% AT 0 0)', `<circle cx="2" cy="4" r="${Math.sqrt(328) / 2}"/>`],
+    ];
+
+    for (const optimize of MODES) {
+        describe(`optimize: ${optimize}`, () => {
+            for (const [value, clip] of CASES) {
+                for (const decl of ['attr', 'style'] as const) {
+                    it(`clips like the equivalent <clipPath>: ${value} (${decl})`, () => {
+                        const doc = shaped(value, decl);
+                        const { xml, warnings } = convert(doc, { optimize, strict: true });
+                        expect(warnings).toEqual([]);
+                        expect(clipCount(xml)).toBe(1);
+                        expectRendersLike(doc, optimize, clipped(clip));
+                    });
+                }
+            }
+
+            it('lays a shape out in the bbox of a group (its content united, transforms included)', () => {
+                const content =
+                    '<rect x="2" y="2" width="8" height="8" fill="#1E88E5"/>' +
+                    '<rect width="10" height="10" fill="#43A047" transform="translate(12 12)"/>';
+                const doc = svg(`<g clip-path="circle(50%)">${content}</g>`);
+                const { xml, warnings } = convert(doc, { optimize, strict: true });
+                expect(warnings).toEqual([]);
+                // bbox 2,2 20×20: r = 50% of 20.
+                const ref = svg(
+                    `<clipPath id="ref"><circle cx="12" cy="12" r="10"/></clipPath><g clip-path="url(#ref)">${content}</g>`,
+                );
+                expect(clipCount(xml)).toBe(1);
+                expectRendersLike(doc, optimize, ref);
+            });
+
+            // With optimize: true, src/normalize.ts keeps svgo from baking the transform into the geometry
+            // (it only did so for a url() clip-path), which would change the reference box.
+            it("lays a shape out in the element's own user space (after its transform)", () => {
+                const rotate = ' transform="rotate(30 12 12)"';
+                const doc = shaped('inset(25%)', 'attr', rotate);
+                expect(convert(doc, { optimize, strict: true }).warnings).toEqual([]);
+                expectRendersLike(doc, optimize, clipped('<rect x="7" y="8" width="10" height="8"/>', rotate));
+                const content = `<rect ${RECT}/><rect x="0" y="0" width="4" height="4"/>`;
+                const group = svg(`<g transform="rotate(30 12 12)" clip-path="circle(40%)">${content}</g>`);
+                expect(convert(group, { optimize, strict: true }).warnings).toEqual([]);
+                // bbox 0,0 22×20: r = 40% of √((22² + 20²) / 2) = 0.4·√442.
+                const ref = svg(
+                    `<clipPath id="ref"><circle cx="11" cy="10" r="${0.4 * Math.sqrt(442)}"/></clipPath>` +
+                        `<g transform="rotate(30 12 12)" clip-path="url(#ref)">${content}</g>`,
+                );
+                expectRendersLike(group, optimize, ref);
+            });
+
+            it('uses the geometry as stroke-box when nothing is stroked (stroke="none", stroke-width="0")', () => {
+                for (const extra of [' stroke="none"', ' stroke="#000" stroke-width="0"']) {
+                    const doc = shaped('circle()', 'attr', extra);
+                    expect(convert(doc, { optimize, strict: true }).warnings).toEqual([]);
+                    expectRendersLike(doc, optimize, clipped('<circle cx="12" cy="12" r="8"/>', extra));
+                }
+            });
+
+            it('keeps fill-box on a stroked element (the stroke is clipped, not the box)', () => {
+                const extra = ' stroke="#1E88E5" stroke-width="2"';
+                const doc = shaped('inset(10%) fill-box', 'attr', extra);
+                expect(convert(doc, { optimize, strict: true }).warnings).toEqual([]);
+                expectRendersLike(doc, optimize, clipped('<rect x="4" y="5.6" width="16" height="12.8"/>', extra));
+            });
+
+            for (const value of [
+                'inset(10%)',
+                'border-box inset(10%)',
+                'margin-box inset(10%)',
+                'inset(10%) stroke-box',
+            ]) {
+                it(`reports the stroke-box of a stroked element: ${value}`, () => {
+                    const doc = shaped(value, 'attr', ' stroke="#1E88E5" stroke-width="2"');
+                    const { xml, warnings } = convert(doc, { optimize });
+                    expect(warnings.map((w) => w.code)).toEqual(['unsupported-clip-path']);
+                    expect(warnings[0]!.message).toMatch(/stroke bounding box/);
+                    expect(clipCount(xml)).toBe(0);
+                });
+            }
+
+            it('reports an evenodd polygon whose contour crosses itself (nonzero is used)', () => {
+                // A pentagram: evenodd leaves its center out, nonzero fills it.
+                const star = 'polygon(evenodd, 50% 0, 79% 90%, 2% 35%, 98% 35%, 21% 90%)';
+                const { xml, warnings } = convert(shaped(star), { optimize });
+                expect(warnings.map((w) => w.code)).toEqual(['unsupported-clip-path']);
+                expect(warnings[0]!.message).toMatch(/polygon\(\).*crossing/);
+                expect(clipCount(xml)).toBe(1);
+            });
+
+            it('reports a shape on an element whose bbox is unknown (a <switch>)', () => {
+                const doc = svg(`<switch clip-path="circle()"><rect ${RECT}/></switch>`);
+                expect(codes(doc, optimize)).toEqual(['unsupported-clip-path']);
+            });
+        });
+    }
+});
+
+describe('non-rendered content in clip, mask and bbox walks (TASK-077)', () => {
+    // Same filter as the renderer (isNotRendered): foreign elements and failing conditional processing
+    // are skipped, without warning, by the <clipPath>, <mask> and bounding-box walks.
+    const FOREIGN = '<h:rect xmlns:h="http://example.com/h" x="0" y="0" width="24" height="24"/>';
+    const FAILING = '<rect requiredExtensions="" x="0" y="0" width="24" height="24"/>';
+    const SMALL = '<rect x="4" y="4" width="8" height="8"/>';
+    const BIG = '<rect x="0" y="0" width="24" height="24" fill="#E53935"';
+
+    for (const optimize of MODES) {
+        for (const [name, skipped] of [
+            ['a foreign element', FOREIGN],
+            ['requiredExtensions=""', FAILING],
+        ] as const) {
+            describe(`${name} (optimize: ${optimize})`, () => {
+                it('is skipped inside a <clipPath>', () => {
+                    const doc = svg(`<clipPath id="c">${skipped}${SMALL}</clipPath>${BIG} clip-path="url(#c)"/>`);
+                    const { xml, warnings } = convert(doc, { optimize, strict: true });
+                    expect(warnings).toEqual([]);
+                    expect(clipCount(xml)).toBe(1);
+                    expectRendersLike(
+                        doc,
+                        optimize,
+                        svg(`<clipPath id="c">${SMALL}</clipPath>${BIG} clip-path="url(#c)"/>`),
+                    );
+                });
+
+                it('is skipped inside a <mask>', () => {
+                    const white = SMALL.replace('/>', ' fill="#fff"/>');
+                    const doc = svg(
+                        `<mask id="m">${skipped.replace('/>', ' fill="#fff"/>')}${white}</mask>${BIG} mask="url(#m)"/>`,
+                    );
+                    const { xml, warnings } = convert(doc, { optimize, strict: true });
+                    expect(warnings).toEqual([]);
+                    expect(xml).not.toContain('mask');
+                    expectRendersLike(
+                        doc,
+                        optimize,
+                        svg(`<clipPath id="c">${SMALL}</clipPath>${BIG} clip-path="url(#c)"/>`),
+                    );
+                });
+
+                it('is left out of a group bbox (reference box of a basic shape)', () => {
+                    const doc = svg(
+                        `<g clip-path="inset(25%)">${skipped}<rect x="4" y="4" width="16" height="16" fill="#E53935"/></g>`,
+                    );
+                    const { xml, warnings } = convert(doc, { optimize, strict: true });
+                    expect(warnings).toEqual([]);
+                    expect(clipCount(xml)).toBe(1);
+                    expectRendersLike(doc, optimize, svg('<rect x="8" y="8" width="8" height="8" fill="#E53935"/>'));
+                });
+            });
+        }
     }
 });
 
