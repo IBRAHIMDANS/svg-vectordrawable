@@ -1,0 +1,133 @@
+<!doctype html>
+<html lang="en">
+    <head>
+        <meta charset="utf-8" />
+        <meta name="viewport" content="width=device-width, initial-scale=1" />
+        <meta name="color-scheme" content="light dark" />
+        <meta
+            http-equiv="Content-Security-Policy"
+            content="default-src 'self'; img-src 'self' data:; object-src 'none'; base-uri 'none'; form-action 'none'"
+        />
+        <title>SVG to Android VectorDrawable converter online | svg-vectordrawable</title>
+        <meta
+            name="description"
+            content="Convert SVG to Android VectorDrawable XML in your browser: gradients, clip-path, groups, and a warning for everything Android cannot draw. Your file is never uploaded."
+        />
+        <link rel="icon" href="data:," />
+        <link rel="stylesheet" href="style.css" />
+        <script type="module" src="app.js"></script>
+    </head>
+    <body>
+        <header class="site-header">
+            <h1>SVG to Android VectorDrawable</h1>
+            <p class="lede">
+                Paste or drop an SVG to get its VectorDrawable XML, the list of what Android cannot represent, and the
+                drawable rendered back next to the source. Everything runs in your browser: nothing is uploaded.
+            </p>
+            <nav aria-label="Project links">
+                <a href="https://github.com/IBRAHIMDANS/svg-vectordrawable">GitHub</a>
+                <a href="https://www.npmjs.com/package/svg-vectordrawable">npm</a>
+            </nav>
+        </header>
+
+        <main class="layout">
+            <section class="panel" aria-labelledby="input-title">
+                <h2 id="input-title">SVG input</h2>
+                <div id="drop-zone" class="drop-zone">
+                    <label for="svg-input">Paste SVG markup, or drop a .svg file here</label>
+                    <textarea id="svg-input" spellcheck="false" autocomplete="off" rows="12"></textarea>
+                </div>
+                <div class="actions">
+                    <label class="button" for="file-input">Open a file…</label>
+                    <input id="file-input" class="visually-hidden" type="file" accept=".svg,image/svg+xml" />
+                    <button id="example-button" type="button" class="button">Load example</button>
+                    <button id="clear-button" type="button" class="button">Clear</button>
+                </div>
+
+                <fieldset id="settings" class="settings">
+                    <legend>Options</legend>
+                    <div class="field">
+                        <label for="opt-strict">Strict mode</label>
+                        <select id="opt-strict" name="strict">
+                            <option value="off">Off: report warnings</option>
+                            <option value="lossy">Lossy: fail on lossy constructs</option>
+                            <option value="all">On: fail on lossy and approximations</option>
+                        </select>
+                    </div>
+                    <div class="field">
+                        <label for="opt-current-color">currentColor</label>
+                        <input id="opt-current-color" name="currentColor" type="text" placeholder="#000000" />
+                    </div>
+                    <div class="field">
+                        <label for="opt-float-precision">Float precision</label>
+                        <input
+                            id="opt-float-precision"
+                            name="floatPrecision"
+                            type="number"
+                            min="0"
+                            max="20"
+                            step="1"
+                            inputmode="numeric"
+                            placeholder="3"
+                        />
+                    </div>
+                    <div class="field">
+                        <label for="opt-min-sdk">minSdk</label>
+                        <input
+                            id="opt-min-sdk"
+                            name="minSdk"
+                            type="number"
+                            min="1"
+                            step="1"
+                            inputmode="numeric"
+                            placeholder="not checked"
+                        />
+                    </div>
+                    <div class="field">
+                        <label for="opt-tint">Tint</label>
+                        <input id="opt-tint" name="tint" type="text" placeholder="none, e.g. #FF6200EE" />
+                    </div>
+                </fieldset>
+            </section>
+
+            <section class="panel" aria-labelledby="output-title">
+                <h2 id="output-title">VectorDrawable XML</h2>
+                <p id="status" class="status" role="status" aria-live="polite"></p>
+                <textarea
+                    id="xml-output"
+                    readonly
+                    spellcheck="false"
+                    rows="12"
+                    aria-labelledby="output-title"
+                ></textarea>
+                <div class="actions">
+                    <button id="copy-button" type="button" class="button primary" disabled>Copy XML</button>
+                </div>
+
+                <h3 id="warnings-title">Warnings</h3>
+                <ul id="warnings" class="warnings" aria-labelledby="warnings-title"></ul>
+
+                <h3>Preview</h3>
+                <div class="previews">
+                    <figure>
+                        <div id="source-preview" class="preview"></div>
+                        <figcaption>Source SVG</figcaption>
+                    </figure>
+                    <figure>
+                        <div id="vd-preview" class="preview"></div>
+                        <figcaption>VectorDrawable, rendered back to SVG</figcaption>
+                    </figure>
+                </div>
+            </section>
+        </main>
+
+        <footer class="site-footer">
+            <p>
+                Uses the lightweight browser build of
+                <a href="https://github.com/IBRAHIMDANS/svg-vectordrawable">svg-vectordrawable</a>, without svgo
+                normalization: inline <code>&lt;style&gt;</code> CSS is not applied. For that, install the package and
+                use its CLI (<code>svgvd icon.svg</code>) or its Node API.
+            </p>
+        </footer>
+    </body>
+</html>
