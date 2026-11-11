@@ -83,6 +83,10 @@ function nestedSvg(
     return { group, viewport: layout.viewport };
 }
 
+/** Warning message for a non-empty `systemLanguage` on `<name>` (the root `<svg>` included). */
+export const systemLanguageIgnored = (name: string): string =>
+    `systemLanguage on <${name}> depends on the device language, which a VectorDrawable cannot test; ignored.`;
+
 /**
  * Reports the unsupported presentation attributes of an element (once per source element).
  * `maskReason` says why its mask is not clip-equivalent (see `ClipPaths.resolveMask`).
@@ -93,7 +97,7 @@ function reportUnsupportedAttrs(ctx: ConvertContext, el: XastElement, name: stri
     if (el.attributes?.systemLanguage !== undefined)
         ctx.warn({
             code: 'unsupported-attribute',
-            message: `systemLanguage on <${name}> depends on the device language, which a VectorDrawable cannot test; ignored.`,
+            message: systemLanguageIgnored(name),
             node: name,
         });
     for (const attr of UNSUPPORTED_ATTRS) {
