@@ -1264,7 +1264,11 @@ describe('clip-equivalent masks', () => {
             '<linearGradient id="g"><stop stop-color="#fff"/><stop offset="1" stop-color="#000"/></linearGradient><rect width="10" height="10" fill="url(#g)"/>',
             /gradient|pattern/,
         ],
-        ['an evenodd fill rule', '<path d="M0 0h10v10H0zM2 2h6v6H2z" fill="#fff" fill-rule="evenodd"/>', /evenodd/],
+        [
+            'an evenodd fill rule with crossing contours',
+            '<path d="M0 0h10v10H0zM5 5h10v10H5z" fill="#fff" fill-rule="evenodd"/>',
+            /evenodd/,
+        ],
         ['a filter inside', '<rect width="10" height="10" fill="#fff" filter="url(#f)"/>', /filter/],
         ['text inside', '<rect width="10" height="10" fill="#fff"/><text>x</text>', /<text>/],
         ['currentColor (unknown root color)', '<rect width="10" height="10" fill="currentColor"/>', /solid color/],
