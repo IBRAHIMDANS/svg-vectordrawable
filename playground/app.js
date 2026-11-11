@@ -2,7 +2,14 @@
 // worker) and renders the outcome. Every node is built with createElement / textContent, and both
 // previews are `<img>` data URLs, so neither the user's SVG nor the converter output is ever parsed
 // as HTML in this document.
-import { MAX_INPUT_BYTES, buildOptions, createConverter, describeError, svgDataUrl } from './core.js';
+import {
+    MAX_INPUT_BYTES,
+    buildOptions,
+    createConverter,
+    describeError,
+    describeUnresolvedColors,
+    svgDataUrl,
+} from './core.js';
 
 const EXAMPLE_SVG = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">
   <defs>
@@ -39,6 +46,12 @@ const el = {
     vdPreview: document.getElementById('vd-preview'),
 };
 
+// Lists the color references the drawable preview drew in gray; built here, under the preview.
+el.unresolvedColors = document.createElement('p');
+el.unresolvedColors.className = 'preview-note';
+el.unresolvedColors.hidden = true;
+el.vdPreview.after(el.unresolvedColors);
+
 const converter = createConverter(() => new Worker(new URL('worker.js', import.meta.url)));
 let debounceTimer;
 
@@ -61,6 +74,12 @@ function setPreview(container, svg, alt, fallback) {
     img.addEventListener('error', () => setPreview(container, null, alt, 'The browser cannot render this SVG.'));
     img.src = svgDataUrl(svg);
     container.replaceChildren(img);
+}
+
+function renderUnresolvedColors(references) {
+    const text = describeUnresolvedColors(references);
+    el.unresolvedColors.textContent = text;
+    el.unresolvedColors.hidden = !text;
 }
 
 function renderWarnings(warnings) {
@@ -91,6 +110,7 @@ function resetOutput() {
     el.copyButton.disabled = true;
     el.warnings.replaceChildren();
     setPreview(el.vdPreview, null, '', 'No drawable yet.');
+    renderUnresolvedColors([]);
 }
 
 function render(outcome) {
@@ -109,6 +129,7 @@ function render(outcome) {
             'The generated VectorDrawable, rendered back to SVG',
             `No preview: ${outcome.previewError || 'unknown error'}`,
         );
+        renderUnresolvedColors(outcome.unresolvedColors);
         return;
     }
     resetOutput();
