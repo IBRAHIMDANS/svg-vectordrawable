@@ -66,6 +66,21 @@ function exceedsPathDataLength(svg: string, limit: number): boolean {
  */
 const MAY_DASH = /stroke-dasharray/;
 
+/**
+ * `pathLength` rescales the dash pattern. svgo follows SVG 1.1, where only `<path>` accepts it:
+ * `removeUnknownsAndDefaults` strips it from `<rect>`, `<circle>`… (dashes 1 unit long instead of
+ * the authored fraction of the perimeter), and `mergePaths` joins paths that each carry it (the
+ * scale then uses the length of the merged path).
+ */
+const MAY_HAVE_PATH_LENGTH = /\spathLength\s*=/;
+
+/**
+ * A negative `width` / `height` / `r` / `rx` / `ry` is an error that disables rendering of the
+ * shape (the converter skips it with `empty-path`), but svgo's `convertShapeToPath` turns it into
+ * a path that gets drawn. Keep the shapes as elements whenever such a value may be present.
+ */
+const MAY_HAVE_NEGATIVE_SIZE = /\s(?:width|height|r|rx|ry)\s*=\s*["']\s*-/;
+
 /** svgo's own default `floatPrecision`: up to it, svgo's rounding is left exactly as it is. */
 const SVGO_FLOAT_PRECISION = 3;
 /** Above it, svgo's path and transform rounding falls back to `Math.round` (integers). */
@@ -83,7 +98,13 @@ function defaultConfigFor(svg: string, floatPrecision: number): Config {
         // reads as "no dashes": the stroke would turn solid with no warning. The converter rounds
         // numeric attributes itself, so skipping the plugin only keeps the authored values.
         overrides.cleanupNumericValues = false;
+        // pathLength only affects dashes here (markers are not converted).
+        if (MAY_HAVE_PATH_LENGTH.test(svg)) {
+            overrides.removeUnknownsAndDefaults = { unknownAttrs: false };
+            overrides.mergePaths = false;
+        }
     }
+    if (MAY_HAVE_NEGATIVE_SIZE.test(svg)) overrides.convertShapeToPath = false;
     const params: Record<string, unknown> = { overrides };
     if (floatPrecision > SVGO_FLOAT_PRECISION) {
         // The preset hands `floatPrecision` to every plugin that rounds (cleanupNumericValues,
