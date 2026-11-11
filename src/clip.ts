@@ -351,8 +351,8 @@ export class ClipPaths {
      */
     private flatten(node: XastElement, m: Matrix | null, out: string[], rule: ClipRule): void {
         for (const c of node.children ?? []) {
-            if (c.type !== 'element' || !c.name) continue;
-            if (isDisplayNone(c)) continue;
+            // Same filter as the mask and bbox walks: <title>, <desc>, <script>… draw nothing.
+            if (c.type !== 'element' || !c.name || SKIP.has(c.name) || isDisplayNone(c)) continue;
             const mm = childMatrix(c, m);
             const childRule = clipRuleOf(c, rule);
             if (GROUPS.has(c.name)) {
