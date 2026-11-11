@@ -108,9 +108,13 @@ export class ClipPaths {
         this.collectMasks(svgEl, [svgEl]);
     }
 
-    /** Resolves an element's `clip-path="url(#id)"` into pathData; null when absent or unusable. */
+    /**
+     * Resolves an element's `clip-path: url(#id)` into pathData; null when absent or unusable. Read
+     * like any presentation property (inline `style` first, where svgo inlines `<style>` rules, then
+     * the attribute); never inherited, so only the element's own attributes count.
+     */
     resolve(attrs: Record<string, string>): string | null {
-        const m = /^url\(#([^)]+)\)/.exec((attrs['clip-path'] ?? '').trim());
+        const m = URL_REF.exec((presentation({ type: 'element', attributes: attrs }, 'clip-path') ?? '').trim());
         if (!m) return null;
         const id = m[1]!;
         const clip = this.byId.get(id);
