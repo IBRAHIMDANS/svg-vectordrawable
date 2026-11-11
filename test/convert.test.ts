@@ -1309,3 +1309,44 @@ describe('evenodd clip paths (rewritten to an equivalent nonzero geometry)', () 
         expect(warnings).toContainEqual(expect.objectContaining({ code: 'unsupported-clip-path' }));
     });
 });
+
+describe('invalid options and sizes are rejected instead of producing broken XML', () => {
+    const plain = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M2.123456 2h20v20H2z"/></svg>';
+
+    it.each([Number.NaN, -1, 1.5, 21, Number.POSITIVE_INFINITY])('rejects floatPrecision %s', (floatPrecision) => {
+        expect(() => convert(plain, { floatPrecision })).toThrow(TypeError);
+    });
+
+    it('accepts floatPrecision 0 and 20', () => {
+        expect(convert(plain, { floatPrecision: 0 }).xml).toContain('android:pathData="M2 2h20v20H2z"');
+        expect(convert(plain, { floatPrecision: 20, optimize: false }).xml).toContain('M2.123456 2');
+    });
+
+    it.each([-1, 1.5, Number.NaN])('rejects indent %s', (indent) => {
+        expect(() => convert(plain, { indent })).toThrow(TypeError);
+    });
+
+    it.each(['wat', 'none', 'currentColor', ''])('rejects currentColor %j', (currentColor) => {
+        expect(() => convert(plain, { currentColor })).toThrow(TypeError);
+    });
+
+    it.each(['0 0 0 0', '0 0 24 0', '0 0 -24 24'])('rejects viewBox "%s"', (viewBox) => {
+        const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="${viewBox}"><path d="M0 0h9v9z"/></svg>`;
+        expect(() => convert(svg)).toThrow(/Invalid viewBox/);
+    });
+
+    it.each(['-5', '0'])('ignores width="%s" (falls back to the viewBox)', (width) => {
+        const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="10" viewBox="0 0 20 10"><path d="M0 0h9v9z"/></svg>`;
+        const { xml } = convert(svg);
+        expect(xml).toContain('android:width="20dp"');
+        expect(xml).toContain('android:viewportWidth="20"');
+    });
+
+    it('ignores a negative width without a viewBox (falls back to 24)', () => {
+        const { xml } = convert(
+            '<svg xmlns="http://www.w3.org/2000/svg" width="-5" height="10"><path d="M0 0h9v9z"/></svg>',
+        );
+        expect(xml).toContain('android:width="24dp"');
+        expect(xml).not.toContain('-5');
+    });
+});

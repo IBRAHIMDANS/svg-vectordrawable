@@ -1,7 +1,7 @@
 import { toAndroidColor } from './color.js';
 import { collectByName, GROUPS, isDisplayNone, pathDataOf, SKIP } from './elements.js';
 import { escapeXml } from './format.js';
-import type { XastElement } from './gradient.js';
+import type { XastElement } from './ast.js';
 import { initialStyle, isHidden, resolveStyle, strokeWidthOf, type Inherited } from './inherited.js';
 import { evenOddToNonZero, normalizeArcFlags, pathBBox, transformPathData } from './pathData.js';
 import { SHAPE_NAMES } from './shapes.js';

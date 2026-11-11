@@ -1,4 +1,4 @@
-import type { XastElement } from './gradient.js';
+import type { XastElement } from './ast.js';
 import { presentation } from './style.js';
 import { formatMatrix } from './transform.js';
 import { parseLength } from './units.js';
@@ -12,6 +12,12 @@ import { parseViewBox, viewBoxMatrix } from './viewport.js';
 
 /** Max nesting of `<use>` → `<use>` we expand before giving up (guards against reference cycles). */
 const MAX_DEPTH = 10;
+
+/**
+ * Max nodes cloned by `<use>` expansion in one document. Nesting multiplies instances (ten levels
+ * of ten `<use>` each is 10^10 clones from a few hundred bytes), so depth alone bounds nothing.
+ */
+export const MAX_EXPANDED_NODES = 100_000;
 
 /** Attributes consumed by `<use>` itself; they must not leak onto the inlined group as presentation. */
 const USE_GEOMETRY_ATTRS = new Set(['href', 'xlink:href', 'x', 'y', 'width', 'height', 'id']);
@@ -44,12 +50,24 @@ function indexById(root: XastElement): Map<string, XastElement> {
     return byId;
 }
 
+/** Counts the nodes cloned so far; throws once the document's expansion budget is spent. */
+type CloneBudget = () => void;
+
+function cloneBudget(): CloneBudget {
+    let cloned = 0;
+    return () => {
+        if (++cloned > MAX_EXPANDED_NODES)
+            throw new Error(`<use> expansion exceeds ${MAX_EXPANDED_NODES} elements; refusing to convert.`);
+    };
+}
+
 /** Deep-clones an element so inlining never mutates (or aliases) the original target. */
-function cloneElement(node: XastElement): XastElement {
+function cloneElement(node: XastElement, spend: CloneBudget): XastElement {
+    spend();
     const clone: XastElement = { type: node.type };
     if (node.name !== undefined) clone.name = node.name;
     if (node.attributes !== undefined) clone.attributes = { ...node.attributes };
-    if (node.children !== undefined) clone.children = node.children.map(cloneElement);
+    if (node.children !== undefined) clone.children = node.children.map((child) => cloneElement(child, spend));
     return clone;
 }
 
@@ -128,8 +146,8 @@ function symbolViewport(
  * presentation attributes. A `<symbol>` target is treated as a group (cloned, then renamed to `g`);
  * one with a `viewBox` is also scaled into, and clipped to, its viewport (see `symbolViewport`).
  */
-function buildReplacement(use: XastElement, target: XastElement, nextId: IdAllocator): XastElement {
-    const clone = cloneElement(target);
+function buildReplacement(use: XastElement, target: XastElement, nextId: IdAllocator, spend: CloneBudget): XastElement {
+    const clone = cloneElement(target, spend);
     let children: XastElement[] = [clone];
     if (clone.name === 'symbol') {
         clone.name = 'g';
@@ -161,11 +179,12 @@ function buildReplacement(use: XastElement, target: XastElement, nextId: IdAlloc
  * Expands `<use>` elements in place. For each `<use>` with a resolvable local `#id`, the target is
  * deep-cloned and wrapped in a `<g>`; unresolvable references (missing target or non-`#` href) are
  * left untouched so they can be reported downstream. `<defs>` is preserved (gradients/clip-paths
- * still live there).
+ * still live there). Throws when the expansion clones more than `MAX_EXPANDED_NODES` nodes.
  */
 export function resolveUses(root: XastElement): void {
     const byId = indexById(root);
     const nextId = idAllocator(new Set(byId.keys()));
+    const spend = cloneBudget();
 
     const resolveChildren = (node: XastElement, depth: number): void => {
         const children = node.children;
@@ -179,7 +198,7 @@ export function resolveUses(root: XastElement): void {
                 const id = depth > 0 ? targetId(child) : undefined;
                 const target = id !== undefined ? byId.get(id) : undefined;
                 if (target !== undefined) {
-                    const replacement = buildReplacement(child, target, nextId);
+                    const replacement = buildReplacement(child, target, nextId, spend);
                     // Expand any `<use>` nested in the freshly inlined subtree, with less budget.
                     resolveChildren(replacement, depth - 1);
                     children[i] = replacement;

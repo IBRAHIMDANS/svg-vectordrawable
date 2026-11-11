@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { convert } from '../src/index.js';
-import { resolveUses } from '../src/useResolver.js';
-import type { XastElement } from '../src/gradient.js';
+import { MAX_EXPANDED_NODES, resolveUses } from '../src/useResolver.js';
+import type { XastElement } from '../src/ast.js';
 
 const el = (name: string, attributes: Record<string, string> = {}, children: XastElement[] = []): XastElement => ({
     type: 'element',
@@ -309,5 +309,25 @@ describe('resolveUses — <symbol viewBox> viewport', () => {
             // The viewport clip (10×10 at the use origin) must reach the output.
             expect(xml).toContain('<clip-path android:pathData="M0,0h10v10h-10z" />');
         }
+    });
+});
+
+describe('resolveUses — expansion budget', () => {
+    /** `levels` nested groups of `fanout` `<use>` each: fanout^levels instances of one path. */
+    const bomb = (levels: number, fanout: number): string => {
+        let defs = '<path id="u0" d="M0 0h1v1z"/>';
+        for (let i = 1; i <= levels; i++) defs += `<g id="u${i}">${`<use href="#u${i - 1}"/>`.repeat(fanout)}</g>`;
+        return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><defs>${defs}</defs><use href="#u${levels}"/></svg>`;
+    };
+
+    it('refuses a document whose <use> nesting multiplies past the budget', () => {
+        const started = performance.now();
+        expect(() => convert(bomb(9, 10), { optimize: false })).toThrow(`exceeds ${MAX_EXPANDED_NODES} elements`);
+        expect(performance.now() - started).toBeLessThan(2000);
+    });
+
+    it('still expands a large but bounded document', () => {
+        const { xml } = convert(bomb(3, 10), { optimize: false });
+        expect(xml.match(/<path/g)).toHaveLength(1000);
     });
 });

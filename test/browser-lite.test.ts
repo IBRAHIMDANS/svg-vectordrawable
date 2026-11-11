@@ -90,6 +90,15 @@ describe('browser-lite entry', () => {
         ])
             expect(() => lite.convert(svg), svg).toThrow(/Invalid SVG/);
     });
+
+    it('refuses an entity expansion bomb, like svgo', () => {
+        const doctype =
+            `<!DOCTYPE svg [<!ENTITY d "xxxxxxxxxx"><!ENTITY c "${'&d;'.repeat(100)}">` +
+            `<!ENTITY b "${'&c;'.repeat(100)}"><!ENTITY a "${'&b;'.repeat(100)}">]>`;
+        const svg = `${doctype}<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><title>&a;</title><path d="M2 2h20v20H2z"/></svg>`;
+        expect(() => lite.convert(svg)).toThrow(/entity count exceeds max entity count/);
+        expect(() => convertMain(svg)).toThrow(/entity count exceeds max entity count/);
+    });
 });
 
 describe('svgo-lite parser', () => {

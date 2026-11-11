@@ -1,4 +1,4 @@
-import type { Viewport, XastElement } from './gradient.js';
+import type { Viewport, XastElement } from './ast.js';
 import { presentation } from './style.js';
 import { IDENTITY, multiply, type Matrix } from './transform.js';
 import { parseLength } from './units.js';
@@ -72,16 +72,29 @@ export interface RootLayout {
     viewBox: Viewport;
 }
 
+/** A length that defines a size: positive and finite, otherwise NaN (falsy, like an unparseable one). */
+function positiveLength(raw: string | undefined): number {
+    const value = parseLength(raw);
+    return value > 0 && Number.isFinite(value) ? value : NaN;
+}
+
 /**
- * Lays out the root `<svg>`. A percentage, a font-relative unit (or a missing value) does not
- * define a size, so width/height fall back to the viewBox (then 24).
+ * Lays out the root `<svg>`. A percentage, a font-relative unit, a zero or negative length (or a
+ * missing value) does not define a size, so width/height fall back to the viewBox (then 24).
+ * Throws on a viewBox whose width or height is not positive.
  */
 export function rootLayout(attrs: Record<string, string>): RootLayout {
     const parsed = viewBoxNumbers(attrs.viewBox?.trim() || undefined);
     const hasViewBox = parsed !== undefined;
-    const [minX, minY, vpW, vpH] = parsed ?? [0, 0, parseLength(attrs.width) || 24, parseLength(attrs.height) || 24];
-    const width = parseLength(attrs.width) || vpW || 24;
-    const height = parseLength(attrs.height) || vpH || 24;
+    // An empty viewBox disables rendering and a negative one is an error (SVG 2, 8.6): either way
+    // there is no viewport to emit, and Android rejects a non-positive one.
+    if (parsed !== undefined && !(parsed[2] > 0 && parsed[3] > 0))
+        throw new Error(`Invalid viewBox "${attrs.viewBox?.trim()}": its width and height must be positive`);
+    const attrWidth = positiveLength(attrs.width);
+    const attrHeight = positiveLength(attrs.height);
+    const [minX, minY, vpW, vpH] = parsed ?? [0, 0, attrWidth || 24, attrHeight || 24];
+    const width = attrWidth || vpW;
+    const height = attrHeight || vpH;
 
     // VectorDrawable stretches its viewport onto width×height; SVG keeps the aspect ratio
     // (preserveAspectRatio, default xMidYMid meet). Grow/shrink the viewport and align the content.

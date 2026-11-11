@@ -1,6 +1,6 @@
 import type { ConvertContext } from './context.js';
 import { GROUPS, isDisplayNone, pathDataOf, SKIP, UNSUPPORTED } from './elements.js';
-import type { BBox, XastElement } from './gradient.js';
+import type { BBox, XastElement } from './ast.js';
 import { fillOf, isHidden, resolveStyle, strokeWidthOf, type Inherited } from './inherited.js';
 import { pathBBox, transformPathData } from './pathData.js';
 import { isNone, presentation } from './style.js';

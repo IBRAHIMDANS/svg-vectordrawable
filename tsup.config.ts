@@ -1,50 +1,52 @@
-import { defineConfig } from 'tsup';
+import { defineConfig, type Options } from 'tsup';
+
+/**
+ * A browser entry: an ESM build with its own declaration file (index.d.ts would advertise the
+ * Node-only file helpers) and a minified IIFE exposing the global `svgvd` for a `<script>` tag.
+ */
+function browserBuilds(name: string, svgoAlias: string, extra: Options = {}): Options[] {
+    const entry = { [name]: `src/${name}.ts` };
+    const shared: Options = {
+        entry,
+        sourcemap: false,
+        platform: 'browser',
+        esbuildOptions(o) {
+            o.alias = { ...(o.alias ?? {}), svgo: svgoAlias };
+        },
+        ...extra,
+    };
+    return [
+        { ...shared, format: ['esm'], dts: { entry } },
+        { ...shared, format: ['iife'], globalName: 'svgvd', minify: true, dts: false },
+    ];
+}
 
 export default defineConfig([
-    // Node library: ESM + CJS + types.
+    // Node library, CommonJS + its types.
     {
         entry: ['src/index.ts'],
-        format: ['esm', 'cjs'],
+        format: ['cjs'],
         dts: true,
         clean: true,
         sourcemap: false,
         target: 'node18',
     },
-    // CLI: ESM only, no types. The `bin` points to dist/cli.js and the `import.meta.url`
-    // entry-point guard in src/cli.ts only works in ESM. The shebang is preserved by tsup.
+    // Node library and CLI, ESM. Built together with code splitting so that dist/cli.js shares the
+    // converter with dist/index.js (one chunk) instead of carrying a second copy. The CLI is ESM
+    // only: `bin` points to dist/cli.js and its `import.meta.url` entry-point guard needs ESM. The
+    // shebang is preserved by tsup.
     {
-        entry: ['src/cli.ts'],
+        entry: { index: 'src/index.ts', cli: 'src/cli.ts' },
         format: ['esm'],
-        dts: false,
+        splitting: true,
+        dts: { entry: { index: 'src/index.ts' } },
         sourcemap: false,
         target: 'node18',
     },
     // Browser build: same API, but svgo resolves to its browser bundle (no Node built-ins).
-    {
-        entry: { browser: 'src/browser.ts' },
-        format: ['esm', 'iife'],
-        globalName: 'svgvd',
-        // Own declaration file: index.d.ts would advertise the Node-only file helpers.
-        dts: { entry: { browser: 'src/browser.ts' } },
-        sourcemap: false,
-        platform: 'browser',
-        esbuildOptions(o) {
-            o.alias = { ...(o.alias ?? {}), svgo: 'svgo/browser' };
-        },
-    },
+    ...browserBuilds('browser', 'svgo/browser'),
     // Lightweight browser build: same API (global `svgvd` too), optimize:false only. `svgo` is
     // bundled from src/svgo-lite.ts (small XML parser + color table) instead of svgo itself,
     // which keeps svgo's plugins and CSS tooling (~1 MB) out of both outputs.
-    {
-        entry: { 'browser-lite': 'src/browser-lite.ts' },
-        format: ['esm', 'iife'],
-        globalName: 'svgvd',
-        dts: { entry: { 'browser-lite': 'src/browser-lite.ts' } },
-        sourcemap: false,
-        platform: 'browser',
-        noExternal: ['svgo'],
-        esbuildOptions(o) {
-            o.alias = { ...(o.alias ?? {}), svgo: './src/svgo-lite.ts' };
-        },
-    },
+    ...browserBuilds('browser-lite', './src/svgo-lite.ts', { noExternal: ['svgo'] }),
 ]);

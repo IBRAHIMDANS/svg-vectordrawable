@@ -42,6 +42,26 @@ describe('normalize: mergePaths threshold', () => {
     }, 20_000);
 });
 
+describe('normalize: convertPathData threshold', () => {
+    const zigzag = (n: number): string => `<path fill="none" stroke="#000" d="M0 0${'l1 1l1-1'.repeat(n / 2)}"/>`;
+
+    it('keeps svgo path optimization on ordinary paths', () => {
+        // svgo rewrites `L10 0` as the shorter `h10`.
+        expect(convert(svg('<path d="M0 0L10 0L10 10z"/>')).xml).toContain('android:pathData="M0 0h10v10z"');
+    });
+
+    it('converts a 40,000-segment path with optimize:true in near-linear time', () => {
+        const input = svg(zigzag(40_000));
+        const start = performance.now();
+        const { xml } = convert(input);
+        const elapsed = performance.now() - start;
+        // Same geometry as without svgo: the path is emitted as authored.
+        expect(xml).toBe(convert(input, { optimize: false }).xml);
+        // ~0.1 s locally (about 10 s with convertPathData on); the bound only catches the blow-up.
+        expect(elapsed).toBeLessThan(5_000);
+    }, 30_000);
+});
+
 describe('normalize: user svgoConfig', () => {
     it('is used as-is: mergePaths stays on for large inputs', () => {
         const svgoConfig = { plugins: ['preset-default' as const] };

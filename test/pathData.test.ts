@@ -207,7 +207,9 @@ describe('normalizeArcFlags', () => {
     });
 
     it('leaves the rest of the path untouched', () => {
-        expect(normalizeArcFlags('M0,0L5-5a2 2 0 0110 0c1.5.5 2 2 3 3z')).toBe('M0,0L5-5a2 2 0 0 1 10 0c1.5.5 2 2 3 3z');
+        expect(normalizeArcFlags('M0,0L5-5a2 2 0 0110 0c1.5.5 2 2 3 3z')).toBe(
+            'M0,0L5-5a2 2 0 0 1 10 0c1.5.5 2 2 3 3z',
+        );
     });
 
     it('returns a path without arcs strictly unchanged', () => {

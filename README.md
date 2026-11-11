@@ -131,7 +131,7 @@ import { convert } from 'svg-vectordrawable/browser';
 const { xml } = convert(svgString);
 ```
 
-`svg-vectordrawable/browser-lite` is the same API without svgo (116 KB instead of 1.1 MB for the
+`svg-vectordrawable/browser-lite` is the same API without svgo (68 KB instead of 625 KB for the minified
 IIFE build): conversion always runs with `optimize: false`, so `<style>` CSS is not inlined and
 shapes are converted as authored.
 

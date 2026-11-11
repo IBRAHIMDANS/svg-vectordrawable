@@ -1,4 +1,4 @@
-import type { XastElement } from './gradient.js';
+import type { XastElement } from './ast.js';
 import { parseStyle } from './style.js';
 import { parseLength, parseOpacity } from './units.js';
 import { diagonal, type Viewport } from './viewport.js';

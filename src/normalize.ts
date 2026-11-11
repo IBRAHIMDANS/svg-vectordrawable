@@ -1,11 +1,6 @@
 import { optimize } from './svgo.js';
 import type { Config } from 'svgo';
-import type { XastElement } from './gradient.js';
-
-export interface XastRoot {
-    type: 'root';
-    children: XastElement[];
-}
+import type { XastRoot } from './ast.js';
 
 /**
  * Default normalization: flatten inline `<style>`, turn shapes into paths, bake transforms and
@@ -45,6 +40,26 @@ function exceedsDrawableCount(svg: string, limit: number): boolean {
 }
 
 /**
+ * svgo's `convertPathData` is quadratic in the number of relative commands of one path, whatever
+ * its parameters. Measured on a single path of relative lines: 5,000 segments ≈ 50 ms, 10,000 ≈
+ * 0.5 s, 20,000 ≈ 2.5 s, 80,000 ≈ 53 s (61 ms without it). Icons sit far below the threshold and
+ * keep the optimization (shorter `pathData`); a document holding a longer `d` is converted as
+ * authored, as with `optimize: false`.
+ */
+const CONVERT_PATH_DATA_MAX_LENGTH = 50_000;
+
+const PATH_DATA_ATTR = /\sd\s*=\s*(?:"([^"]*)"|'([^']*)')/g;
+
+/** True when some `d` attribute is longer than `limit` characters. */
+function exceedsPathDataLength(svg: string, limit: number): boolean {
+    if (svg.length <= limit) return false;
+    for (const m of svg.matchAll(PATH_DATA_ATTR)) {
+        if ((m[1] ?? m[2] ?? '').length > limit) return true;
+    }
+    return false;
+}
+
+/**
  * SVG starts the dash pattern of a `<circle>` / `<ellipse>` at (cx + rx, cy) and runs clockwise.
  * svgo's `convertArcs` rewrites them into paths starting elsewhere, which shifts every dash; keep
  * them as elements (the converter emits them in the SVG direction) whenever dashes may be involved.
@@ -54,6 +69,7 @@ const MAY_DASH = /stroke-dasharray/;
 function defaultConfigFor(svg: string): Config {
     const overrides: Record<string, unknown> = { ...DEFAULT_OVERRIDES };
     if (exceedsDrawableCount(svg, MERGE_PATHS_MAX_ELEMENTS)) overrides.mergePaths = false;
+    if (exceedsPathDataLength(svg, CONVERT_PATH_DATA_MAX_LENGTH)) overrides.convertPathData = false;
     if (MAY_DASH.test(svg)) overrides.convertShapeToPath = { convertArcs: false };
     return { plugins: [{ name: 'preset-default', params: { overrides } }] } as Config;
 }

@@ -1,5 +1,6 @@
 import type { ClipPaths } from './clip.js';
-import type { RawGradient, XastElement } from './gradient.js';
+import type { XastElement } from './ast.js';
+import type { RawGradient } from './gradient.js';
 import type { Warning } from './types.js';
 
 /** State shared by the renderers of one conversion. */
