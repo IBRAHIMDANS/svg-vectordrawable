@@ -2,9 +2,9 @@ import { describe, expect, it } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import type { Config } from 'svgo';
-import { convert } from '../src/index.js';
+import { convert, ConversionError } from '../src/index.js';
 import type { XastElement } from '../src/ast.js';
+import { parseSvg } from '../src/normalize.js';
 import { applyCssProperties } from '../src/style.js';
 import { IDENTITY, parseCssTransform, parseTransform, parseTransformOrigin, type Matrix } from '../src/transform.js';
 import { WARNING_CATEGORIES, type Warning } from '../src/types.js';
@@ -81,20 +81,13 @@ describe('parseTransformOrigin', () => {
 /** Runs `applyCssProperties` on `<svg>…body…</svg>` and returns its first child plus the warnings. */
 function fold(body: string, rootAttrs = ''): { el: XastElement; root: XastElement; warnings: Warning[] } {
     const warnings: Warning[] = [];
-    let captured: XastElement | undefined;
-    const capture = {
-        name: 'capture',
-        fn: (root: XastElement) => {
-            applyCssProperties(root, (w) => warnings.push(w));
-            captured = root;
-            return {};
-        },
-    };
-    // svgo is only the parser here (no optimization plugin), as in parseSvg with optimize: false.
-    convert(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"${rootAttrs}>${body}</svg>`, {
-        svgoConfig: { plugins: [capture] } as unknown as Config,
-    });
-    const svg = captured!.children!.find((c) => c.name === 'svg')!;
+    // svgo is only the parser here (no optimization plugin), as with optimize: false.
+    const root = parseSvg(
+        `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"${rootAttrs}>${body}</svg>`,
+        false,
+    );
+    applyCssProperties(root, (w) => warnings.push(w));
+    const svg = root.children.find((c) => c.name === 'svg')!;
     return { el: svg.children!.find((c) => c.type === 'element')!, root: svg, warnings };
 }
 
@@ -188,47 +181,34 @@ describe('applyCssProperties: mix-blend-mode', () => {
     });
 });
 
-/** svgo's preset as `parseSvg` configures it (src/normalize.ts DEFAULT_OVERRIDES). */
-const PRESET_OVERRIDES = {
-    inlineStyles: { onlyMatchedOnce: false },
-    convertShapeToPath: { convertArcs: true },
-    convertPathData: { convertToQ: false },
-    cleanupIds: { remove: false },
-};
-
-/**
- * `convert` with `applyCssProperties` run right after parsing (where `src/convert.ts` is to call
- * it): an svgo plugin placed after the preset (`optimize: true`) or alone (`optimize: false`).
- */
-function convertWithCss(svg: string, optimize: boolean, overrides: Record<string, unknown> = {}) {
-    const warnings: Warning[] = [];
-    const css = {
-        name: 'apply-css-properties',
-        fn: (root: XastElement) => {
-            applyCssProperties(root, (w) => warnings.push(w));
-            return {};
-        },
-    };
-    const preset = { name: 'preset-default', params: { overrides: { ...PRESET_OVERRIDES, ...overrides } } };
-    const result = convert(svg, { svgoConfig: { plugins: optimize ? [preset, css] : [css] } as unknown as Config });
-    return { xml: result.xml, warnings: [...warnings, ...result.warnings] };
-}
-
-/**
- * The preset change `src/normalize.ts` needs when the source uses a CSS transform or
- * `transform-origin`: svgo moves group transforms between parent and children and bakes `transform`
- * into path data without reading the CSS `transform` nor `transform-origin`, and drops
- * `transform-origin` from groups.
- */
-const KEEP_TRANSFORMS = {
-    moveElemsAttrsToGroup: false,
-    moveGroupAttrsToElems: false,
-    collapseGroups: false,
-    removeNonInheritableGroupAttrs: false,
-    convertPathData: { ...PRESET_OVERRIDES.convertPathData, applyTransforms: false },
-};
+describe('applyCssProperties: path-length', () => {
+    it('reports the CSS property (tentative) as unsupported-style, not the attribute', () => {
+        expect(fold('<rect width="4" height="4" style="path-length: 10px"/>').warnings).toEqual([
+            {
+                code: 'unsupported-style',
+                message: 'path-length: 10px on <rect> is not supported (only the pathLength attribute); ignored.',
+                node: 'rect',
+            },
+        ]);
+        expect(fold('<rect width="4" height="4" style="path-length: none"/>').warnings).toEqual([]);
+        expect(fold('<rect width="4" height="4" pathLength="10"/>').warnings).toEqual([]);
+    });
+});
 
 const codes = (warnings: Warning[]): string[] => warnings.map((w) => w.code).filter((c) => c !== 'large-vector');
+
+/** The `ConversionError` thrown by `run`, or a failure when it converts. */
+function conversionError(run: () => unknown): ConversionError {
+    try {
+        run();
+    } catch (err) {
+        if (err instanceof ConversionError) return err;
+        throw err;
+    }
+    throw new Error('expected a ConversionError');
+}
+
+const MODES = [false, true] as const;
 
 describe('wpt-repro: CSS transform', () => {
     const svg = repro('wpt-css-transform-property.svg');
@@ -243,24 +223,26 @@ describe('wpt-repro: CSS transform', () => {
         expect(compareSvgs(reference, unscaled).mismatch).toBeGreaterThan(0.3);
     });
 
-    it('renders like the source with optimize: false', () => {
-        const { xml, warnings } = convertWithCss(svg, false);
-        expect(codes(warnings)).toEqual([]);
-        expect(compareSvgs(reference, vdToSvg(xml)).mismatch).toBeLessThan(DEFAULT_MAX_MISMATCH);
-    });
-
-    for (const [label, source] of [
-        ['style attribute', svg],
-        ['<style> rule', asStyleRule],
-    ] as const)
-        it(`renders like the source with optimize: true and the KEEP_TRANSFORMS preset change (${label})`, () => {
-            const { xml, warnings } = convertWithCss(source, true, KEEP_TRANSFORMS);
+    for (const optimize of MODES)
+        it(`renders like the source under strict (optimize: ${optimize}, style attribute)`, () => {
+            const { xml, warnings } = convert(svg, { optimize, strict: true });
             expect(codes(warnings)).toEqual([]);
             expect(compareSvgs(reference, vdToSvg(xml)).mismatch).toBeLessThan(DEFAULT_MAX_MISMATCH);
         });
 
-    it("svgo's preset as it is collapses the group transform onto the element: wrong with optimize: true", () => {
-        const { xml } = convertWithCss(svg, true);
+    it('renders like the source under strict (optimize: true, <style> rule inlined by svgo)', () => {
+        const { xml, warnings } = convert(asStyleRule, { strict: true });
+        expect(codes(warnings)).toEqual([]);
+        expect(compareSvgs(reference, vdToSvg(xml)).mismatch).toBeLessThan(DEFAULT_MAX_MISMATCH);
+    });
+
+    it('a <style> rule is not inlined with optimize: false: strict rejects it', () => {
+        const error = conversionError(() => convert(asStyleRule, { optimize: false, strict: true }));
+        expect(error.warning.code).toBe('unsupported-style');
+    });
+
+    it("svgo's preset without the normalize.ts change collapses the group transform: wrong", () => {
+        const { xml } = convert(svg, { svgoConfig: { plugins: ['preset-default'] } });
         expect(compareSvgs(reference, vdToSvg(xml)).mismatch).toBeGreaterThan(0.5);
     });
 
@@ -279,39 +261,80 @@ describe('wpt-repro: CSS transform', () => {
             rotated('').replace('<path', '<path transform="rotate(90)" style="transform-origin: 20px 20px"'),
             rotated('transform="rotate(90 20 20)"'),
         ],
+        [
+            'CSS transform and transform-origin on a group',
+            rotated('style="transform: rotate(90deg); transform-origin: 20px 20px"', second),
+            rotated('transform="rotate(90 20 20)"', second),
+        ],
     ] as const)
-        it(`applies ${label} with both optimize settings`, () => {
-            for (const optimize of [false, true]) {
-                const { xml, warnings } = convertWithCss(source, optimize, KEEP_TRANSFORMS);
+        for (const optimize of MODES)
+            it(`applies ${label} under strict (optimize: ${optimize})`, () => {
+                const { xml, warnings } = convert(source, { optimize, strict: true });
                 expect(codes(warnings)).toEqual([]);
-                expect(compareSvgs(expected, vdToSvg(xml)).mismatch, `optimize: ${optimize}`).toBeLessThan(
-                    DEFAULT_MAX_MISMATCH,
-                );
-            }
-        });
+                expect(compareSvgs(expected, vdToSvg(xml)).mismatch).toBeLessThan(DEFAULT_MAX_MISMATCH);
+            });
 
-    it('transform-origin and a <use> CSS transform reach the expanded clone', () => {
-        const source =
-            '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 40 40"><defs><rect id="r" width="10" height="4" fill="blue"/></defs>' +
-            '<use href="#r" x="5" style="transform: rotate(90deg); transform-origin: 20px 20px"/></svg>';
-        const expected =
-            '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 40 40">' +
-            '<rect transform="rotate(90 20 20) translate(5 0)" width="10" height="4" fill="blue"/></svg>';
-        for (const optimize of [false, true]) {
-            const { xml, warnings } = convertWithCss(source, optimize, KEEP_TRANSFORMS);
+    for (const optimize of MODES)
+        it(`transform-origin and a <use> CSS transform reach the expanded clone (optimize: ${optimize})`, () => {
+            const source =
+                '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 40 40"><defs><rect id="r" width="10" height="4" fill="blue"/></defs>' +
+                '<use href="#r" x="5" style="transform: rotate(90deg); transform-origin: 20px 20px"/></svg>';
+            const expected =
+                '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 40 40">' +
+                '<rect transform="rotate(90 20 20) translate(5 0)" width="10" height="4" fill="blue"/></svg>';
+            const { xml, warnings } = convert(source, { optimize, strict: true });
             expect(codes(warnings)).toEqual([]);
             expect(compareSvgs(expected, vdToSvg(xml)).mismatch).toBeLessThan(DEFAULT_MAX_MISMATCH);
-        }
-    });
+        });
+
+    for (const optimize of MODES)
+        it(`strict rejects transform-box: fill-box (optimize: ${optimize})`, () => {
+            const source = rotated('style="transform: rotate(90deg); transform-box: fill-box"');
+            const error = conversionError(() => convert(source, { optimize, strict: true }));
+            expect([error.warning.code, error.warning.node]).toEqual(['unsupported-style', 'g']);
+        });
+
+    for (const optimize of MODES)
+        it(`reports a CSS transform on the root <svg> once (optimize: ${optimize})`, () => {
+            const source =
+                '<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" style="transform: translate(5px)"><rect width="4" height="4"/></svg>';
+            const { warnings } = convert(source, { optimize });
+            expect(warnings.map((w) => [w.code, w.node])).toEqual([['unsupported-style', 'svg']]);
+        });
 });
 
 describe('wpt-repro: mix-blend-mode', () => {
     const svg = repro('wpt-mix-blend-mode.svg');
 
-    it('is reported as unsupported-style with both optimize settings', () => {
-        for (const optimize of [false, true])
-            expect(codes(convertWithCss(svg, optimize).warnings), `optimize: ${optimize}`).toEqual([
-                'unsupported-style',
-            ]);
-    });
+    for (const optimize of MODES) {
+        it(`is reported as unsupported-style (optimize: ${optimize})`, () => {
+            expect(codes(convert(svg, { optimize }).warnings)).toEqual(['unsupported-style']);
+        });
+
+        it(`is rejected under strict (optimize: ${optimize})`, () => {
+            const error = conversionError(() => convert(svg, { optimize, strict: true }));
+            // optimize: true reports the <path> svgo turned the <rect> into.
+            expect(error.warning.code).toBe('unsupported-style');
+        });
+    }
+});
+
+describe('CSS path-length (wpt path-length-css-*, tentative)', () => {
+    const dashed = (attrs: string): string =>
+        `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 240 240"><rect x="20" y="20" width="200" height="200" fill="none" stroke="#000" stroke-width="5" stroke-dasharray="0.25" ${attrs}/></svg>`;
+
+    for (const optimize of MODES) {
+        it(`a style attribute is rejected under strict (optimize: ${optimize})`, () => {
+            const error = conversionError(() =>
+                convert(dashed('style="path-length: 10px"'), { optimize, strict: true }),
+            );
+            expect(error.warning.code).toBe('unsupported-style');
+        });
+
+        it(`a <style> rule is rejected under strict (optimize: ${optimize})`, () => {
+            const source = dashed('').replace('</svg>', '<style>rect { path-length: 10px }</style></svg>');
+            const error = conversionError(() => convert(source, { optimize, strict: true }));
+            expect(error.warning.code).toBe('unsupported-style');
+        });
+    }
 });

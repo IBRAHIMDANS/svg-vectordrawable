@@ -257,3 +257,52 @@ describe('normalize: pathLength on basic shapes', () => {
         expect(convert(input).xml).toBe(convert(input, { optimize: false }).xml);
     });
 });
+
+describe('normalize: CSS transform, transform-origin, transform-box', () => {
+    /** Attributes of the first `<path>` in svgo's output tree. */
+    const firstPath = (input: string, floatPrecision?: number): Record<string, string> => {
+        const find = (node: XastElement): XastElement | undefined =>
+            node.name === 'path' ? node : (node.children ?? []).map(find).find(Boolean);
+        return (
+            find({ type: 'root', children: parseSvg(input, true, undefined, floatPrecision).children })?.attributes ??
+            {}
+        );
+    };
+    const group = (style: string): string =>
+        svg(`<g transform="translate(10 20)"${style}><path d="M0 0h10v10H0z"/></g>`);
+
+    it('keeps group transforms where they are authored when one may be set', () => {
+        expect(elementNames(group(''))).toEqual(['svg', 'path']);
+        for (const style of [
+            ' style="transform: scale(2)"',
+            ' style="transform-origin: 5px 5px"',
+            ' transform-origin="5 5"',
+            ' style="transform-box: view-box"',
+        ])
+            expect(elementNames(group(style)), style).toEqual(['svg', 'g', 'path']);
+    });
+
+    it('keeps transform-origin on the group', () => {
+        const root = parseSvg(group(' transform-origin="5 5"'), true);
+        expect(JSON.stringify(root)).toContain('"transform-origin":"5 5"');
+    });
+
+    it('does not bake transforms into path data, even at a higher floatPrecision', () => {
+        const input = svg('<path transform="rotate(90)" transform-origin="5 5" d="M0 0h10v10H0z"/>');
+        for (const floatPrecision of [3, 6]) expect(firstPath(input, floatPrecision).transform).toBeDefined();
+        expect(firstPath(svg('<path transform="translate(1 1)" d="M0 0h10v10H0z"/>')).transform).toBeUndefined();
+    });
+
+    it('keeps a long path as authored (convertPathData stays off)', () => {
+        const d = `M0 0${'l1 1l1-1'.repeat(7_000)}`;
+        expect(firstPath(svg(`<path style="transform: scale(2)" d="${d}"/>`)).d).toBe(d);
+    });
+
+    it('is not triggered by a property merely ending in transform', () => {
+        expect(
+            elementNames(
+                svg('<g transform="translate(10 20)" style="-webkit-transform: none"><path d="M0 0h10"/></g>'),
+            ),
+        ).toEqual(['svg', 'path']);
+    });
+});

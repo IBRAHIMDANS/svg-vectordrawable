@@ -37,6 +37,8 @@ const TRANSFORM_PROPERTIES = ['transform', 'transform-origin', 'transform-box'] 
 const VIEW_BOX = new Set(['view-box', 'initial', 'unset', 'revert']);
 /** `mix-blend-mode` values that blend nothing. */
 const NO_BLEND = new Set(['normal', 'initial', 'unset', 'revert']);
+/** `path-length` values that leave the dash pattern as authored (it is not inherited). */
+const NO_PATH_LENGTH = new Set(['none', 'initial', 'unset', 'revert']);
 
 type Warn = (w: Warning) => void;
 
@@ -87,7 +89,8 @@ function foldTransform(el: XastElement, name: string, warn: Warn): void {
 /**
  * Applies, or reports, the CSS properties the rest of the converter does not read: `transform`,
  * `transform-origin` and `transform-box` are folded into `transform` attributes (see
- * `foldTransform`); a `mix-blend-mode` other than `normal` is reported (`unsupported-style`).
+ * `foldTransform`); a `mix-blend-mode` other than `normal` and a CSS `path-length` are reported
+ * (`unsupported-style`).
  * Mutates the tree; run it before `<use>` expansion, so that clones inherit the folded attributes.
  * The root `<svg>` is left to the root layout (`src/convert.ts`), which reports its CSS transform.
  */
@@ -101,6 +104,14 @@ export function applyCssProperties(root: XastElement, warn: Warn): void {
             warn({
                 code: 'unsupported-style',
                 message: `mix-blend-mode: ${blend} on <${name}> cannot be represented in a VectorDrawable; ignored.`,
+                node: name,
+            });
+        // CSS `path-length` (tentative, not the pathLength attribute) rescales the dash pattern.
+        const pathLength = style['path-length']?.trim().toLowerCase();
+        if (pathLength !== undefined && !NO_PATH_LENGTH.has(pathLength))
+            warn({
+                code: 'unsupported-style',
+                message: `path-length: ${pathLength} on <${name}> is not supported (only the pathLength attribute); ignored.`,
                 node: name,
             });
         // The root <svg> transform is the root layout's business (its default origin is its box centre).
