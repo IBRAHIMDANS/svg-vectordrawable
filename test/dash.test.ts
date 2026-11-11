@@ -161,6 +161,95 @@ describe('dashPathData', () => {
     });
 });
 
+describe('dashPathData on elliptical arcs (measured on the true conic)', () => {
+    /** Ends of each dash (sub-path): its first point and its last point. */
+    const ends = (d: string): [Point, Point][] => subpaths(d).map((sp) => [sp[0]![0]!, sp.at(-1)!.at(-1)!]);
+    const near = (p: Point, q: Point): number => Math.hypot(p[0] - q[0], p[1] - q[1]);
+    const P = 6;
+
+    it('cuts a dashed circle at exact angles, without a parasitic dash at the start (wpt pathlength-002)', () => {
+        // r = 100: 2πr = 628.3185 < 16 × 39.27, so the last gap reaches the end: 8 dashes, each 45°.
+        // Its cubic lowering is 0.09 longer, which used to shift every cut by 0.02–0.09 and start a
+        // 0.09 dash before angle 0, merged into the first one.
+        const d = dashPathData(
+            ellipseDashPath('M20,240a100,100 0 1 0 200,0a100,100 0 1 0 -200,0z'),
+            [39.27, 39.27],
+            0,
+            TOL,
+            {
+                precision: P,
+            },
+        )!;
+        const dashes = ends(d);
+        expect(dashes).toHaveLength(8);
+        const at = (s: number): Point => [120 + 100 * Math.cos(s / 100), 240 + 100 * Math.sin(s / 100)];
+        dashes.forEach(([a, b], k) => {
+            expect(near(a, at(78.54 * k))).toBeLessThan(TOL);
+            expect(near(b, at(78.54 * k + 39.27))).toBeLessThan(TOL);
+        });
+        // Every piece stays on the circle (cubics of ≤ 90°, 2.7e-4·r radial error at most).
+        for (const sp of subpaths(d))
+            for (const seg of sp)
+                for (let t = 0; t <= 1; t += 0.125) {
+                    const [x, y] = bezier(seg, t);
+                    expect(Math.abs(Math.hypot(x - 120, y - 240) - 100)).toBeLessThan(0.03);
+                }
+    });
+
+    it('measures a path’s own arcs the same way (relative, implicit repetition)', () => {
+        const circle = ellipseDashPath('M20,240a100,100 0 1 0 200,0a100,100 0 1 0 -200,0z');
+        const path = 'm 220,240 a 100,100 0 0 1 -200,0 100,100 0 0 1 200,0 z';
+        const opts = { precision: P };
+        expect(ends(dashPathData(path, [39.27, 39.27], 0, TOL, opts)!)).toEqual(
+            ends(dashPathData(circle, [39.27, 39.27], 0, TOL, opts)!),
+        );
+    });
+
+    it('cuts a rotated ellipse arc at the arc lengths of the true ellipse', () => {
+        // Large arc of the ellipse rx = 40, ry = 15 rotated 30°, from angle −90° to 180° (sweep 1).
+        const [rx, ry, phi] = [40, 15, Math.PI / 6];
+        const at = (a: number): Point => [
+            Math.cos(phi) * rx * Math.cos(a) - Math.sin(phi) * ry * Math.sin(a),
+            Math.sin(phi) * rx * Math.cos(a) + Math.cos(phi) * ry * Math.sin(a),
+        ];
+        const [p0, p1] = [at(-Math.PI / 2), at(Math.PI)];
+        const d = dashPathData(`M${p0[0]} ${p0[1]}A${rx} ${ry} 30 1 1 ${p1[0]} ${p1[1]}`, [7, 3], 0, TOL, {
+            precision: P,
+        })!;
+        // Reference: points every 10 units of arc length, by dense sampling of the true ellipse.
+        const expected: Point[] = [];
+        let s = 0;
+        let prev = p0;
+        for (let k = 1, next = 0; k <= 200_000; k++) {
+            const q = at(-Math.PI / 2 + (k / 200_000) * 1.5 * Math.PI);
+            const step = near(prev, q);
+            while (next <= s + step) {
+                const f = (next - s) / step;
+                expected.push([prev[0] + (q[0] - prev[0]) * f, prev[1] + (q[1] - prev[1]) * f]);
+                next += 10;
+            }
+            s += step;
+            prev = q;
+        }
+        const starts = ends(d).map(([a]) => a);
+        expect(starts).toHaveLength(expected.length);
+        starts.forEach((p, k) => expect(near(p, expected[k]!)).toBeLessThan(TOL));
+    });
+
+    it('treats a zero radius as a line and scales radii too small for the chord (SVG 2 out-of-range arcs)', () => {
+        expect(dashPathData('M0 0A0 5 0 0 1 10 0', [4, 2], 0, TOL)).toBe('M0 0L4 0M6 0L10 0');
+        // r = 1 on a chord of 20 becomes the semicircle of center (10, 0), radius 10 (length 10π):
+        // dashes [0, 10], [11, 21], [22, 10π], at angle π + s/10.
+        const at = (s: number): Point => [10 + 10 * Math.cos(Math.PI + s / 10), 10 * Math.sin(Math.PI + s / 10)];
+        const dashes = ends(dashPathData('M0 0A1 1 0 0 1 20 0', [10, 1], 0, TOL, { precision: P })!);
+        expect(dashes).toHaveLength(3);
+        [0, 11, 22].forEach((s, k) => {
+            expect(near(dashes[k]![0], at(s))).toBeLessThan(TOL);
+            expect(near(dashes[k]![1], at(Math.min(s + 10, 10 * Math.PI)))).toBeLessThan(TOL);
+        });
+    });
+});
+
 describe('ellipseDashPath', () => {
     it('restarts a shapes.ts circle at 3 o’clock, turning clockwise (SVG 2 dash origin)', () => {
         expect(ellipseDashPath('M2,5a3,3 0 1 0 6,0a3,3 0 1 0 -6,0z')).toBe(
