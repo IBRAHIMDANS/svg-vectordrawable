@@ -2,7 +2,7 @@ import type { XastElement } from './ast.js';
 import { ClipPaths } from './clip.js';
 import type { ConvertContext } from './context.js';
 import { collectByName } from './elements.js';
-import { toAndroidColor } from './color.js';
+import { colorRefs } from './colorRef.js';
 import { ConversionError } from './errors.js';
 import { escapeXml, formatNumber } from './format.js';
 import { collectGradients } from './gradient.js';
@@ -120,9 +120,8 @@ export function convert(svg: string, options: ConvertOptions = {}): ConvertResul
         if (dp !== undefined && !(Number.isFinite(dp) && dp > 0))
             throw new TypeError(`Invalid ${name}: ${dp} (expected a finite number of dp greater than 0)`);
     }
-    // An unparseable color would silently drop every shape painted with `currentColor`.
-    if (toAndroidColor(currentColor, 1, currentColor) === null)
-        throw new TypeError(`Invalid currentColor: ${JSON.stringify(currentColor)} (expected a CSS color)`);
+    // `currentColor` (a CSS color or an Android reference) and `colorMap` are validated here (TypeError).
+    const colors = colorRefs(currentColor, options.colorMap, (w) => warn(w));
 
     for (const code of Object.keys(rules))
         if (!(WARNING_CODES as readonly string[]).includes(code))
@@ -177,7 +176,13 @@ export function convert(svg: string, options: ConvertOptions = {}): ConvertResul
         precision: floatPrecision,
         step,
         fillBlackForUnfilled,
-        gradients: collectGradients(elementsNamed(svgEl, 'linearGradient', 'radialGradient'), currentColor, warn),
+        colors,
+        gradients: collectGradients(
+            elementsNamed(svgEl, 'linearGradient', 'radialGradient'),
+            currentColor,
+            warn,
+            colors,
+        ),
         patternIds: new Set(
             elementsNamed(svgEl, 'pattern')
                 .map((p) => p.attributes?.id)

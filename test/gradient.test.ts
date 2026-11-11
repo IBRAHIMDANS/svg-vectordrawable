@@ -10,6 +10,7 @@ import {
     type RawGradient,
 } from '../src/gradient.js';
 import type { BBox, XastElement } from '../src/ast.js';
+import { colorRefs } from '../src/colorRef.js';
 import { applyPoint, IDENTITY, multiply, parseTransform, type Matrix } from '../src/transform.js';
 import type { Warning } from '../src/types.js';
 import { compareSvgs, DEFAULT_MAX_MISMATCH } from './visual/compare.js';
@@ -130,6 +131,36 @@ describe('collectGradients — stop count', () => {
 
     it('skips a gradient without stops', () => {
         expect(collectGradients([linear('g', [])], '#000', noWarn).has('g')).toBe(false);
+    });
+});
+
+describe('collectGradients — Android color references', () => {
+    const els = [
+        linear('a', [
+            stop({ offset: '0', 'stop-color': 'red' }),
+            stop({ offset: '0.5', 'stop-color': 'currentColor' }),
+            stop({ offset: '1', 'stop-color': '#00f', 'stop-opacity': '0.5' }),
+        ]),
+        linear('b', [stop({ offset: '0', 'stop-color': '#00f', 'stop-opacity': '0.5' })]),
+    ];
+
+    it('resolves opaque stops to references and keeps translucent ones literal, warning once per gradient', () => {
+        const warnings: Warning[] = [];
+        const colors = colorRefs('?attr/tint', { '#f00': '@color/brand', blue: '@color/sea' }, (w) => warnings.push(w));
+        const gradients = collectGradients(els, '?attr/tint', noWarn, colors);
+        expect(gradients.get('a')!.stops.map((s) => s.color)).toEqual(['@color/brand', '?attr/tint', '#800000FF']);
+        expect(gradients.get('b')!.stops.map((s) => s.color)).toEqual(['#800000FF', '#800000FF']);
+        expect(warnings.map((w) => [w.code, w.node])).toEqual([
+            ['unsupported-paint', 'stop'],
+            ['unsupported-paint', 'stop'],
+        ]);
+        expect(warnings.map((w) => w.message.match(/"(\w)"/)![1])).toEqual(['a', 'b']);
+    });
+
+    it('matches the literal behaviour without references', () => {
+        const literal = collectGradients(els, '#123456', noWarn);
+        const resolved = collectGradients(els, '#123456', noWarn, colorRefs('#123456', undefined));
+        expect(resolved).toEqual(literal);
     });
 });
 

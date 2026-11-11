@@ -1,5 +1,6 @@
 import type { BBox, Viewport, XastElement } from './ast.js';
 import { toAndroidColor } from './color.js';
+import type { ColorRefs } from './colorRef.js';
 import { presentation } from './style.js';
 import { applyPoint, IDENTITY, multiply, parseTransform, scaleFactor, type Matrix } from './transform.js';
 import type { Warning } from './types.js';
@@ -138,6 +139,8 @@ export function collectGradients(
     currentColor: string,
     // Kept for call-site symmetry with resolveGradient; collection itself never warns.
     _warn: (w: Warning) => void,
+    /** Android references for stop colors (`currentColor` / `colorMap` options); literals without it. */
+    colors?: ColorRefs,
 ): Map<string, RawGradient> {
     const byId = new Map<string, XastElement>();
     for (const el of gradientEls) {
@@ -166,11 +169,11 @@ export function collectGradients(
             stopsOf(el)
                 .map((s) => {
                     const opacity = presentation(s, 'stop-opacity');
-                    const color = toAndroidColor(
-                        presentation(s, 'stop-color') ?? '#000',
-                        opacity !== undefined ? parseFloat(opacity) : undefined,
-                        currentColor,
-                    );
+                    const stopColor = presentation(s, 'stop-color') ?? '#000';
+                    const stopOpacity = opacity !== undefined ? parseFloat(opacity) : undefined;
+                    const color = colors
+                        ? colors.stop(stopColor, stopOpacity, id)
+                        : toAndroidColor(stopColor, stopOpacity, currentColor);
                     return color ? { offset: parseOffset(presentation(s, 'offset')), color } : null;
                 })
                 .filter((s): s is NonNullable<typeof s> => s !== null),

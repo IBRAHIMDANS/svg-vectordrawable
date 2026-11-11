@@ -68,11 +68,37 @@ const MIN_SDK = 24;
 // Each fixture is converted once per variant, so the options that change the `<vector>` root
 // (`autoMirrored`, `width`, `height`) are proven to compile and link too, not just the defaults.
 // The suffix keeps every resource name distinct and valid (lowercase letters, digits, underscores).
+//
+// `_themed` emits Android color references (`currentColor` and `colorMap` options) on fills, strokes
+// and gradient stops (`<item android:color>`); `link` resolves them, so the resources they name
+// are declared in VALUES_XML (framework ones, `@android:color/…` / `?android:attr/…`, come from android.jar).
+const THEMED = {
+    currentColor: '?attr/iconTint',
+    colorMap: {
+        '#f00': '@color/brand', // clip-path, objectbox-gradient (stop)
+        '#00f': '?android:attr/colorAccent', // skew-group, objectbox-gradient (stop)
+        '#ffb13b': '@android:color/white', // react logo fill + stroke
+        '#61dafb': '@color/brand', // react logo
+        '#504E9C': '?attr/iconTint', // linear-gradient (stop)
+        '#07B8D8': '@android:color/black', // linear-gradient (stop)
+        '#000': '@color/brand', // svgo-cubic-smooth stroke; radial-gradient-transform's translucent stop stays literal (warned)
+        '#fff': '@color/brand', // radial-gradient-transform (opaque stop)
+    },
+};
 const VARIANTS = [
     { suffix: '', options: {} },
     { suffix: '_mirrored_w48', options: { autoMirrored: true, width: 48 } },
     { suffix: '_h13_5', options: { height: 13.5 } },
+    { suffix: '_themed', label: 'themed (currentColor + colorMap references)', options: THEMED },
 ];
+
+/** The app resources the `_themed` references point at (`res/values/themed.xml`). */
+const VALUES_XML =
+    '<?xml version="1.0" encoding="utf-8"?>\n' +
+    '<resources>\n' +
+    '    <color name="brand">#FF1A73E8</color>\n' +
+    '    <attr name="iconTint" format="color|reference" />\n' +
+    '</resources>\n';
 
 /** Runs aapt2 with the given args; on failure prints its output and returns false. */
 function runAapt2(aapt2, step, args) {
@@ -125,20 +151,24 @@ async function main() {
     const workDir = mkdtempSync(join(tmpdir(), 'aapt2-validate-'));
     const resDir = join(workDir, 'res', 'drawable');
     mkdirSync(resDir, { recursive: true });
+    mkdirSync(join(workDir, 'res', 'values'));
+    writeFileSync(join(workDir, 'res', 'values', 'themed.xml'), VALUES_XML);
 
     // Map each fixture × variant to a valid Android resource filename (dN<suffix>.xml — lowercase,
     // starts with a letter).
     const mapping = [];
     let convertFailures = 0;
+    let references = 0;
     fixtures.forEach((file, i) => {
-        for (const { suffix, options } of VARIANTS) {
+        for (const { suffix, label: variantLabel, options } of VARIANTS) {
             const name = `d${i}${suffix}`;
-            const label = suffix ? `${file} ${JSON.stringify(options)}` : file;
+            const label = suffix ? `${file} ${variantLabel ?? JSON.stringify(options)}` : file;
             try {
                 const svg = readFileSync(join(fixturesDir, file), 'utf8');
                 const { xml } = convert(svg, { optimize: true, ...options });
                 writeFileSync(join(resDir, `${name}.xml`), xml);
                 mapping.push({ label, name });
+                references += (xml.match(/android:(?:fillColor|strokeColor|color)="[@?]/g) ?? []).length;
             } catch (err) {
                 convertFailures++;
                 console.error(
@@ -153,6 +183,13 @@ async function main() {
         console.error(`[aapt2-validate] ${convertFailures} conversion(s) failed.`);
         process.exit(1);
     }
+    // Guards the `_themed` variant against silently emitting literals only (nothing left to link).
+    if (references === 0) {
+        cleanup(workDir);
+        console.error('[aapt2-validate] ✗ The themed variant emitted no color reference.');
+        process.exit(1);
+    }
+    console.log(`[aapt2-validate] ${references} color references (@color/…, ?attr/…) to resolve.`);
 
     const outZip = join(workDir, 'out.zip');
     if (!runAapt2(aapt2, 'compile', ['compile', '--dir', join(workDir, 'res'), '-o', outZip])) {

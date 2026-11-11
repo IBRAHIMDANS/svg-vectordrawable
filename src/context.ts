@@ -1,5 +1,6 @@
 import type { ClipPaths } from './clip.js';
 import type { XastElement } from './ast.js';
+import type { ColorRefs } from './colorRef.js';
 import type { RawGradient } from './gradient.js';
 import type { Warning } from './types.js';
 
@@ -12,6 +13,8 @@ export interface ConvertContext {
     /** One indentation level. */
     readonly step: string;
     readonly fillBlackForUnfilled: boolean;
+    /** Solid colors to Android literals or references (`currentColor` / `colorMap` options). */
+    readonly colors: ColorRefs;
     /** Gradients by id. */
     readonly gradients: ReadonlyMap<string, RawGradient>;
     /** Ids of `<pattern>` paint servers (not representable). */
