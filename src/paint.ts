@@ -180,10 +180,9 @@ const INITIAL_FILL = '#FF000000' as AndroidColor;
  * The Android color of a solid paint (literal or reference, through `ctx.colors`), null when nothing
  * is painted (no value, `none`). A value the color parser cannot read is reported as
  * `unsupported-paint` instead of silently dropping the paint. `context-fill` / `context-stroke` (taken from the `<use>` or marker, which
- * the converter does not track) paint nothing. Anything else (`env()`, `var()`, `color-mix()`, a
- * typo…) is an invalid value, which SVG ignores: renderers fall back to the inherited value, the
- * converter to the initial one (the implicit black fill, no stroke) — exact unless an ancestor
- * sets the property.
+ * the converter does not track) paint nothing. An unparseable fallback color after `url(#…)` gives
+ * the initial paint (the implicit black fill, no stroke). A whole declaration that is invalid never
+ * gets here: resolveStyle ignores it, {@link warnIgnoredPaint} reports it.
  */
 function solidPaint(
     ctx: ConvertContext,
@@ -209,6 +208,28 @@ function solidPaint(
 }
 
 /**
+ * Reports the invalid `fill` / `stroke` declaration resolveStyle ignored (`env()`, `var()`,
+ * `color-mix()`, a typo…). CSS ignores it too: the presentation attribute under an invalid `style`
+ * declaration applies, else the parent's value, else the initial one (black fill, no stroke).
+ */
+function warnIgnoredPaint(ctx: ConvertContext, style: Inherited, property: 'fill' | 'stroke'): void {
+    const invalid = property === 'fill' ? style.fillInvalid : style.strokeInvalid;
+    if (invalid === undefined) return;
+    const applied = property === 'fill' ? style.fill : style.stroke;
+    const outcome =
+        applied !== undefined
+            ? `${property}="${applied.trim()}" (attribute or inherited) applies`
+            : property === 'fill' && ctx.fillBlackForUnfilled
+              ? 'using the initial black fill'
+              : `the ${property} is dropped`;
+    ctx.warn({
+        code: 'unsupported-paint',
+        message: `${property}="${invalid}" is not a color the converter can parse; it is ignored, ${outcome}.`,
+        node: 'path',
+    });
+}
+
+/**
  * Why a `url(#id)` paint without fallback color draws nothing, null when `id` names no gradient.
  * A gradient element `collectGradients` left out is an invalid paint server (no usable stop, or a
  * non-invertible gradientTransform): SVG 2 §13.2 paints nothing for it (SVG 1.1 §13.2.4 likewise
@@ -221,6 +242,7 @@ function invalidGradient(ctx: ConvertContext, ref: string, property: 'fill' | 's
 
 /** Emits the fill attributes; true when the fill is painted. */
 function emitFill(ctx: ConvertContext, path: PathBuilder, style: Inherited): boolean {
+    warnIgnoredPaint(ctx, style, 'fill');
     const fill = parsePaint(fillOf(style, ctx.fillBlackForUnfilled));
     const raw = fill.ref !== undefined ? ctx.gradients.get(fill.ref) : undefined;
     let fillColor = fill.color;
@@ -259,6 +281,7 @@ type StrokePaint = { gradient: RawGradient } | ResolvedColor;
 
 /** Resolves the stroke paint (reporting unusable references); null when no stroke is painted. */
 function resolveStroke(ctx: ConvertContext, style: Inherited): StrokePaint | null {
+    warnIgnoredPaint(ctx, style, 'stroke');
     const stroke = parsePaint(style.stroke ?? 'none');
     // A resolvable gradient wins over the fallback color (SVG uses the fallback only for a bad reference).
     const strokeGradient = stroke.ref !== undefined ? ctx.gradients.get(stroke.ref) : undefined;

@@ -69,6 +69,94 @@ describe.each([true, false])('wpt reproductions (optimize: %s)', (optimize) => {
     });
 });
 
+describe.each([true, false])('an invalid paint declaration is ignored, as CSS does (optimize: %s)', (optimize) => {
+    const run = (body: string): { xml: string; warnings: [string, string][] } => {
+        const { xml, warnings } = convert(svg(body), { optimize });
+        return { xml, warnings: warnings.map((w) => [w.code, w.message]) };
+    };
+    const ignored = (property: string, value: string): [string, string] => [
+        'unsupported-paint',
+        expect.stringContaining(
+            `${property}="${value}" is not a color the converter can parse; it is ignored`,
+        ) as string,
+    ];
+    // svgo's collapseGroups (optimize: true) moves a lone child's own fill over the group's, losing
+    // the value the invalid one falls back to: a sibling keeps the group.
+    const sibling = '<rect x="20" width="1" height="1" fill="#0ff" stroke="none"/>';
+
+    it('under a parent fill / stroke, the inherited value applies', () => {
+        const { xml, warnings } = run(
+            `<g fill="#f00" stroke="#0f0"><rect width="10" height="10" fill="env(--x)" stroke="var(--y)"/>${sibling}</g>`,
+        );
+        expect(warnings).toEqual([ignored('fill', 'env(--x)'), ignored('stroke', 'var(--y)')]);
+        expect(xml).toContain('android:fillColor="#FFFF0000"');
+        expect(xml).toContain('android:strokeColor="#FF00FF00"');
+    });
+
+    it('under a parent gradient, the inherited gradient applies', () => {
+        const { xml, warnings } = run(
+            '<defs><linearGradient id="g"><stop offset="0" stop-color="#f00"/><stop offset="1" stop-color="#00f"/></linearGradient></defs>' +
+                `<g fill="url(#g)"><rect width="10" height="10" fill="env(--x)"/>${sibling}</g>`,
+        );
+        expect(warnings).toEqual([ignored('fill', 'env(--x)')]);
+        expect(xml).toContain('<gradient');
+    });
+
+    it('without a parent value, the initial paint applies (black fill, no stroke)', () => {
+        const { xml, warnings } = run('<rect width="10" height="10" fill="env(--x)" stroke="env(--y)"/>');
+        expect(warnings).toEqual([ignored('fill', 'env(--x)'), ignored('stroke', 'env(--y)')]);
+        expect(xml).toContain('android:fillColor="#FF000000"');
+        expect(xml).not.toContain('strokeColor');
+    });
+
+    it('an invalid style declaration lets the presentation attribute apply', () => {
+        const { xml, warnings } = run(
+            `<g fill="#f00"><rect width="10" height="10" style="fill:env(x);stroke:env(y)" fill="blue" stroke="#0f0"/>${sibling}</g>`,
+        );
+        expect(warnings).toEqual([ignored('fill', 'env(x)'), ignored('stroke', 'env(y)')]);
+        expect(xml).toContain('android:fillColor="#FF0000FF"');
+        expect(xml).toContain('android:strokeColor="#FF00FF00"');
+    });
+
+    it('CSS-wide keywords: initial resets to the initial paint, unset / revert inherit', () => {
+        const { xml, warnings } = run(
+            `<g fill="#f00" stroke="#0f0"><rect width="10" height="10" fill="initial" stroke="initial"/>` +
+                `<rect x="12" width="10" height="10" fill="unset" stroke="revert"/>${sibling}</g>`,
+        );
+        expect(warnings).toEqual([]);
+        expect(xml).toContain('android:fillColor="#FF000000"');
+        expect(xml).toContain('android:fillColor="#FFFF0000"');
+        expect(xml).toContain('android:strokeColor="#FF00FF00"');
+    });
+
+    it('an invalid style declaration over an invalid attribute lets the parent value apply', () => {
+        const { xml, warnings } = run(
+            `<g fill="#f00"><rect width="10" height="10" style="fill:env(x)" fill="var(--y)"/>${sibling}</g>`,
+        );
+        expect(warnings).toEqual([ignored('fill', 'env(x)')]);
+        expect(xml).toContain('android:fillColor="#FFFF0000"');
+    });
+
+    // svgo (optimize: true) pushes the outer group's fill down onto the inner groups, where their own
+    // (invalid) fill overrides it: the value to fall back to is gone before the converter runs.
+    it.skipIf(optimize)('an invalid group paint is skipped: its children inherit the grandparent value', () => {
+        const { xml, warnings } = run(
+            `<g fill="#f00"><g fill="env(--x)"><rect width="10" height="10"/>${sibling}</g>` +
+                `<g fill="env(--x)"><rect x="12" width="10" height="10" fill="#00f"/>${sibling}</g></g>`,
+        );
+        // Reported for the shape that inherits through it, not for the one that sets its own fill.
+        expect(warnings).toEqual([ignored('fill', 'env(--x)')]);
+        expect(xml).toContain('android:fillColor="#FFFF0000"');
+        expect(xml).toContain('android:fillColor="#FF0000FF"');
+    });
+
+    it('strict mode still rejects the ignored declaration', () => {
+        expect(
+            strictError(svg('<g fill="#f00"><rect width="1" height="1" fill="env(--x)"/></g>'), optimize)?.code,
+        ).toBe('unsupported-paint');
+    });
+});
+
 describe('unparseable paints', () => {
     const run = (body: string, options = {}): { xml: string; codes: string[]; messages: string[] } => {
         const { xml, warnings } = convert(svg(body), { optimize: false, ...options });
