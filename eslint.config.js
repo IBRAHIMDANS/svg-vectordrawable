@@ -14,6 +14,8 @@ export default tseslint.config(
             'android-render/build',
             'android-render/render/build',
             'android-render/.gradle',
+            // Local copy of the IIFE build used to serve the playground (see playground/README.md).
+            'playground/browser-lite.global.js',
         ],
     },
     js.configs.recommended,
@@ -34,6 +36,26 @@ export default tseslint.config(
     // Node tooling: validation scripts, the Android rendering pipeline and config files run on Node.
     {
         files: ['scripts/**/*.{js,mjs,cjs}', 'android-render/*.mjs', '*.config.{js,mjs,cjs,ts}'],
+        languageOptions: {
+            globals: { ...globals.node },
+        },
+    },
+    // Playground (static page on GitHub Pages): browser modules, a classic worker, a Node smoke test.
+    {
+        files: ['playground/*.js'],
+        languageOptions: {
+            globals: { ...globals.browser },
+        },
+    },
+    {
+        files: ['playground/worker.js'],
+        languageOptions: {
+            sourceType: 'script',
+            globals: { ...globals.worker, svgvd: 'readonly' },
+        },
+    },
+    {
+        files: ['playground/*.mjs'],
         languageOptions: {
             globals: { ...globals.node },
         },

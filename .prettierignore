@@ -13,6 +13,8 @@ android-render/.gradle
 scripts/compare-svg2vector/build
 scripts/compare-svg2vector/out
 scripts/compare-svg2vector/.gradle
+# Local copy of the IIFE build used to serve the playground.
+playground/browser-lite.global.js
 # Local backlog files (not versioned).
 TODO.md
 TODO-DONE.md
