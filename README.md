@@ -3,6 +3,7 @@
 [![npm version](https://img.shields.io/npm/v/svg-vectordrawable)](https://www.npmjs.com/package/svg-vectordrawable)
 [![npm downloads](https://img.shields.io/npm/dm/svg-vectordrawable)](https://www.npmjs.com/package/svg-vectordrawable)
 [![CI](https://github.com/IBRAHIMDANS/svg-vectordrawable/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/IBRAHIMDANS/svg-vectordrawable/actions/workflows/ci.yml)
+[![codecov](https://codecov.io/gh/IBRAHIMDANS/svg-vectordrawable/graph/badge.svg)](https://codecov.io/gh/IBRAHIMDANS/svg-vectordrawable)
 [![types included](https://img.shields.io/npm/types/svg-vectordrawable)](https://www.npmjs.com/package/svg-vectordrawable)
 [![license](https://img.shields.io/npm/l/svg-vectordrawable)](LICENSE)
 
