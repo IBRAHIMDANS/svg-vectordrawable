@@ -1,9 +1,9 @@
 #!/usr/bin/env node
-import { readFileSync, writeFileSync, readdirSync, statSync, mkdirSync, realpathSync } from 'node:fs';
-import { join, extname, basename, dirname } from 'node:path';
+import { readFileSync, statSync, realpathSync } from 'node:fs';
+import { extname, basename } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { convert } from './convert.js';
-import { assertDistinctOutputs, defaultOutputPath, type FileNamingOptions } from './file.js';
+import { assertDistinctOutputs, defaultOutputPath, listSvgFiles, writeOutput, type FileNamingOptions } from './file.js';
 import { WARNING_CODES, type ConvertOptions, type Severity, type WarningCode } from './types.js';
 
 const HELP = `svgvd — convert SVG to Android VectorDrawable
@@ -66,57 +66,52 @@ function parseArgs(
     let out: string | undefined;
     let inline: string | undefined;
     let stdout = false;
+    const fail = (message: string): never => {
+        io.stderr(`${message}\n`);
+        throw new CliExit(1);
+    };
     for (let i = 0; i < argv.length; i++) {
         const arg = argv[i]!;
+        /** The value following the current option. */
+        const value = (): string => argv[++i] ?? fail(`Missing value for ${arg}`);
         if (arg === '-h' || arg === '--help') {
             io.stdout(HELP);
             throw new CliExit(0);
-        } else if (arg === '-s' || arg === '--string') inline = argv[++i];
-        else if (arg === '-o' || arg === '--out') out = argv[++i];
+        } else if (arg === '-s' || arg === '--string') inline = value();
+        else if (arg === '-o' || arg === '--out') out = value();
         else if (arg === '--stdout') stdout = true;
         else if (arg === '--no-optimize') opts.optimize = false;
         else if (arg === '--strict') opts.strict = true;
         else if (arg === '--strict=lossy') opts.strict = 'lossy';
         else if (arg === '--min-sdk') {
-            const value = argv[++i] ?? '';
-            if (!/^[1-9]\d*$/.test(value)) {
-                io.stderr(`Invalid --min-sdk (expected a positive integer): ${value}\n`);
-                throw new CliExit(1);
-            }
-            opts.minSdk = Number(value);
+            const minSdk = value();
+            if (!/^[1-9]\d*$/.test(minSdk)) fail(`Invalid --min-sdk (expected a positive integer): ${minSdk}`);
+            opts.minSdk = Number(minSdk);
         } else if (arg === '--rule') {
-            const [code, level] = (argv[++i] ?? '').split('=');
-            if (!(WARNING_CODES as readonly string[]).includes(code ?? '') || !SEVERITIES.has(level ?? '')) {
-                io.stderr(
-                    `Invalid --rule (expected <code>=off|warn|error): ${argv[i]}\nKnown codes: ${WARNING_CODES.join(', ')}\n`,
+            const rule = value();
+            const [code, level] = rule.split('=');
+            if (!(WARNING_CODES as readonly string[]).includes(code ?? '') || !SEVERITIES.has(level ?? ''))
+                fail(
+                    `Invalid --rule (expected <code>=off|warn|error): ${rule}\nKnown codes: ${WARNING_CODES.join(', ')}`,
                 );
-                throw new CliExit(1);
-            }
             opts.rules = { ...opts.rules, [code as WarningCode]: level as Severity };
         } else if (arg === '--xml-tag') opts.xmlTag = true;
         else if (arg === '--android-names') naming.androidNames = true;
-        else if (arg === '--tint') opts.tint = argv[++i];
-        else if (arg === '-p' || arg === '--precision') opts.floatPrecision = Number(argv[++i]);
-        else if (arg.startsWith('-') && arg !== '-') {
-            io.stderr(`Unknown option: ${arg}\n`);
-            throw new CliExit(1);
-        } else inputs.push(arg);
+        else if (arg === '--tint') opts.tint = value();
+        else if (arg === '-p' || arg === '--precision') {
+            const precision = value();
+            if (!/^\d+$/.test(precision)) fail(`Invalid --precision (expected a non-negative integer): ${precision}`);
+            opts.floatPrecision = Number(precision);
+        } else if (arg === '-') fail('Reading from stdin is not supported; pass a file or use -s <svg>');
+        else if (arg.startsWith('-')) fail(`Unknown option: ${arg}`);
+        else inputs.push(arg);
     }
     return { inputs, inline, out, stdout, opts, naming };
 }
 
+/** The files an input argument stands for: itself, or the `*.svg` of a directory. */
 function listSvgs(path: string): string[] {
-    if (statSync(path).isDirectory())
-        return readdirSync(path)
-            .filter((f) => extname(f).toLowerCase() === '.svg')
-            .map((f) => join(path, f));
-    return [path];
-}
-
-/** Writes `content` to `target`, creating its parent directories first. */
-function writeOutput(target: string, content: string): void {
-    mkdirSync(dirname(target), { recursive: true });
-    writeFileSync(target, content);
+    return statSync(path).isDirectory() ? listSvgFiles(path) : [path];
 }
 
 /** Runs the CLI against `argv` (without the node/script prefix) and returns the exit code. */
@@ -131,11 +126,16 @@ export function run(argv: string[], io: CliIo = processIo): number {
     const { inputs, inline, out, stdout, opts, naming } = args;
 
     if (inline !== undefined) {
-        const { xml, warnings } = convert(inline, opts);
-        for (const w of warnings) io.stderr(`  ⚠ [${w.code}] ${w.message}\n`);
-        if (out && extname(out) === '.xml') writeOutput(out, xml);
-        else io.stdout(xml);
-        return 0;
+        try {
+            const { xml, warnings } = convert(inline, opts);
+            for (const w of warnings) io.stderr(`  ⚠ [${w.code}] ${w.message}\n`);
+            if (out && extname(out) === '.xml') writeOutput(out, xml);
+            else io.stdout(xml);
+            return 0;
+        } catch (err) {
+            io.stderr(`✗ ${(err as Error).message}\n`);
+            return 1;
+        }
     }
 
     if (inputs.length === 0) {
@@ -143,7 +143,17 @@ export function run(argv: string[], io: CliIo = processIo): number {
         return 1;
     }
 
-    const files = inputs.flatMap(listSvgs);
+    let failures = 0;
+    const files = inputs.flatMap((input) => {
+        try {
+            return listSvgs(input);
+        } catch (err) {
+            failures++;
+            const missing = (err as NodeJS.ErrnoException).code === 'ENOENT';
+            io.stderr(`✗ ${input}: ${missing ? 'no such file or directory' : (err as Error).message}\n`);
+            return [];
+        }
+    });
     const explicitTarget = out && files.length === 1 && extname(out) === '.xml' ? out : undefined;
     const jobs = files.map((input) => ({ input, output: explicitTarget ?? defaultOutputPath(input, out, naming) }));
     if (!stdout) {
@@ -154,7 +164,6 @@ export function run(argv: string[], io: CliIo = processIo): number {
             return 1;
         }
     }
-    let failures = 0;
     for (const { input: file, output: target } of jobs) {
         try {
             const { xml, warnings } = convert(readFileSync(file, 'utf8'), opts);

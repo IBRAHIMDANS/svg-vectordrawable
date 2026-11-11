@@ -190,6 +190,49 @@ describe('svgvd CLI', () => {
         expect(res.stdout).toContain('Usage:');
     });
 
+    describe('invalid invocations fail with a message, not a stack trace', () => {
+        it.each(['abc', '-1', '1.5', ''])('rejects --precision %j', (value) => {
+            const res = svgvd('-s', ICON, '-p', value);
+            expect(res.status).toBe(1);
+            expect(res.stderr).toContain('Invalid --precision');
+            expect(res.stdout).toBe('');
+        });
+
+        it.each(['-p', '-s', '-o', '--tint', '--rule', '--min-sdk'])('rejects %s without a value', (flag) => {
+            const res = svgvd(flag);
+            expect(res.status).toBe(1);
+            expect(res.stderr).toBe(`Missing value for ${flag}\n`);
+        });
+
+        it('reports a missing input file and still converts the others', () => {
+            const input = join(dir, 'icon.svg');
+            writeFileSync(input, ICON);
+            const res = svgvd(join(dir, 'nope.svg'), input);
+            expect(res.status).toBe(1);
+            expect(res.stderr).toContain(`✗ ${join(dir, 'nope.svg')}: no such file or directory`);
+            expect(existsSync(join(dir, 'icon.xml'))).toBe(true);
+        });
+
+        it('reports a rejected inline SVG (--strict)', () => {
+            const res = svgvd('--strict', '-s', DASHED);
+            expect(res.status).toBe(1);
+            expect(res.stderr).toMatch(/^✗ \[unsupported-stroke-dasharray\]/);
+            expect(res.stdout).toBe('');
+        });
+
+        it('reports an invalid inline SVG', () => {
+            const res = svgvd('-s', 'not svg');
+            expect(res.status).toBe(1);
+            expect(res.stderr).toMatch(/^✗ Invalid SVG/);
+        });
+
+        it('rejects "-" (stdin is not read)', () => {
+            const res = svgvd('-');
+            expect(res.status).toBe(1);
+            expect(res.stderr).toContain('stdin is not supported');
+        });
+    });
+
     describe('--strict=lossy and --min-sdk', () => {
         // Group opacity over overlapping children: an approximation, not a loss.
         const APPROX =

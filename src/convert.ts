@@ -2,6 +2,7 @@ import type { XastElement } from './ast.js';
 import { ClipPaths } from './clip.js';
 import type { ConvertContext } from './context.js';
 import { collectByName } from './elements.js';
+import { toAndroidColor } from './color.js';
 import { ConversionError } from './errors.js';
 import { escapeXml, formatNumber } from './format.js';
 import { collectGradients } from './gradient.js';
@@ -32,6 +33,8 @@ const GRADIENT_FILL_TYPE_SDK = 24;
 const MAX_PATH_DATA_LENGTH = 800;
 /** Android's recommended maximum vector size (dp). */
 const MAX_VECTOR_DP = 200;
+/** Upper bound of `floatPrecision`: beyond it a double carries no further decimal. */
+const MAX_FLOAT_PRECISION = 20;
 /** `info` codes too noisy to report unless enabled with `rules` (`long-path-data`: ~3% of real icons). */
 const OFF_BY_DEFAULT: ReadonlySet<WarningCode> = new Set(['long-path-data']);
 
@@ -86,6 +89,15 @@ export function convert(svg: string, options: ConvertOptions = {}): ConvertResul
         throw new TypeError(`Invalid strict: ${JSON.stringify(strict)} (expected true, false or 'lossy')`);
     if (appMinSdk !== undefined && !(Number.isInteger(appMinSdk) && appMinSdk >= 1))
         throw new TypeError(`Invalid minSdk: ${appMinSdk} (expected a positive integer)`);
+    if (!(Number.isInteger(floatPrecision) && floatPrecision >= 0 && floatPrecision <= MAX_FLOAT_PRECISION))
+        throw new TypeError(
+            `Invalid floatPrecision: ${floatPrecision} (expected an integer from 0 to ${MAX_FLOAT_PRECISION})`,
+        );
+    if (!(Number.isInteger(indent) && indent >= 0))
+        throw new TypeError(`Invalid indent: ${indent} (expected a non-negative integer)`);
+    // An unparseable color would silently drop every shape painted with `currentColor`.
+    if (toAndroidColor(currentColor, 1, currentColor) === null)
+        throw new TypeError(`Invalid currentColor: ${JSON.stringify(currentColor)} (expected a CSS color)`);
 
     for (const code of Object.keys(rules))
         if (!(WARNING_CODES as readonly string[]).includes(code))

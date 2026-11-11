@@ -137,10 +137,35 @@ describe('vectorDrawableToSvg: unsupported input throws a clear Error', () => {
         ],
         ['a non-numeric attribute', () => vectorDrawableToSvg(vd('', ' android:alpha="half"')), /android:alpha="half"/],
         ['a non-positive density', () => vectorDrawableToSvg(vd(''), { density: 0 }), /density/],
+        [
+            'a non-numeric size',
+            () => vectorDrawableToSvg(vd('').replace('android:width="24dp"', 'android:width="abc"')),
+            /android:width="abc" is not a positive size/,
+        ],
+        [
+            'a character reference outside Unicode',
+            () => vectorDrawableToSvg(vd('<path android:pathData="&#x110000;"/>')),
+            /Invalid character reference &#x110000;/,
+        ],
     ];
     for (const [label, run, message] of cases) {
         it(label, () => expect(run).toThrow(message));
     }
+});
+
+describe('vectorDrawableToSvg: attribute values are never copied verbatim into the SVG', () => {
+    const stroked = (attr: string) =>
+        vd(`<path android:pathData="M0 0h9v9z" android:strokeColor="#000" android:strokeWidth="1" ${attr}/>`);
+
+    it.each(['strokeLineCap', 'strokeLineJoin'])('rejects an injected android:%s', (name) => {
+        const xml = stroked(`android:${name}="round&quot; onload=&quot;alert(1)"`);
+        expect(() => vectorDrawableToSvg(xml)).toThrow(`Unsupported android:${name}`);
+    });
+
+    it('keeps the valid keywords', () => {
+        const svg = vectorDrawableToSvg(stroked('android:strokeLineCap="square" android:strokeLineJoin="bevel"'));
+        expect(svg).toContain('stroke-linecap="square" stroke-linejoin="bevel"');
+    });
 });
 
 describe('vectorDrawableToSvg: packaging', () => {

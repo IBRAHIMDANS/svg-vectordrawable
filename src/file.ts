@@ -30,6 +30,19 @@ export function assertDistinctOutputs(
     if (naming?.androidNames) assertNoNameCollisions(entries.map(({ input, output }) => ({ input, name: output })));
 }
 
+/** The `*.svg` files directly inside `dir` (non-recursive, extension matched case-insensitively). */
+export function listSvgFiles(dir: string): string[] {
+    return readdirSync(dir)
+        .map((entry) => join(dir, entry))
+        .filter((p) => extname(p).toLowerCase() === '.svg' && statSync(p).isFile());
+}
+
+/** Writes `content` to `target`, creating its parent directories first. */
+export function writeOutput(target: string, content: string): void {
+    mkdirSync(dirname(target), { recursive: true });
+    writeFileSync(target, content);
+}
+
 /**
  * Converts a single SVG file to a VectorDrawable XML file.
  * Defaults the output path to the input with a `.xml` extension. (Node only.)
@@ -41,9 +54,7 @@ export function convertFile(
     naming?: FileNamingOptions,
 ): ConvertResult {
     const result = convert(readFileSync(inputPath, 'utf8'), options);
-    const target = outputPath ?? defaultOutputPath(inputPath, undefined, naming);
-    mkdirSync(dirname(target), { recursive: true });
-    writeFileSync(target, result.xml);
+    writeOutput(outputPath ?? defaultOutputPath(inputPath, undefined, naming), result.xml);
     return result;
 }
 
@@ -63,10 +74,10 @@ export function convertDir(
     options?: ConvertOptions,
     naming?: FileNamingOptions,
 ): ConvertDirResult[] {
-    const jobs = readdirSync(inputDir)
-        .map((entry) => join(inputDir, entry))
-        .filter((p) => statSync(p).isFile() && extname(p).toLowerCase() === '.svg')
-        .map((input) => ({ input, output: defaultOutputPath(input, outputDir, naming) }));
+    const jobs = listSvgFiles(inputDir).map((input) => ({
+        input,
+        output: defaultOutputPath(input, outputDir, naming),
+    }));
     assertDistinctOutputs(jobs, naming);
     mkdirSync(outputDir, { recursive: true });
     return jobs.map(({ input, output }) => ({ input, output, warnings: convertFile(input, output, options).warnings }));

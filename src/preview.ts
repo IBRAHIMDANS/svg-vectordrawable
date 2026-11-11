@@ -53,6 +53,7 @@ function decodeEntities(s: string): string {
     return s.replace(/&(#x[0-9a-f]+|#\d+|[a-z]+);/gi, (m, e: string) => {
         if (e[0] === '#') {
             const code = e[1] === 'x' || e[1] === 'X' ? parseInt(e.slice(2), 16) : parseInt(e.slice(1), 10);
+            if (!(code <= 0x10ffff)) throw new Error(`Invalid character reference ${m}`);
             return String.fromCodePoint(code);
         }
         return ENTITIES[e] ?? m;
@@ -142,6 +143,27 @@ function num(attrs: Record<string, string>, key: string, fallback: number): numb
     return n;
 }
 
+/** Values of `android:strokeLineCap` / `android:strokeLineJoin` (same keywords as SVG), default first. */
+const LINE_CAPS = ['butt', 'round', 'square'] as const;
+const LINE_JOINS = ['miter', 'round', 'bevel'] as const;
+
+/** Reads an enumerated attribute (default: the first keyword); anything else is not copied into the SVG. */
+function keyword(attrs: Record<string, string>, key: string, allowed: readonly string[]): string {
+    const raw = attrs[`android:${key}`];
+    if (raw === undefined) return allowed[0]!;
+    if (!allowed.includes(raw)) throw new Error(`Unsupported android:${key}=${JSON.stringify(raw)}`);
+    return raw;
+}
+
+/** Reads a `<vector>` size (`24dp`, any unit suffix ignored); must be a positive number. */
+function dp(attrs: Record<string, string>, key: string, fallback: number): number {
+    const raw = attrs[`android:${key}`];
+    if (raw === undefined) return fallback;
+    const n = parseFloat(raw);
+    if (!(n > 0 && Number.isFinite(n))) throw new Error(`android:${key}="${raw}" is not a positive size`);
+    return n;
+}
+
 const TILE_TO_SPREAD: Record<string, string> = { clamp: 'pad', repeated: 'repeat', mirror: 'reflect' };
 
 /** Mutable state threaded through the serialization (unique ids, collected `<defs>`). */
@@ -224,8 +246,8 @@ function pathToSvg(path: XmlNode, ctx: Ctx): string {
         out.push(`stroke="${stroke.rgb}"`, `stroke-width="${strokeWidth}"`);
         const opacity = stroke.opacity * num(a, 'strokeAlpha', 1);
         if (opacity !== 1) out.push(`stroke-opacity="${opacity}"`);
-        out.push(`stroke-linecap="${a['android:strokeLineCap'] ?? 'butt'}"`);
-        out.push(`stroke-linejoin="${a['android:strokeLineJoin'] ?? 'miter'}"`);
+        out.push(`stroke-linecap="${keyword(a, 'strokeLineCap', LINE_CAPS)}"`);
+        out.push(`stroke-linejoin="${keyword(a, 'strokeLineJoin', LINE_JOINS)}"`);
         out.push(`stroke-miterlimit="${num(a, 'strokeMiterLimit', 4)}"`);
     }
     return `<path ${out.join(' ')}/>`;
@@ -324,8 +346,8 @@ export function vectorDrawableToSvg(xml: string, options: PreviewOptions = {}): 
     const vh = num(a, 'viewportHeight', NaN);
     if (!(vw > 0 && vh > 0)) throw new Error('<vector> needs positive viewportWidth / viewportHeight');
     // `24dp` → 24: dp map 1:1 to SVG user units at mdpi (density 1).
-    const w = parseFloat(a['android:width'] ?? `${vw}`) * density;
-    const h = parseFloat(a['android:height'] ?? `${vh}`) * density;
+    const w = dp(a, 'width', vw) * density;
+    const h = dp(a, 'height', vh) * density;
     const ctx: Ctx = { defs: [], nextId: 0 };
     let body = childrenToSvg(vector.children, ctx);
     if (options.applyTint) body = applyTint(body, a, vw, vh, ctx);
