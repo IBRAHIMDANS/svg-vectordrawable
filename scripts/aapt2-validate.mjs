@@ -1,8 +1,9 @@
 #!/usr/bin/env node
-// Compiles every fixture's converted VectorDrawable with Android's `aapt2`, then links the compiled
-// resources against the newest `<sdk>/platforms/android-*/android.jar`, to prove the output is not
-// just well-formed XML but a resource the Android toolchain actually accepts. `compile` alone only
-// checks XML syntax; `link` resolves every `android:` attribute name and value against the platform.
+// Compiles every fixture's converted VectorDrawable (once per option variant, see VARIANTS) with
+// Android's `aapt2`, then links the compiled resources against the newest
+// `<sdk>/platforms/android-*/android.jar`, to prove the output is not just well-formed XML but a
+// resource the Android toolchain actually accepts. `compile` alone only checks XML syntax; `link`
+// resolves every `android:` attribute name and value against the platform.
 //
 // Locally without an SDK it prints a clear message and exits 0 (so it never blocks dev). In CI,
 // once an SDK is present, an aapt2 failure or a conversion throw exits 1. A missing platform jar
@@ -64,6 +65,15 @@ function findAndroidJar(sdkRoot) {
 // supports from API 24 (Android 7.0) — the floor for every fixture.
 const MIN_SDK = 24;
 
+// Each fixture is converted once per variant, so the options that change the `<vector>` root
+// (`autoMirrored`, `width`, `height`) are proven to compile and link too, not just the defaults.
+// The suffix keeps every resource name distinct and valid (lowercase letters, digits, underscores).
+const VARIANTS = [
+    { suffix: '', options: {} },
+    { suffix: '_mirrored_w48', options: { autoMirrored: true, width: 48 } },
+    { suffix: '_h13_5', options: { height: 13.5 } },
+];
+
 /** Runs aapt2 with the given args; on failure prints its output and returns false. */
 function runAapt2(aapt2, step, args) {
     try {
@@ -116,21 +126,25 @@ async function main() {
     const resDir = join(workDir, 'res', 'drawable');
     mkdirSync(resDir, { recursive: true });
 
-    // Map each fixture to a valid Android resource filename (dN.xml — lowercase, starts with a letter).
+    // Map each fixture × variant to a valid Android resource filename (dN<suffix>.xml — lowercase,
+    // starts with a letter).
     const mapping = [];
     let convertFailures = 0;
     fixtures.forEach((file, i) => {
-        const name = `d${i}`;
-        try {
-            const svg = readFileSync(join(fixturesDir, file), 'utf8');
-            const { xml } = convert(svg, { optimize: true });
-            writeFileSync(join(resDir, `${name}.xml`), xml);
-            mapping.push({ file, name });
-        } catch (err) {
-            convertFailures++;
-            console.error(
-                `[aapt2-validate] ✗ conversion failed for ${file}: ${err instanceof Error ? err.message : err}`,
-            );
+        for (const { suffix, options } of VARIANTS) {
+            const name = `d${i}${suffix}`;
+            const label = suffix ? `${file} ${JSON.stringify(options)}` : file;
+            try {
+                const svg = readFileSync(join(fixturesDir, file), 'utf8');
+                const { xml } = convert(svg, { optimize: true, ...options });
+                writeFileSync(join(resDir, `${name}.xml`), xml);
+                mapping.push({ label, name });
+            } catch (err) {
+                convertFailures++;
+                console.error(
+                    `[aapt2-validate] ✗ conversion failed for ${label}: ${err instanceof Error ? err.message : err}`,
+                );
+            }
         }
     });
 
@@ -145,7 +159,7 @@ async function main() {
         cleanup(workDir);
         process.exit(1);
     }
-    console.log(`[aapt2-validate] ✓ aapt2 compiled all ${mapping.length} fixtures with no errors.`);
+    console.log(`[aapt2-validate] ✓ aapt2 compiled all ${mapping.length} drawables with no errors.`);
 
     const androidJar = findAndroidJar(sdkRoot);
     let linked = false;
@@ -188,12 +202,12 @@ async function main() {
             process.exit(1);
         }
         linked = true;
-        console.log(`[aapt2-validate] ✓ aapt2 linked all ${mapping.length} fixtures with no errors.`);
+        console.log(`[aapt2-validate] ✓ aapt2 linked all ${mapping.length} drawables with no errors.`);
     }
 
     cleanup(workDir);
     console.log(`[aapt2-validate] ✓ ${linked ? 'compile + link' : 'compile only'} OK:`);
-    for (const { file, name } of mapping) console.log(`    ${name}.xml  ←  ${file}`);
+    for (const { label, name } of mapping) console.log(`    ${name}.xml  ←  ${label}`);
     process.exit(0);
 }
 
