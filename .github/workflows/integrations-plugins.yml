@@ -1,0 +1,89 @@
+name: Integrations (Vite & Gradle plugins)
+
+# Builds and tests integrations/vite-plugin and integrations/gradle-plugin, each with its own lockfile and
+# against svg-vectordrawable from npm (not the repository's dist/). Each folder is its own pnpm workspace
+# (pnpm-workspace.yaml next to its pnpm-lock.yaml), independent of the root one.
+on:
+    push:
+        branches: [main, master]
+        paths:
+            - 'integrations/vite-plugin/**'
+            - 'integrations/gradle-plugin/**'
+            - '.github/workflows/integrations-plugins.yml'
+    pull_request:
+        paths:
+            - 'integrations/vite-plugin/**'
+            - 'integrations/gradle-plugin/**'
+            - '.github/workflows/integrations-plugins.yml'
+
+jobs:
+    vite-plugin:
+        runs-on: ubuntu-latest
+        strategy:
+            fail-fast: false
+            matrix:
+                # Vite 8 needs Node ^20.19 || >= 22.12.
+                node-version: [22, 24]
+        defaults:
+            run:
+                working-directory: integrations/vite-plugin
+        steps:
+            - uses: actions/checkout@v4
+            - uses: pnpm/action-setup@v6
+            - uses: actions/setup-node@v4
+              with:
+                  node-version: ${{ matrix.node-version }}
+                  cache: pnpm
+                  cache-dependency-path: integrations/vite-plugin/pnpm-lock.yaml
+            - run: pnpm install --frozen-lockfile
+            - run: pnpm run typecheck
+            # node:test: incremental builds, watch mode, dev server, warnings and strict errors.
+            - run: pnpm test
+            - name: Example build, twice (the second converts nothing)
+              run: |
+                  pnpm exec vite build example | tee first.log
+                  pnpm exec vite build example | tee second.log
+                  grep -q 'svg-vectordrawable: 3 converted, 0 up to date' first.log
+                  grep -q 'svg-vectordrawable: 0 converted, 3 up to date' second.log
+                  ls example/android/app/src/main/res/drawable
+            - run: npm pack --dry-run
+
+    gradle-plugin:
+        runs-on: ubuntu-latest
+        defaults:
+            run:
+                working-directory: integrations/gradle-plugin
+        steps:
+            - uses: actions/checkout@v4
+            - uses: pnpm/action-setup@v6
+            - uses: actions/setup-node@v4
+              with:
+                  node-version: 22
+                  cache: pnpm
+                  cache-dependency-path: integrations/gradle-plugin/example/pnpm-lock.yaml
+            - uses: actions/setup-java@v4
+              with:
+                  distribution: temurin
+                  # Lowest JDK supported by Gradle 9 and AGP 9; the plugin targets Java 17.
+                  java-version: 17
+            - uses: android-actions/setup-android@v3
+              with:
+                  packages: 'platforms;android-36'
+            - uses: gradle/actions/setup-gradle@v4
+            # The svgvd CLI, used by the TestKit tests and the example app.
+            - run: pnpm install --frozen-lockfile
+              working-directory: integrations/gradle-plugin/example
+            # validatePlugins + TestKit functional tests (UP-TO-DATE, FROM-CACHE, configuration cache, Android app).
+            - run: ./gradlew build --console=plain
+            - name: Example app, built twice (the second is UP-TO-DATE)
+              run: |
+                  ./gradlew -p example :app:assembleDebug --console=plain
+                  ./gradlew -p example :app:assembleDebug --console=plain | tee second.log
+                  grep -q 'Task :app:convertDebugSvgToVectorDrawable UP-TO-DATE' second.log
+            - if: failure()
+              uses: actions/upload-artifact@v4
+              with:
+                  name: gradle-plugin-reports
+                  path: |
+                      integrations/gradle-plugin/build/reports
+                      integrations/gradle-plugin/example/app/build/reports

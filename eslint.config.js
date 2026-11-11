@@ -18,6 +18,16 @@ export default tseslint.config(
             'playground/browser-lite.global.js',
         ],
     },
+    // Vite and Gradle plugins (integrations/vite-plugin, integrations/gradle-plugin): build outputs.
+    {
+        ignores: [
+            'integrations/vite-plugin/dist',
+            'integrations/vite-plugin/example/android',
+            'integrations/vite-plugin/example/dist',
+            'integrations/gradle-plugin/**/build',
+            'integrations/gradle-plugin/**/.gradle',
+        ],
+    },
     js.configs.recommended,
     ...tseslint.configs.recommended,
     {
@@ -56,6 +66,13 @@ export default tseslint.config(
     },
     {
         files: ['playground/*.mjs'],
+        languageOptions: {
+            globals: { ...globals.node },
+        },
+    },
+    // Vite plugin: Node code (plugin, tests, example config).
+    {
+        files: ['integrations/vite-plugin/**/*.{ts,js,mjs}'],
         languageOptions: {
             globals: { ...globals.node },
         },
