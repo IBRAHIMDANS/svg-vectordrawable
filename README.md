@@ -169,6 +169,7 @@ svgvd icons/ -r -o out/        # recursive: icons/a/b.svg → out/a/b.xml
 svgvd icons/ -o out/ --json    # JSON report on stdout, for CI (see below)
 svgvd icons/ -r --dry-run      # convert and report, write nothing
 svgvd icons/ -o res/drawable --strict --fallback-png all   # PNGs for what cannot be a vector
+svgvd icons/ -r -o out/ --watch   # convert, then reconvert on every save (Ctrl+C to stop)
 ```
 
 `--json` prints one entry per file, `[{ input, output, warnings, minSdk, error, fallback }]`, and nothing else on
@@ -183,6 +184,14 @@ With `--recursive` and `--android-names`, the outputs are written flat into `-o`
 directory has no subdirectories) and a name collision across subdirectories fails before anything is
 written. Symbolic links to directories are not followed. Without an input argument, `svgvd` reads
 stdin only when it is not a terminal, and prints the help when nothing is piped.
+
+`--watch` (`-w`) converts everything once, then keeps watching the inputs, for projects without a build
+plugin: an added or changed SVG is converted again (shortly after the last write, since editors save in
+several steps), the XML (and fallback PNGs) of a removed one is deleted, and a conversion error is
+reported without stopping the watch. With `--android-names`, a file whose resource name is taken by
+another one is not written until the collision is resolved. It needs files or directories (not stdin
+or `-s`), cannot be combined with `--stdout`, `--json` or `--dry-run`, and with `-r` it needs Node.js 20
+or later on Linux (recursive `fs.watch`). Ctrl+C stops it with exit code 0.
 
 #### PNG fallback
 
