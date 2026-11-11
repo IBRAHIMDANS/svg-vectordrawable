@@ -15,6 +15,113 @@ export { normalizeArcFlags } from './pathParse.js';
  * M/L/C/Q/Z, which is all an Android VectorDrawable path needs.
  */
 
+/** Arguments per group of each path command (SVG 2 §9.3.9 grammar). */
+const GROUP_SIZE: Readonly<Record<string, number>> = { M: 2, L: 2, H: 1, V: 1, C: 6, S: 4, Q: 4, T: 2, A: 7, Z: 0 };
+/** `wsp` of the path-data grammar. */
+const WSP = new Set([' ', '\t', '\n', '\f', '\r']);
+/** One path-data number (an exponent counts only with its digits). Sticky: matched at `lastIndex`. */
+const NUMBER_RE = /[+-]?(?:\d+\.?\d*|\.\d+)(?:[eE][+-]?\d+)?/y;
+/** Characters a number can start with: an argument group follows when the next character is one. */
+const NUMBER_START_RE = /[+\-.\d]/;
+
+/**
+ * Applies SVG 2 path-data error handling (§9.5.4): the path is rendered up to the last command
+ * group that is fully valid, and data that does not start with a moveto renders nothing. Returns
+ * `d` itself when it is entirely valid (byte for byte, so valid input is never rewritten), its
+ * valid prefix otherwise (`M10 10 L20 20 L` → `M10 10 L20 20`), or null when what remains draws no
+ * segment (empty, garbage, no leading moveto, movetos only). svgo's `parsePathData` follows the
+ * same rule, so both `optimize` modes keep the same geometry.
+ */
+export function validPathData(d: string): string | null {
+    const n = d.length;
+    let i = 0;
+    /** End of the last complete command group: the valid prefix is `d.slice(0, end)`. */
+    let end = 0;
+    let drawable = false;
+
+    const skipWsp = (): void => {
+        while (i < n && WSP.has(d[i]!)) i += 1;
+    };
+    /** Skips a `comma_wsp`; true when it held a comma (an argument must follow then). */
+    const skipCommaWsp = (): boolean => {
+        skipWsp();
+        if (d[i] !== ',') return false;
+        i += 1;
+        skipWsp();
+        return true;
+    };
+    const readNumber = (): boolean => {
+        NUMBER_RE.lastIndex = i;
+        const m = NUMBER_RE.exec(d);
+        if (!m) return false;
+        i += m[0].length;
+        return true;
+    };
+    /** Reads one argument group of `upper` starting at `i` (separators inside the group only). */
+    const readGroup = (upper: string): boolean => {
+        for (let k = 0; k < GROUP_SIZE[upper]!; k += 1) {
+            if (k > 0) skipCommaWsp();
+            if (upper === 'A' && (k === 3 || k === 4)) {
+                // Arc flags are a single character, no separator needed after them.
+                if (d[i] !== '0' && d[i] !== '1') return false;
+                i += 1;
+            } else if (!readNumber()) return false;
+        }
+        return true;
+    };
+    const complete = (upper: string): void => {
+        end = i;
+        if (upper !== 'M') drawable = true;
+    };
+
+    let started = false;
+    let valid = true;
+    scan: while (true) {
+        skipWsp();
+        if (i >= n) break;
+        const letter = d[i]!;
+        const upper = letter.toUpperCase();
+        if (!/[a-z]/i.test(letter) || GROUP_SIZE[upper] === undefined || (!started && upper !== 'M')) {
+            valid = false;
+            break;
+        }
+        started = true;
+        i += 1;
+        if (upper === 'Z') {
+            complete(upper);
+            continue;
+        }
+        skipWsp();
+        if (!readGroup(upper)) {
+            valid = false;
+            break;
+        }
+        complete(upper);
+        // Repeated groups; those after a moveto are implicit linetos.
+        const repeat = upper === 'M' ? 'L' : upper;
+        while (true) {
+            const save = i;
+            const comma = skipCommaWsp();
+            if (i < n && NUMBER_START_RE.test(d[i]!)) {
+                if (!readGroup(repeat)) {
+                    valid = false;
+                    break scan;
+                }
+                complete(repeat);
+            } else if (comma) {
+                valid = false; // a comma not followed by an argument
+                break scan;
+            } else {
+                i = save;
+                break;
+            }
+        }
+    }
+
+    if (!drawable) return null;
+    return valid ? d : d.slice(0, end);
+}
+
 /**
  * Applies an affine matrix to a path and returns a new path string in absolute commands only
  * (M/L/C/Q/Z). The path is first lowered (see {@link toAbsolute}: H/V→L, S→C, T→Q, A→cubics),

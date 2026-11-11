@@ -1,4 +1,5 @@
 import type { Viewport, XastElement } from './ast.js';
+import { validPathData } from './pathData.js';
 import { shapeToPathData, SHAPE_NAMES } from './shapes.js';
 import { presentation } from './style.js';
 
@@ -138,9 +139,15 @@ export function switchChild(
     };
 }
 
-/** Path data of a `<path>` or basic shape, or null when the element draws no geometry. */
+/**
+ * Path data of a `<path>` or basic shape, or null when the element draws no geometry. A `d` in
+ * error is cut after its last valid segment (SVG 2 §9.5.4, see {@link validPathData}).
+ */
 export function pathDataOf(el: XastElement, viewport: Viewport, precision: number): string | null {
-    if (el.name === 'path') return el.attributes?.d ?? null;
+    if (el.name === 'path') {
+        const d = el.attributes?.d;
+        return d === undefined ? null : validPathData(d);
+    }
     if (el.name && SHAPE_NAMES.has(el.name))
         return shapeToPathData(el.name, el.attributes ?? {}, { viewport, precision });
     return null;
