@@ -1,7 +1,7 @@
 import type { XastElement } from './ast.js';
 import { ClipPaths } from './clip.js';
 import type { ConvertContext } from './context.js';
-import { collectByName, failsConditions } from './elements.js';
+import { collectByName, failsConditions, isDisplayNone } from './elements.js';
 import { colorRefs } from './colorRef.js';
 import { ConversionError } from './errors.js';
 import { escapeXml, formatNumber } from './format.js';
@@ -9,7 +9,7 @@ import { collectGradients } from './gradient.js';
 import { checkGroupOpacity } from './groupOpacity.js';
 import { initialStyle, resolveStyle } from './inherited.js';
 import { parseSvg } from './normalize.js';
-import { walk } from './render.js';
+import { systemLanguageIgnored, walk } from './render.js';
 import { applyCssProperties, parseStyle, presentation } from './style.js';
 import { parseOpacity } from './units.js';
 import { resolveUses } from './useResolver.js';
@@ -82,6 +82,10 @@ const cssText = (el: XastElement): string =>
         .replace(/\/\*[\s\S]*?\*\//g, '')
         .trim();
 
+/** The root `<svg>` element of a parsed document. */
+const svgRootOf = (doc: XastElement): XastElement | undefined =>
+    (doc.children ?? []).find((c) => c.type === 'element' && c.name === 'svg');
+
 const elementsNamed = (root: XastElement, ...names: string[]): XastElement[] => {
     const out: XastElement[] = [];
     collectByName(root, new Set(names), out);
@@ -141,11 +145,24 @@ export function convert(svg: string, options: ConvertOptions = {}): ConvertResul
     // Fold CSS transforms into attributes before <use> expansion, so that clones inherit them.
     applyCssProperties(root, warn);
     resolveUses(root); // inline <use> references so the walker sees concrete geometry
-    const found = (root.children ?? []).find((c) => c.type === 'element' && c.name === 'svg');
+    // svgo's removeHiddenElems deletes a root it deems hidden. When the source root itself says
+    // display: none, its attributes (size, viewport) come from the unoptimized parse and its content
+    // is not rendered. Otherwise svgo may be wrong (a `style="visibility:visible"` descendant, a
+    // custom svgoConfig, a <style> rule it inlined…): convert the unoptimized source instead, so the
+    // output stays faithful or the warnings say why.
+    const kept = svgRootOf(root);
+    let removed: XastElement | undefined;
+    if (!kept && optimize) {
+        removed = svgRootOf(parseSvg(svg, false));
+        if (removed && !isDisplayNone(removed)) return convert(svg, { ...options, optimize: false });
+    }
+    const found = kept ?? (removed && { ...removed, children: [] });
     if (!found) throw new Error('No <svg> root element found');
+    // A root with display: none renders nothing, whatever its conditions: an empty <vector>, faithful.
+    const hidden = removed !== undefined || isDisplayNone(found);
     // Conditional processing (SVG 2 §5.8) applies to the root too: when it fails, browsers render
     // nothing, so the <vector> is emptied (still a valid drawable); being lossy, strict rejects it.
-    const excluded = failsConditions(found);
+    const excluded = !hidden && failsConditions(found);
     if (excluded)
         warn({
             code: 'unsupported-attribute',
@@ -153,14 +170,9 @@ export function convert(svg: string, options: ConvertOptions = {}): ConvertResul
                 'The root <svg> fails its requiredExtensions / systemLanguage condition: nothing is rendered; the <vector> is empty.',
             node: 'svg',
         });
-    else if (found.attributes?.systemLanguage !== undefined)
-        warn({
-            code: 'unsupported-attribute',
-            message:
-                'systemLanguage on <svg> depends on the device language, which a VectorDrawable cannot test; ignored.',
-            node: 'svg',
-        });
-    const svgEl: XastElement = excluded ? { ...found, children: [] } : found;
+    else if (!hidden && found.attributes?.systemLanguage !== undefined)
+        warn({ code: 'unsupported-attribute', message: systemLanguageIgnored('svg'), node: 'svg' });
+    const svgEl: XastElement = excluded || hidden ? { ...found, children: [] } : found;
 
     // svgo inlines what it can and drops the emptied <style>; any CSS left was not applied.
     if (elementsNamed(svgEl, 'style').some((s) => cssText(s) !== ''))
