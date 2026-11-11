@@ -533,13 +533,200 @@ describe('masks with stroked content (TASK-090)', () => {
 
     it('still refuses a stroked shape whose fill is not clip-equivalent, without mask-approximated', () => {
         const doc = svg(
-            '<mask id="m"><rect x="4" y="4" width="16" height="16" fill="#808080" stroke="#fff"/></mask>' +
+            '<mask id="m"><rect x="4" y="4" width="8" height="8" fill="#fff" stroke="#fff"/>' +
+                '<rect x="12" y="12" width="8" height="8" fill="#808080" stroke="#fff"/></mask>' +
                 '<path d="M0 0h24v24H0z" fill="#E53935" mask="url(#m)"/>',
         );
         for (const optimize of MODES) {
             const warnings = maskWarnings(doc, optimize);
             expect(warnings.map((w) => w.code)).toEqual(['unsupported-attribute']);
-            expect(warnings[0]!.message).toMatch(/not white/);
+            expect(warnings[0]!.message).toMatch(/not uniform/);
         }
+    });
+
+    it.each([
+        ['stroke-opacity="0"', 'stroke="#fff" stroke-width="3" stroke-opacity="0"'],
+        ['stroke-width="0"', 'stroke="#fff" stroke-width="0"'],
+        ['a transparent stroke color', 'stroke="transparent" stroke-width="3"'],
+        ['an rgba stroke of alpha 0', 'stroke="rgba(255,255,255,0)" stroke-width="3"'],
+    ])('does not warn mask-approximated for an invisible stroke (%s)', (_, stroke) => {
+        const doc = svg(
+            `<mask id="m"><rect x="4" y="4" width="16" height="16" fill="#fff" ${stroke}/></mask>` +
+                '<path d="M0 0h24v24H0z" fill="#E53935" mask="url(#m)"/>',
+        );
+        for (const optimize of MODES) {
+            const { xml, warnings } = convert(doc, { optimize });
+            expect(warnings).toEqual([]);
+            expect(clipCount(xml)).toBe(1);
+            expectRendersLike(doc, optimize);
+        }
+    });
+});
+
+describe('masks of uniform non-white luminance and nested masks (TASK-092)', () => {
+    const FULL = '<path d="M0 0h24v24H0z" fill="#E53935" mask="url(#m)"/>';
+    const maskOf = (content: string, attrs = ''): string => `<mask id="m"${attrs}>${content}</mask>`;
+    const fillAlphas = (xml: string): string[] => [...xml.matchAll(/android:fillAlpha="([^"]+)"/g)].map((m) => m[1]!);
+
+    /** Converted without warning, clipped `clips` times, rendering like its source. */
+    function expectExact(doc: string, clips = 1): string {
+        let out = '';
+        for (const optimize of MODES) {
+            const { xml, warnings } = convert(doc, { optimize });
+            expect(warnings).toEqual([]);
+            expect(xml).not.toContain('mask');
+            expect(clipCount(xml)).toBe(clips);
+            expectRendersLike(doc, optimize);
+            out = xml;
+        }
+        return out;
+    }
+
+    function expectRefused(doc: string, reason: RegExp): void {
+        for (const optimize of MODES) {
+            const { xml, warnings } = convert(doc, { optimize });
+            const masks = warnings.filter((w) => w.message.includes('mask on'));
+            expect(masks.map((w) => w.code)).toEqual(['unsupported-attribute']);
+            expect(masks[0]!.message).toMatch(reason);
+            expect(clipCount(xml)).toBe(0);
+        }
+    }
+
+    it.each([
+        ['gray', '#808080', 0.502],
+        ['pure red (0.2125)', '#f00', 0.2125],
+        ['pure green (0.7154)', '#00ff00', 0.7154],
+        ['Figma blue', '#2e42a5', 0.2701],
+    ])('clips with the shape and fades by the luminance of a %s fill', (_, color, alpha) => {
+        const xml = expectExact(svg(maskOf(`<rect x="4" y="4" width="16" height="16" fill="${color}"/>`) + FULL));
+        expect(Number(fillAlphas(xml)[0])).toBeCloseTo(alpha, 2);
+    });
+
+    it.each([
+        ['fill-opacity', '<rect x="4" y="4" width="16" height="16" fill="#fff" fill-opacity="0.5"/>'],
+        ['an rgba gray', '<rect x="4" y="4" width="16" height="16" fill="rgba(128,128,128,0.5)"/>'],
+        [
+            'a group opacity over shapes that do not overlap',
+            '<g opacity="0.5"><rect x="4" y="4" width="8" height="8" fill="#fff"/><rect x="12" y="12" width="8" height="8" fill="#fff"/></g>',
+        ],
+    ])('fades by luminance × alpha for translucent content (%s)', (_, content) => {
+        expectExact(svg(maskOf(content) + FULL));
+    });
+
+    it('fades by the alpha of an alpha mask, whatever the color', () => {
+        const content = '<rect x="4" y="4" width="16" height="16" fill="#123456" opacity="0.4"/>';
+        expect(fillAlphas(expectExact(svg(maskOf(content, ' mask-type="alpha"') + FULL)))).toEqual(['0.4']);
+    });
+
+    it('multiplies the own opacity of the element, set as an attribute or in its style', () => {
+        const content = maskOf('<rect x="4" y="4" width="16" height="16" fill="#808080"/>');
+        for (const own of ['opacity="0.5"', 'style="opacity:0.5"'])
+            expectExact(svg(`${content}<path d="M0 0h24v24H0z" fill="#E53935" ${own} mask="url(#m)"/>`));
+    });
+
+    it('fades the leaves of a masked group; warns opacity-approximated only when they overlap', () => {
+        const content = maskOf('<rect x="2" y="2" width="20" height="20" fill="#808080"/>');
+        expectExact(
+            svg(
+                `${content}<g mask="url(#m)"><rect width="12" height="24" fill="#E53935"/>` +
+                    '<rect x="12" width="12" height="24" fill="#3949AB"/></g>',
+            ),
+        );
+        const overlapping = svg(
+            `${content}<g mask="url(#m)"><rect width="16" height="24" fill="#E53935"/>` +
+                '<rect x="8" width="16" height="24" fill="#3949AB"/></g>',
+        );
+        for (const optimize of MODES)
+            expect(convert(overlapping, { optimize }).warnings.map((w) => w.code)).toEqual(['opacity-approximated']);
+    });
+
+    it('fades each element of a shared mask once', () => {
+        const doc = svg(
+            maskOf('<rect x="4" y="4" width="16" height="16" fill="#808080"/>', ' maskUnits="userSpaceOnUse"') +
+                '<path d="M0 0h12v24H0z" fill="#E53935" mask="url(#m)"/><path d="M12 0h12v24H12z" fill="#3949AB" mask="url(#m)"/>',
+        );
+        expect(fillAlphas(expectExact(doc, 2))).toEqual(['0.502', '0.502']);
+    });
+
+    it('keeps the warning for non-uniform content', () => {
+        const twoValues =
+            '<rect x="2" y="2" width="10" height="10" fill="#fff"/><rect x="12" y="12" width="10" height="10" fill="#808080"/>';
+        expectRefused(svg(maskOf(twoValues) + FULL), /not uniform/);
+        // White under black: the black shape cuts a hole, which is no uniform value.
+        const hole = '<rect width="24" height="24" fill="#fff"/><rect x="8" y="8" width="8" height="8"/>';
+        expectRefused(svg(maskOf(hole) + FULL), /not uniform/);
+    });
+
+    it('keeps the warning for overlapping translucent shapes (their values compose)', () => {
+        const half = 'fill="#fff" fill-opacity="0.5"';
+        const content = `<rect x="2" y="2" width="12" height="12" ${half}/><rect x="8" y="8" width="12" height="12" ${half}/>`;
+        expectRefused(svg(maskOf(content) + FULL), /translucent content with overlapping shapes/);
+    });
+
+    it('keeps the warning for a gray mask under color-interpolation="linearRGB", not for a white one', () => {
+        const gray = '<rect x="4" y="4" width="16" height="16" fill="#808080"/>';
+        expectRefused(svg(maskOf(gray, ' color-interpolation="linearRGB"') + FULL), /linearRGB/);
+        expectRefused(svg(`<g color-interpolation="linearRGB">${maskOf(gray)}</g>${FULL}`), /linearRGB/);
+        const white = '<rect x="4" y="4" width="16" height="16" fill="#fff"/>';
+        expectExact(svg(maskOf(white, ' color-interpolation="linearRGB"') + FULL));
+    });
+
+    describe('nested masks', () => {
+        const INNER = '<mask id="i" maskUnits="userSpaceOnUse"><rect width="12" height="24" fill="#fff"/></mask>';
+        const MASKED_CIRCLE = '<circle cx="12" cy="12" r="9" fill="#fff" mask="url(#i)"/>';
+        const SIDE = '<rect x="16" y="16" width="6" height="6" fill="#fff"/>';
+
+        it('intersects the clips of a mask on the element making up the mask content', () => {
+            expectExact(svg(INNER + maskOf(MASKED_CIRCLE) + FULL), 2);
+            // Under a transformed group, with a transform on the masked element.
+            const transformed =
+                '<g transform="translate(2 1)"><circle cx="10" cy="11" r="9" fill="#fff" mask="url(#i)" transform="rotate(30 10 11)"/></g>';
+            expectExact(svg(INNER + maskOf(transformed) + FULL), 2);
+        });
+
+        it('multiplies the values of both levels', () => {
+            const inner =
+                '<mask id="i" maskUnits="userSpaceOnUse"><rect width="12" height="24" fill="#808080"/></mask>';
+            const outer = maskOf('<circle cx="12" cy="12" r="9" fill="#808080" mask="url(#i)"/>');
+            const xml = expectExact(svg(inner + outer + FULL), 2);
+            expect(Number(fillAlphas(xml)[0])).toBeCloseTo(0.502 * 0.502, 3);
+        });
+
+        it('drops a masked element that only paints strokes (Figma stroke inside a mask)', () => {
+            // After brave/leo country-ms: a filled shape and its stroke, masked by the shape itself.
+            const SHAPE = 'M6 6c0 7-.5 12 6 12s6-6 6-12z';
+            const doc = svg(
+                `<mask id="m" maskUnits="userSpaceOnUse" x="4" y="4" width="16" height="16"><path fill="#fff" d="${SHAPE}"/>` +
+                    `<mask id="e" fill="#fff"><path d="${SHAPE}"/></mask><path fill="none" stroke="#fff" d="${SHAPE}" mask="url(#e)"/></mask>` +
+                    FULL,
+            );
+            for (const optimize of MODES) {
+                const { xml, warnings } = convert(doc, { optimize });
+                expect(warnings.map((w) => w.code)).toEqual(['mask-approximated']);
+                expect(clipCount(xml)).toBe(1);
+                expectRendersLike(doc, optimize);
+            }
+        });
+
+        it('keeps the warning when a level is not exact', () => {
+            // A masked element next to other content: a union of intersections is no clip.
+            expectRefused(svg(INNER + maskOf(SIDE + MASKED_CIRCLE) + FULL), /masked element next to other content/);
+            expectRefused(svg(INNER + maskOf(MASKED_CIRCLE + SIDE) + FULL), /masked element next to other content/);
+            // The inner mask is not clip-equivalent.
+            const inexact =
+                '<mask id="i"><rect width="12" height="24" fill="#fff"/><rect x="12" width="12" height="24" fill="#808080"/></mask>';
+            expectRefused(svg(inexact + maskOf(MASKED_CIRCLE) + FULL), /mask inside the mask \(.*not uniform/);
+            // After brave/leo country-sh: a stroke-only element under a Figma "outside stroke" mask
+            // (white rect, black shape on top) is not dropped: its inner mask is not exact.
+            const SHAPE = 'M6 6c0 7-.5 12 6 12s6-6 6-12z';
+            const outside = `<mask id="g" fill="#000"><path fill="#fff" d="M4 4h16v16H4z"/><path d="${SHAPE}"/></mask>`;
+            const content = `<path fill="#fff" d="${SHAPE}"/>${outside}<path fill="none" stroke="#fff" d="${SHAPE}" mask="url(#g)"/>`;
+            expectRefused(svg(maskOf(content) + FULL), /mask inside the mask \(.*not uniform/);
+        });
+
+        it('refuses a mask used inside its own content', () => {
+            const selfMasked = maskOf('<circle cx="12" cy="12" r="9" fill="#fff" mask="url(#m)"/>');
+            expectRefused(svg(selfMasked + FULL), /inside its own content/);
+        });
     });
 });

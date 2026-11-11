@@ -112,13 +112,16 @@ function reportUnsupportedAttrs(ctx: ConvertContext, el: XastElement, name: stri
     }
 }
 
+/** A rendered opacity value: 4 decimals are below what an 8-bit alpha resolves. */
+const formatOpacity = (v: number): string => String(Math.round(v * 1e4) / 1e4);
+
 /**
  * Rewrites an element whose mask is clip-equivalent as groups clipped by the mask: the outer one
  * takes over the element's transform, so its clips live in the element's user space (as mask
  * content does); the element itself keeps everything else, its own clip-path included (nested
  * clips intersect).
  */
-function maskAsClips(el: XastElement, clipIds: readonly string[]): XastElement {
+function maskAsClips(el: XastElement, clipIds: readonly string[], opacity: number): XastElement {
     const { transform, mask: _, style, ...rest } = el.attributes ?? {};
     const declarations = Object.entries(parseStyle(style)).filter(([k]) => k !== 'mask');
     if (declarations.length) rest.style = declarations.map(([k, v]) => `${k}:${v}`).join(';');
@@ -128,7 +131,12 @@ function maskAsClips(el: XastElement, clipIds: readonly string[]): XastElement {
         node = {
             type: 'element',
             name: 'g',
-            attributes: { ...(outer && transform ? { transform } : {}), 'clip-path': `url(#${id})` },
+            attributes: {
+                ...(outer && transform ? { transform } : {}),
+                // A uniform mask value is a group opacity on top of the clips (folded onto the leaves).
+                ...(outer && opacity < 1 ? { opacity: formatOpacity(opacity) } : {}),
+                'clip-path': `url(#${id})`,
+            },
             children: [node],
         };
     }
@@ -371,7 +379,7 @@ export function walk(ctx: ConvertContext, el: XastElement, parent: Inherited, pa
         if (name !== 'svg' && !ctx.reported.has(child) && !isNone(presentation(child, 'mask'))) {
             const mask = ctx.clips.resolveMask(child, parent.viewport);
             if ('clipIds' in mask) {
-                push(walk(ctx, fragment(maskAsClips(child, mask.clipIds)), parent, pad, bake));
+                push(walk(ctx, fragment(maskAsClips(child, mask.clipIds, mask.opacity)), parent, pad, bake));
                 continue;
             }
             maskReason = mask.reason;
