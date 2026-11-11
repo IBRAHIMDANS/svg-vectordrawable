@@ -1,6 +1,7 @@
 import { optimize } from './svgo.js';
 import type { Config } from 'svgo';
 import type { XastRoot } from './ast.js';
+import { isUsablePaint } from './inherited.js';
 
 /**
  * Default normalization: flatten inline `<style>`, turn shapes into paths, bake transforms and
@@ -146,6 +147,37 @@ const MAY_HAVE_CSS_TRANSFORM = /(?<![\w-])transform\s*:|transform-(?:origin|box)
  */
 const MAY_HAVE_CLIP_SHAPE = /clip-path\s*[:=]\s*["']?\s*(?:[a-z-]+\s+)?(?:inset|circle|ellipse|polygon)\(/i;
 
+/**
+ * svgo's `removeHiddenElems` deletes a `visibility: hidden` element unless a descendant carries the
+ * `visibility="visible"` attribute: a descendant made visible by a CSS declaration (`style` attribute
+ * or `<style>` rule) is deleted with it, whereas `optimize: false` draws it. Keep hidden elements
+ * (the converter resolves the cascade) whenever visibility may be set from CSS.
+ */
+const MAY_HAVE_CSS_VISIBILITY = /(?<![\w-])visibility\s*:/i;
+
+/**
+ * An unusable `fill` / `stroke` (`env()`, `var()`, a typo…) is ignored by the converter, which then
+ * applies the inherited value (see `isUsablePaint`). svgo treats it as a regular value:
+ * `collapseGroups` and `moveGroupAttrsToElems` push the group's paint down onto a child whose own
+ * (invalid) value overrides it, and `moveElemsAttrsToGroup` hoists the children's invalid value over
+ * the group's: the value to fall back to is gone before the converter runs. Keep the groups as
+ * authored whenever such a value is present.
+ */
+const PAINT_ATTR = /(?<![\w-])(?:fill|stroke)\s*=\s*(?:"([^"]*)"|'([^']*)')/gi;
+const PAINT_DECLARATION = /(?<![\w-])(?:fill|stroke)\s*:\s*([^;}"'<]*)/gi;
+const IMPORTANT = /\s*!\s*important\s*$/i;
+
+/** true when some `fill` / `stroke` attribute or CSS declaration holds a value the converter ignores. */
+function hasUnusablePaint(svg: string): boolean {
+    for (const m of svg.matchAll(PAINT_ATTR)) {
+        if (!isUsablePaint(m[1] ?? m[2] ?? '')) return true;
+    }
+    for (const m of svg.matchAll(PAINT_DECLARATION)) {
+        if (!isUsablePaint((m[1] ?? '').replace(IMPORTANT, ''))) return true;
+    }
+    return false;
+}
+
 /** svgo's own default `floatPrecision`: up to it, svgo's rounding is left exactly as it is. */
 const SVGO_FLOAT_PRECISION = 3;
 /** Above it, svgo's path and transform rounding falls back to `Math.round` (integers). */
@@ -182,6 +214,9 @@ function defaultConfigFor(svg: string, floatPrecision: number, fillBlackForUnfil
             ...EMPTY_GEOMETRY_HIDDEN_ELEMS,
         };
     }
+    if (MAY_HAVE_CSS_VISIBILITY.test(svg)) {
+        overrides.removeHiddenElems = { ...(overrides.removeHiddenElems as object | undefined), isHidden: false };
+    }
     if (MAY_HAVE_RGB_PERCENT.test(svg)) overrides.convertColors = { rgb2hex: false };
     if (MAY_HAVE_SYMBOL_GEOMETRY.test(svg)) {
         overrides.removeUnknownsAndDefaults = {
@@ -206,6 +241,11 @@ function defaultConfigFor(svg: string, floatPrecision: number, fillBlackForUnfil
         overrides.removeNonInheritableGroupAttrs = false;
         if (overrides.convertPathData !== false)
             overrides.convertPathData = { ...DEFAULT_OVERRIDES.convertPathData, applyTransforms: false };
+    }
+    if (hasUnusablePaint(svg)) {
+        overrides.moveElemsAttrsToGroup = false;
+        overrides.moveGroupAttrsToElems = false;
+        overrides.collapseGroups = false;
     }
     if (/<switch\b/.test(svg)) {
         // A <switch> renders one child: merging or dropping its children changes which one.
