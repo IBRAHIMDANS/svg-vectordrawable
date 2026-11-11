@@ -136,6 +136,11 @@ function defaultConfigFor(svg: string, floatPrecision: number, fillBlackForUnfil
         if (overrides.convertPathData !== false)
             overrides.convertPathData = { ...DEFAULT_OVERRIDES.convertPathData, applyTransforms: false };
     }
+    if (/<switch\b/.test(svg)) {
+        // A <switch> renders one child: merging or dropping its children changes which one.
+        overrides.mergePaths = false;
+        overrides.removeHiddenElems = false;
+    }
     const params: Record<string, unknown> = { overrides };
     if (floatPrecision > SVGO_FLOAT_PRECISION) {
         // The preset hands `floatPrecision` to every plugin that rounds (cleanupNumericValues,

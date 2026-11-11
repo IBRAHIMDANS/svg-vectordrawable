@@ -6,7 +6,7 @@ import { presentation } from './style.js';
 export const ANIMATIONS = new Set(['animate', 'animateColor', 'animateMotion', 'animateTransform', 'discard', 'set']);
 
 /** Elements a VectorDrawable cannot draw: reported, then skipped. */
-export const UNSUPPORTED = new Set(['image', 'text', 'foreignObject', 'switch', ...ANIMATIONS]);
+export const UNSUPPORTED = new Set(['image', 'text', 'foreignObject', ...ANIMATIONS]);
 
 /** Presentation attributes that reference features a VectorDrawable cannot express. */
 export const UNSUPPORTED_ATTRS = ['mask', 'filter', 'marker', 'marker-start', 'marker-mid', 'marker-end'] as const;
@@ -110,6 +110,33 @@ export function foreignElements(root: XastElement): WeakSet<XastElement> {
  */
 export const isNotRendered = (el: XastElement, foreign: WeakSet<XastElement>): boolean =>
     !el.name || SKIP.has(el.name) || foreign.has(el) || failsConditions(el) || isDisplayNone(el);
+
+/**
+ * The child a `<switch>` renders (SVG 2 §5.6.3): the first direct child `failsConditions` keeps.
+ * `display` / `visibility` take no part in the choice (a chosen `display: none` child renders
+ * nothing). Only rendered SVG elements are candidates: text, foreign elements and `SKIP` elements
+ * (`<title>`, `<desc>`…) are passed over, like Firefox (Chrome counts a `<desc>` as the chosen
+ * child, hence renders nothing). A non-empty `systemLanguage` is resolved as in a device language
+ * matching none of the listed ones (what both browsers render then): the first candidate without
+ * `systemLanguage`, the author's catch-all; failing one, the first candidate (its language
+ * assumed, as outside a `<switch>`). `languageDependent` is true when a candidate has a
+ * `systemLanguage`, i.e. when a browser may pick another child (Firefox ranks the language
+ * matches above the catch-all, whatever their order).
+ */
+export function switchChild(
+    sw: XastElement,
+    foreign: WeakSet<XastElement>,
+): { child: XastElement | undefined; languageDependent: boolean } {
+    const candidates = (sw.children ?? []).filter(
+        (c): c is XastElement =>
+            c.type === 'element' && !!c.name && !SKIP.has(c.name) && !foreign.has(c) && !failsConditions(c),
+    );
+    const catchAll = candidates.find((c) => c.attributes?.systemLanguage === undefined);
+    return {
+        child: catchAll ?? candidates[0],
+        languageDependent: candidates.some((c) => c.attributes?.systemLanguage !== undefined),
+    };
+}
 
 /** Path data of a `<path>` or basic shape, or null when the element draws no geometry. */
 export function pathDataOf(el: XastElement, viewport: Viewport, precision: number): string | null {
