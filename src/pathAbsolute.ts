@@ -26,12 +26,98 @@ function reflect(curr: number, prevControl: number): number {
     return 2 * curr - prevControl;
 }
 
+/** Center parameterization of an elliptical arc (SVG 2 implementation notes, B.2.4). */
+export interface ArcCenter {
+    cx: number;
+    cy: number;
+    /** Radii, already scaled up when too small to span the chord (notes B.2.5). */
+    rx: number;
+    ry: number;
+    cosPhi: number;
+    sinPhi: number;
+    /** Start angle and signed sweep (radians): the arc runs over angles theta → theta + delta. */
+    theta: number;
+    delta: number;
+}
+
+/**
+ * Endpoint → center conversion of the arc `A rx ry phi large sweep` from (x1, y1) to (x2, y2)
+ * (SVG 2 implementation notes B.2.4, out-of-range radii corrected per B.2.5). Null when a radius is
+ * zero or the end points coincide (the arc is then a straight line, or omitted, up to the caller), and
+ * when the center is out of double range: end points ~1e-160 apart, where den underflows to 0 and the
+ * spec formula is sqrt(0 / 0) or sqrt(x / 0), or radii ~1e155, whose squares overflow. A line is then
+ * the arc within rounding (B.2.5 omits an arc whose end points coincide).
+ *
+ * Angles use atan2(cross, dot), accurate near 0 and π where acos(dot / |u||v|) loses half its digits.
+ * When the radii had to be scaled up, the center is exactly the chord midpoint (the scaled ellipse
+ * spans the chord as a half ellipse): it is set as such rather than derived from a radicand that is
+ * then rounding noise, whose square root moved the center visibly on flattened half ellipses.
+ */
+export function arcCenter(
+    x1: number,
+    y1: number,
+    rxIn: number,
+    ryIn: number,
+    phiDeg: number,
+    largeArc: boolean,
+    sweep: boolean,
+    x2: number,
+    y2: number,
+): ArcCenter | null {
+    if (rxIn === 0 || ryIn === 0 || (x1 === x2 && y1 === y2)) return null;
+
+    let rx = Math.abs(rxIn);
+    let ry = Math.abs(ryIn);
+    const phi = (phiDeg * Math.PI) / 180;
+    const cosPhi = Math.cos(phi);
+    const sinPhi = Math.sin(phi);
+
+    // Step 1: end points in the ellipse's frame (chord midpoint at the origin).
+    const dx = (x1 - x2) / 2;
+    const dy = (y1 - y2) / 2;
+    const x1p = cosPhi * dx + sinPhi * dy;
+    const y1p = -sinPhi * dx + cosPhi * dy;
+
+    // Step 2: center in that frame. Radii too small to span the chord are scaled up uniformly (by
+    // √lambda, as a hypot so that tiny radii do not underflow), and the center is then the midpoint.
+    let cxp = 0;
+    let cyp = 0;
+    const sqrtLambda = Math.hypot(x1p / rx, y1p / ry);
+    if (sqrtLambda >= 1) {
+        rx *= sqrtLambda;
+        ry *= sqrtLambda;
+    } else {
+        const den = rx * rx * y1p * y1p + ry * ry * x1p * x1p;
+        let coef = Math.sqrt(Math.max(0, rx * rx * ry * ry - den) / den);
+        if (!Number.isFinite(coef)) return null;
+        if (largeArc === sweep) coef = -coef;
+        cxp = (coef * rx * y1p) / ry;
+        cyp = (-coef * ry * x1p) / rx;
+    }
+
+    // Step 3: center back in user space.
+    const cx = cosPhi * cxp - sinPhi * cyp + (x1 + x2) / 2;
+    const cy = sinPhi * cxp + cosPhi * cyp + (y1 + y2) / 2;
+
+    // Step 4: start angle, then the signed angle from u (start) to v (end), sign set by the sweep flag.
+    const ux = (x1p - cxp) / rx;
+    const uy = (y1p - cyp) / ry;
+    const vx = (-x1p - cxp) / rx;
+    const vy = (-y1p - cyp) / ry;
+    const theta = Math.atan2(uy, ux);
+    let delta = Math.atan2(ux * vy - uy * vx, ux * vx + uy * vy);
+    if (!sweep && delta > 0) delta -= 2 * Math.PI;
+    else if (sweep && delta < 0) delta += 2 * Math.PI;
+
+    return { cx, cy, rx, ry, cosPhi, sinPhi, theta, delta };
+}
+
 /**
  * Converts a single SVG elliptical arc into a sequence of cubic Bézier segments.
  *
- * Standard endpoint→center parameterization (SVG implementation notes F.6), then the sweep is
- * split into pieces of at most 90° and each piece approximated by one cubic. Returns the cubic
- * control/end points in absolute user space as flat [c1x,c1y,c2x,c2y,x,y, …].
+ * Endpoint → center parameterization ({@link arcCenter}), then the sweep is split into pieces of at
+ * most 90° and each piece approximated by one cubic. Returns the cubic control/end points in absolute
+ * user space as flat [c1x,c1y,c2x,c2y,x,y, …].
  */
 function arcToCubics(
     x1: number,
@@ -44,60 +130,10 @@ function arcToCubics(
     x2: number,
     y2: number,
 ): number[] {
+    const arc = arcCenter(x1, y1, rxIn, ryIn, phiDeg, largeArc, sweep, x2, y2);
     // Degenerate radii or zero-length arc → straight line (single trivial cubic).
-    if (rxIn === 0 || ryIn === 0 || (x1 === x2 && y1 === y2)) {
-        return [x1, y1, x2, y2, x2, y2];
-    }
-
-    let rx = Math.abs(rxIn);
-    let ry = Math.abs(ryIn);
-    const phi = (phiDeg * Math.PI) / 180;
-    const cosPhi = Math.cos(phi);
-    const sinPhi = Math.sin(phi);
-
-    // Step 1: transform endpoints into the ellipse's coordinate frame (midpoint at origin).
-    const dx = (x1 - x2) / 2;
-    const dy = (y1 - y2) / 2;
-    const x1p = cosPhi * dx + sinPhi * dy;
-    const y1p = -sinPhi * dx + cosPhi * dy;
-
-    // Correct out-of-range radii so the ellipse can span the chord (notes F.6.6).
-    const lambda = (x1p * x1p) / (rx * rx) + (y1p * y1p) / (ry * ry);
-    if (lambda > 1) {
-        const s = Math.sqrt(lambda);
-        rx *= s;
-        ry *= s;
-    }
-
-    // Step 2: compute the center in the transformed frame.
-    const rxSq = rx * rx;
-    const rySq = ry * ry;
-    const x1pSq = x1p * x1p;
-    const y1pSq = y1p * y1p;
-    let num = rxSq * rySq - rxSq * y1pSq - rySq * x1pSq;
-    if (num < 0) num = 0; // guard against tiny negative from rounding
-    const denom = rxSq * y1pSq + rySq * x1pSq;
-    let coef = denom === 0 ? 0 : Math.sqrt(num / denom);
-    if (largeArc === sweep) coef = -coef;
-    const cxp = (coef * (rx * y1p)) / ry;
-    const cyp = (coef * -(ry * x1p)) / rx;
-
-    // Step 3: center back in user space.
-    const cx = cosPhi * cxp - sinPhi * cyp + (x1 + x2) / 2;
-    const cy = sinPhi * cxp + cosPhi * cyp + (y1 + y2) / 2;
-
-    // Step 4: start angle and sweep angle.
-    const angle = (ux: number, uy: number, vx: number, vy: number): number => {
-        const dot = ux * vx + uy * vy;
-        const len = Math.sqrt((ux * ux + uy * uy) * (vx * vx + vy * vy));
-        let a = Math.acos(Math.min(1, Math.max(-1, len === 0 ? 1 : dot / len)));
-        if (ux * vy - uy * vx < 0) a = -a;
-        return a;
-    };
-    const theta1 = angle(1, 0, (x1p - cxp) / rx, (y1p - cyp) / ry);
-    let deltaTheta = angle((x1p - cxp) / rx, (y1p - cyp) / ry, (-x1p - cxp) / rx, (-y1p - cyp) / ry);
-    if (!sweep && deltaTheta > 0) deltaTheta -= 2 * Math.PI;
-    else if (sweep && deltaTheta < 0) deltaTheta += 2 * Math.PI;
+    if (!arc) return [x1, y1, x2, y2, x2, y2];
+    const { cx, cy, rx, ry, cosPhi, sinPhi, theta: theta1, delta: deltaTheta } = arc;
 
     // Step 5: split into ≤90° segments, each approximated by one cubic.
     const segCount = Math.max(1, Math.ceil(Math.abs(deltaTheta) / (Math.PI / 2)));
