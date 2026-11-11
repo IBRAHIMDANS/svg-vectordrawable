@@ -38,6 +38,7 @@
         "format:check": "prettier --check .",
         "validate:aapt2": "node scripts/aapt2-validate.mjs",
         "validate:corpus": "node scripts/corpus.mjs",
+        "validate:wpt": "node scripts/wpt-corpus.mjs",
         "validate:android": "node android-render/prepare.mjs && cd android-render && ./gradlew :render:testDebugUnitTest --console=plain && cd .. && node android-render/compare.mjs",
         "validate": "pnpm run build && pnpm run validate:aapt2 && pnpm run validate:corpus",
         "prepublishOnly": "pnpm run build",

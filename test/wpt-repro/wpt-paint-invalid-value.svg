@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100">
+  <!-- Reduced from web-platform-tests/wpt svg/styling/css-linked-parameters/circle-with-parameters.svg at commit 76f5455a0a266f098dd8bd888a8a84b0cad0350d.
+       Copyright (c) web-platform-tests contributors. 3-Clause BSD License:
+       https://github.com/web-platform-tests/wpt/blob/master/LICENSE.md
+       Defect: a paint value the converter cannot parse (env()) silently drops the whole shape, where
+       renderers ignore the invalid attribute and paint the default black fill. No warning. -->
+  <circle cx="50" cy="50" r="48" fill="env(--color, black)" stroke="env(--stroke)" stroke-width="2"/>
+</svg>

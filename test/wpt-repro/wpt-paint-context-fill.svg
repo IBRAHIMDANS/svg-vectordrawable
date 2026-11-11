@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100">
+  <!-- Reduced from web-platform-tests/wpt svg/painting/reftests/paint-context-004.svg at commit 76f5455a0a266f098dd8bd888a8a84b0cad0350d.
+       Copyright (c) web-platform-tests contributors. 3-Clause BSD License:
+       https://github.com/web-platform-tests/wpt/blob/master/LICENSE.md
+       Defect: fill="context-fill" (and context-stroke) silently drops the shape: neither resolved from the
+       referencing <use> (expected: green 50x50 square) nor reported. -->
+  <defs>
+    <rect id="r" width="50" height="50" fill="context-fill"/>
+  </defs>
+  <use href="#r" fill="green"/>
+</svg>

@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100">
+  <!-- Reduced from web-platform-tests/wpt svg/render/reftests/blending-001.svg at commit 76f5455a0a266f098dd8bd888a8a84b0cad0350d.
+       Copyright (c) web-platform-tests contributors. 3-Clause BSD License:
+       https://github.com/web-platform-tests/wpt/blob/master/LICENSE.md
+       Defect: the CSS mix-blend-mode property (style attribute, or a <style> rule that svgo inlines) is
+       silently ignored: the overlap is painted lime instead of the screen blend (yellow). No warning. -->
+  <rect width="60" height="60" fill="red"/>
+  <rect x="30" y="30" width="60" height="60" fill="lime" style="mix-blend-mode: screen"/>
+</svg>

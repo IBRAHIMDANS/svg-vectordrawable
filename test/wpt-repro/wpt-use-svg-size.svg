@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="200" height="200">
+  <!-- Reduced from web-platform-tests/wpt svg/struct/reftests/use-svg-inline-css.svg at commit 76f5455a0a266f098dd8bd888a8a84b0cad0350d.
+       Copyright (c) web-platform-tests contributors. 3-Clause BSD License:
+       https://github.com/web-platform-tests/wpt/blob/master/LICENSE.md
+       Defect: width/height on a <use> referencing an <svg> do not override the svg's own width/height:
+       the content is clipped to 200x200 instead of 100x100 (same defect: use-svg-dimensions-override-*). -->
+  <defs>
+    <svg id="svg" width="200" height="200">
+      <rect width="400" height="400" fill="green"/>
+    </svg>
+  </defs>
+  <use href="#svg" width="100" height="100"/>
+</svg>

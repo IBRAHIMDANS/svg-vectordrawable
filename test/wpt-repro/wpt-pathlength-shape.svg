@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100">
+  <!-- Reduced from web-platform-tests/wpt svg/path/distance/pathlength-rect.svg at commit 76f5455a0a266f098dd8bd888a8a84b0cad0350d.
+       Copyright (c) web-platform-tests contributors. 3-Clause BSD License:
+       https://github.com/web-platform-tests/wpt/blob/master/LICENSE.md
+       Defect: with optimize: true, pathLength on a basic shape (rect) is dropped: dashes are 1 unit long
+       instead of 50 (a quarter of the perimeter). optimize: false and <path> are correct. resvg ignores
+       pathLength too, so the visual harness cannot see it: compare the two modes instead. -->
+  <rect x="10" y="10" width="50" height="50" pathLength="4" fill="none"
+        stroke-dashoffset="1" stroke-dasharray="1 1" stroke="black" stroke-width="10"/>
+</svg>
