@@ -35,6 +35,9 @@ const { xml, warnings, minSdk } = convert(svgString, {
     fillBlackForUnfilled: true, // unfilled paths get black (SVG default)
     xmlTag: false, // prepend <?xml ...?>
     tint: '#FFFFFFFF', // android:tint on <vector> (Android color literal)
+    autoMirrored: false, // true: android:autoMirrored="true" (flipped in right-to-left layouts)
+    width: 24, // android:width in dp (viewport unchanged); alone, the height follows the aspect ratio
+    height: 24, // android:height in dp; both set with another ratio stretch the drawing
     strict: false, // true: throw on lossy and approximated output; 'lossy': only on lossy output
     minSdk: 21, // warn (`min-sdk-exceeded`) when the output needs a higher API level
     rules: {}, // per-code severity, overrides `strict` (see below)
@@ -118,6 +121,7 @@ svgvd icon.svg --strict        # fail on anything not representable
 svgvd icon.svg --strict --rule opacity-approximated=warn   # per-code severity
 svgvd icon.svg --strict=lossy  # fail only when content would be lost
 svgvd icon.svg --min-sdk 21    # warn when the output needs a higher API level
+svgvd arrow.svg --auto-mirrored --width 24   # RTL mirroring, 24dp wide (height follows the ratio)
 svgvd icons/ -o res/drawable/ --android-names   # Arrow-Left.svg → arrow_left.xml (valid resource names)
 ```
 
