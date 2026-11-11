@@ -129,3 +129,56 @@ describe('non-rendering children of a <clipPath> (TASK-069)', () => {
         });
     }
 });
+
+describe('clip-path values other than url(#id) (TASK-073)', () => {
+    // CSS basic shapes need the element's reference box (fill-box: its bbox), which the clip
+    // resolver does not measure: they are reported, like an external reference, never dropped silently.
+    const UNSUPPORTED = [
+        'inset(10%)',
+        'circle(5px at 12px 12px)',
+        'ellipse(50% 25%) fill-box',
+        'polygon(0 0, 24px 0, 0 24px)',
+        "path('M0 0H24V24Z')",
+        'fill-box',
+        'url(other.svg#c)',
+        'url(https://example.com/clips.svg#c)',
+    ];
+    const ON_CIRCLE = (decl: string): string => svg(`<circle cx="12" cy="12" r="11" fill="#E53935" ${decl}/>`);
+
+    for (const optimize of MODES) {
+        describe(`optimize: ${optimize}`, () => {
+            for (const value of UNSUPPORTED) {
+                for (const decl of [`clip-path="${value}"`, `style="clip-path:${value}"`]) {
+                    it(`reports ${decl} as unsupported-clip-path (rejected in strict)`, () => {
+                        const doc = ON_CIRCLE(decl);
+                        const { xml, warnings } = convert(doc, { optimize });
+                        expect(warnings.map((w) => w.code)).toEqual(['unsupported-clip-path']);
+                        // svgo may requote the value: check its head only.
+                        expect(warnings[0]!.message).toContain(value.slice(0, 5));
+                        expect(clipCount(xml)).toBe(0);
+                        expect(() => convert(doc, { optimize, strict: true })).toThrow(/clip-path/);
+                    });
+                }
+            }
+
+            it('says why an external url is ignored', () => {
+                const [w] = convert(ON_CIRCLE('clip-path="url(other.svg#c)"'), { optimize }).warnings;
+                expect(w!.message).toMatch(/external/);
+            });
+
+            it('reports a basic shape on a group once, and renders the content unclipped', () => {
+                const doc = svg(`<g clip-path="circle(50%)">${CIRCLE}<rect width="6" height="6"/></g>`);
+                expect(codes(doc, optimize)).toEqual(['unsupported-clip-path']);
+                expectRendersLike(doc, optimize, svg(`<g>${CIRCLE}<rect width="6" height="6"/></g>`));
+            });
+
+            for (const value of ['none', 'None', 'initial', 'unset']) {
+                it(`accepts clip-path="${value}" silently (no clip)`, () => {
+                    const { xml, warnings } = convert(ON_CIRCLE(`clip-path="${value}"`), { optimize });
+                    expect(warnings).toEqual([]);
+                    expect(clipCount(xml)).toBe(0);
+                });
+            }
+        });
+    }
+});
