@@ -327,7 +327,7 @@ export function dashPathData(
  * Resolves a `stroke-dasharray` value into an even-length list of user-unit lengths (an odd list
  * is repeated, per SVG). `%` is relative to `diagonal` (the normalized viewport diagonal).
  * Returns `[]` when the stroke is solid (`none`, all zeros, no gap, or a negative value — invalid
- * per SVG, hence no dashing) and null when a value cannot be resolved here (e.g. `em`), so the caller warns.
+ * per SVG, hence no dashing) and null when a value cannot be resolved here (e.g. `ex`), so the caller warns.
  */
 export function parseDasharray(raw: string | undefined, diagonal: number): number[] | null {
     const value = raw?.trim() ?? 'none';

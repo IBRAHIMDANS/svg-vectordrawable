@@ -204,7 +204,7 @@ describe('gradient strokes', () => {
     });
 
     it('warns on dash arrays and opacity on fill+stroke exactly as for a color stroke', () => {
-        const dashed = `<defs>${linearDef}</defs><path d="M2 12h20" fill="none" stroke="url(#g)" stroke-dasharray="1em"/>`;
+        const dashed = `<defs>${linearDef}</defs><path d="M2 12h20" fill="none" stroke="url(#g)" stroke-dasharray="1ex"/>`;
         expect(codes(svg(dashed))).toEqual(['unsupported-stroke-dasharray']);
         const both = `<defs>${linearDef}</defs><path d="M2 2h20v20H2z" fill="#0f0" stroke="url(#g)" opacity="0.5"/>`;
         expect(codes(svg(both))).toEqual(['opacity-approximated']);
@@ -319,7 +319,7 @@ describe('fail-loud on unsupported', () => {
 
     it('warns on a dash pattern it cannot resolve (font-relative units) and draws the stroke solid', () => {
         const onWarn = vi.fn();
-        const { xml } = convert(svg('<path d="M0 0h10" stroke="#000" stroke-dasharray="1em"/>'), {
+        const { xml } = convert(svg('<path d="M0 0h10" stroke="#000" stroke-dasharray="1ex"/>'), {
             optimize: false,
             onWarn,
         });
@@ -732,7 +732,7 @@ describe('inherit, <a>, nested <svg>, baked stroke, tint escaping', () => {
 
 describe('severity rules', () => {
     // A dash pattern in font-relative units cannot be resolved, so it still warns.
-    const dashed = svg('<path d="M0 0h10" stroke="#000" stroke-dasharray="1em"/>');
+    const dashed = svg('<path d="M0 0h10" stroke="#000" stroke-dasharray="1ex"/>');
 
     it('throws a ConversionError carrying the warning when a rule is "error"', () => {
         try {
