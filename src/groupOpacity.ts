@@ -1,5 +1,5 @@
 import type { ConvertContext } from './context.js';
-import { GROUPS, isDisplayNone, pathDataOf, SKIP, UNSUPPORTED } from './elements.js';
+import { foreignElements, GROUPS, isNotRendered, pathDataOf, UNSUPPORTED } from './elements.js';
 import type { BBox, XastElement } from './ast.js';
 import { fillOf, isHidden, resolveStyle, strokeWidthOf, type Inherited } from './inherited.js';
 import { pathBBox, transformPathData } from './pathData.js';
@@ -21,24 +21,32 @@ const overlaps = (a: BBox, b: BBox): boolean =>
 
 /**
  * Painted extents (stroke included) of every drawable under `el`, in `el`'s user space. Used to
- * tell whether folding a group opacity onto its children changes the rendering.
+ * tell whether folding a group opacity onto its children changes the rendering. Skips what the
+ * renderer skips (`isNotRendered`, unsupported elements), so a child that draws nothing never
+ * counts as overlapping.
  */
-function drawableBoxes(ctx: ConvertContext, el: XastElement, parent: Inherited, m: Matrix, out: BBox[]): void {
+function drawableBoxes(
+    ctx: ConvertContext,
+    el: XastElement,
+    parent: Inherited,
+    m: Matrix,
+    foreign: WeakSet<XastElement>,
+    out: BBox[],
+): void {
     for (const c of el.children ?? []) {
-        if (c.type !== 'element' || !c.name || SKIP.has(c.name) || UNSUPPORTED.has(c.name)) continue;
-        if (isDisplayNone(c)) continue;
+        if (c.type !== 'element' || !c.name || isNotRendered(c, foreign) || UNSUPPORTED.has(c.name)) continue;
         const st = resolveStyle(c, parent);
         const own = parseTransform(c.attributes?.transform);
         const mm = own ? multiply(m, own) : m;
         if (GROUPS.has(c.name)) {
-            drawableBoxes(ctx, c, st, mm, out);
+            drawableBoxes(ctx, c, st, mm, foreign, out);
             continue;
         }
         if (c.name === 'svg') {
             const layout = nestedLayout(c, st.viewport);
             if (!layout) continue;
             const inner: BBox[] = [];
-            drawableBoxes(ctx, c, { ...st, viewport: layout.viewport }, multiply(mm, layout.matrix), inner);
+            drawableBoxes(ctx, c, { ...st, viewport: layout.viewport }, multiply(mm, layout.matrix), foreign, inner);
             const { x, y, width, height } = layout;
             const clip = layout.clipped
                 ? pathBBox(transformPathData(`M${x},${y}h${width}v${height}h${-width}z`, mm))
@@ -64,13 +72,16 @@ function drawableBoxes(ctx: ConvertContext, el: XastElement, parent: Inherited, 
 
 /**
  * Group opacity is folded onto each leaf's alpha, which is exact only when no two children
- * overlap: warns otherwise.
+ * overlap: warns otherwise. The foreign set is scoped at `g` (the renderer's is private to
+ * `render.ts`): `g` is a rendered, unprefixed SVG element, so the default namespace in scope is SVG
+ * as at the root; a prefix bound on an ancestor only matters for prefixed elements, which draw
+ * nothing either way.
  */
 export function checkGroupOpacity(ctx: ConvertContext, g: XastElement, parent: Inherited): void {
     const op = presentation(g, 'opacity');
     if (op === undefined || !(parseOpacity(op) < 1)) return;
     const boxes: BBox[] = [];
-    drawableBoxes(ctx, g, { ...resolveStyle(g, parent), opacityMul: 1 }, IDENTITY, boxes);
+    drawableBoxes(ctx, g, { ...resolveStyle(g, parent), opacityMul: 1 }, IDENTITY, foreignElements(g), boxes);
     for (let i = 0; i < boxes.length; i++)
         for (let j = i + 1; j < boxes.length; j++)
             if (overlaps(boxes[i]!, boxes[j]!)) {
