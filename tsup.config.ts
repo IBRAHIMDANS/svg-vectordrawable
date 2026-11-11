@@ -22,7 +22,10 @@ function browserBuilds(name: string, svgoAlias: string, extra: Options = {}): Op
 }
 
 export default defineConfig([
-    // Node library, CommonJS + its types.
+    // Node library, CommonJS + its types. `shims` replaces `import.meta.url` (renderFallbackPng
+    // loads its optional peer @resvg/resvg-js with createRequire(import.meta.url)), which is empty
+    // in CommonJS. Only this build needs it: the ESM build has a real import.meta and the browser
+    // builds never import src/fallback.ts.
     {
         entry: ['src/index.ts'],
         format: ['cjs'],
@@ -30,6 +33,7 @@ export default defineConfig([
         clean: true,
         sourcemap: false,
         target: 'node18',
+        shims: true,
     },
     // Node library and CLI, ESM. Built together with code splitting so that dist/cli.js shares the
     // converter with dist/index.js (one chunk) instead of carrying a second copy. The CLI is ESM
