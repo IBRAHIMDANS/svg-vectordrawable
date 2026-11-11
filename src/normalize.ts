@@ -77,7 +77,13 @@ function defaultConfigFor(svg: string, floatPrecision: number): Config {
     const overrides: Record<string, unknown> = { ...DEFAULT_OVERRIDES };
     if (exceedsDrawableCount(svg, MERGE_PATHS_MAX_ELEMENTS)) overrides.mergePaths = false;
     if (exceedsPathDataLength(svg, CONVERT_PATH_DATA_MAX_LENGTH)) overrides.convertPathData = false;
-    if (MAY_DASH.test(svg)) overrides.convertShapeToPath = { convertArcs: false };
+    if (MAY_DASH.test(svg)) {
+        overrides.convertShapeToPath = { convertArcs: false };
+        // cleanupNumericValues rounds a single-value `stroke-dasharray="0.0001"` to "0", which SVG
+        // reads as "no dashes": the stroke would turn solid with no warning. The converter rounds
+        // numeric attributes itself, so skipping the plugin only keeps the authored values.
+        overrides.cleanupNumericValues = false;
+    }
     const params: Record<string, unknown> = { overrides };
     if (floatPrecision > SVGO_FLOAT_PRECISION) {
         // The preset hands `floatPrecision` to every plugin that rounds (cleanupNumericValues,

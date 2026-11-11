@@ -159,6 +159,61 @@ describe('ellipseDashPath', () => {
     });
 });
 
+describe('dash budget (MAX_DASHES)', () => {
+    // A [1, 1] pattern on a line of length 2n yields exactly n dashes.
+    const atBudget = 2 * MAX_DASHES;
+    const svg = (length: number, dasharray: string): string =>
+        `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">` +
+        `<path d="M0 0h${length}" stroke="#000" fill="none" stroke-dasharray="${dasharray}"/></svg>`;
+    const pathData = (xml: string): string => /android:pathData="([^"]*)"/.exec(xml)![1]!;
+    const timed = <T>(fn: () => T): [T, number] => {
+        const start = performance.now();
+        const result = fn();
+        return [result, performance.now() - start];
+    };
+
+    it('emits every dash when the pattern needs exactly MAX_DASHES, one more gives up', () => {
+        expect(dashPathData(`M0 0h${atBudget}`, [1, 1], 0, TOL)!.match(/M/g)).toHaveLength(MAX_DASHES);
+        expect(dashPathData(`M0 0h${atBudget + 2}`, [1, 1], 0, TOL)).toBeNull();
+    });
+
+    it('converts a pattern at the budget into dashes, without warning, in bounded time', () => {
+        for (const optimize of [true, false]) {
+            const [{ xml, warnings }, ms] = timed(() => convert(svg(atBudget, '1'), { optimize, strict: true }));
+            expect(warnings).toEqual([]);
+            expect(pathData(xml).match(/M/g)).toHaveLength(MAX_DASHES);
+            expect(ms).toBeLessThan(1000);
+        }
+    });
+
+    it('warns and falls back to the solid stroke past the budget, in bounded time', () => {
+        // svgo must not round a single tiny value to "0" (= no dashes): the pattern reaches the dasher.
+        for (const [dasharray, optimize] of [
+            ['0.0001', false],
+            ['0.0001', true],
+            ['0.001', false],
+            ['0.001', true],
+            ['1', false],
+        ] as const) {
+            const length = dasharray === '1' ? atBudget + 2 : 20_000;
+            const [{ xml, warnings }, ms] = timed(() => convert(svg(length, dasharray), { optimize }));
+            expect(warnings.map((w) => w.code)).toEqual(['unsupported-stroke-dasharray']);
+            expect(warnings[0]!.message).toContain('drawn solid');
+            expect(pathData(xml)).toBe(`M0 0h${length}`);
+            expect(xml).toContain('android:strokeColor="#FF000000"');
+            expect(ms).toBeLessThan(1000);
+        }
+    });
+
+    it('rejects an over-budget pattern under strict, the warning being lossy', () => {
+        for (const optimize of [true, false])
+            for (const dasharray of ['0.001', '0.0001'])
+                expect(() => convert(svg(20_000, dasharray), { optimize, strict: true })).toThrow(
+                    /\[unsupported-stroke-dasharray\]/,
+                );
+    });
+});
+
 describe('dash properties inheritance', () => {
     const svg = (inner: string): string => `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">${inner}</svg>`;
     const pathData = (xml: string): string => /android:pathData="([^"]*)"/.exec(xml)![1]!;
