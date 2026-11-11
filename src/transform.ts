@@ -193,31 +193,55 @@ export function parseCssTransform(value: string): Matrix | null {
     return matched && re.lastIndex === s.length ? m : null;
 }
 
-/** One `transform-origin` component in user units: NaN when it depends on the reference box. */
-function originOffset(v: string): number {
-    if (v === 'left' || v === 'top' || /^[+-]?(?:0+\.?0*|\.0+)%$/.test(v)) return 0;
-    return parseLength(v); // `center` / `right` / `bottom`, other percentages and `em` give NaN
+/** `transform-origin` keywords: share of the reference box. */
+const ORIGIN_KEYWORDS = new Map([
+    ['left', 0],
+    ['top', 0],
+    ['center', 0.5],
+    ['right', 1],
+    ['bottom', 1],
+]);
+const VERTICAL = new Set(['top', 'bottom']);
+const HORIZONTAL = new Set(['left', 'right']);
+
+/** One `transform-origin` component in px of a box side `ref`: NaN for a keyword of the other axis. */
+function originComponent(v: string, ref: number, wrongAxis: ReadonlySet<string>): number {
+    if (wrongAxis.has(v)) return NaN;
+    const share = ORIGIN_KEYWORDS.get(v);
+    return share === undefined ? parseLength(v, ref) : share * ref;
+}
+
+/** A `transform-origin` on a known width×height box (keywords, percentages, lengths), or null. */
+function originOnBox(parts: readonly string[], width: number, height: number): { x: number; y: number } | null {
+    let x = parts[0]!;
+    let y = parts[1] ?? 'center';
+    // A lone vertical keyword sets y; two keywords may come in either order.
+    if (parts.length === 1 && VERTICAL.has(x)) [x, y] = ['center', x];
+    else if (ORIGIN_KEYWORDS.has(x) && ORIGIN_KEYWORDS.has(y) && (VERTICAL.has(x) || HORIZONTAL.has(y)))
+        [x, y] = [y, x];
+    const ox = originComponent(x, width, VERTICAL);
+    const oy = originComponent(y, height, HORIZONTAL);
+    return Number.isFinite(ox) && Number.isFinite(oy) ? { x: ox, y: oy } : null;
 }
 
 /**
- * Parses a CSS `transform-origin` (`<x> [<y> [<z>]]`, keywords in either order) into user units.
- * Returns null when a component depends on the reference box (`center`, `right`, `bottom`, a
- * non-zero percentage) or is not an absolute length. `z` only moves 3D transforms: ignored.
+ * Resolves a CSS `transform-origin` (`<x> [<y> [<z>]]`, CSS Transforms 1 §6) in px. With a `box`,
+ * keywords and percentages resolve against its width×height; without one, only what does not depend
+ * on the reference box resolves (absolute lengths, `left` / `top`, `0%`). Lengths go through
+ * `parseLength`. `z` only moves 3D transforms: checked, then ignored. Null when invalid or not
+ * resolvable (`ex`, `vw`, `calc()`…, or a box-relative component without a box).
  */
-export function parseTransformOrigin(value: string): { x: number; y: number } | null {
+export function parseTransformOrigin(
+    value: string,
+    box?: { width: number; height: number },
+): { x: number; y: number } | null {
     const parts = value.trim().toLowerCase().split(/\s+/);
     if (parts.length > 3 || (parts[2] !== undefined && !Number.isFinite(parseLength(parts[2])))) return null;
-    let x = parts[0]!;
-    let y = parts[1] ?? 'center';
-    const vertical = (v: string): boolean => v === 'top' || v === 'bottom';
-    const horizontal = (v: string): boolean => v === 'left' || v === 'right';
-    // A lone vertical keyword sets y; a vertical keyword first (or a horizontal one second) swaps.
-    if (parts.length === 1 && vertical(x)) [x, y] = ['center', x];
-    else if (vertical(x) || horizontal(y)) [x, y] = [y, x];
-    if (vertical(x) || horizontal(y)) return null;
-    const ox = originOffset(x);
-    const oy = originOffset(y);
-    return Number.isFinite(ox) && Number.isFinite(oy) ? { x: ox, y: oy } : null;
+    if (box) return originOnBox(parts, box.width, box.height);
+    // No box: resolvable only when the result does not move with the box size.
+    const a = originOnBox(parts, 1, 1);
+    const b = originOnBox(parts, 2, 2);
+    return a && b && a.x === b.x && a.y === b.y ? a : null;
 }
 
 export interface Decomposed {
