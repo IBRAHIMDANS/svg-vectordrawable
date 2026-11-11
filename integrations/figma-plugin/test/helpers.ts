@@ -102,6 +102,9 @@ export function spawnWorker(source: string, spawned: { terminated: boolean }[] =
         terminate: () => {
             worker.terminated = true;
             void thread.terminate();
+            // Worker#terminate() calls ref() until the thread has exited: undo it, or a thread slow
+            // to stop keeps the test file's process alive after every test has passed.
+            thread.unref();
         },
     };
     thread.on('message', (data: unknown) => worker.onmessage?.({ data }));
