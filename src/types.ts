@@ -17,7 +17,7 @@ export const WARNING_CODES = [
     'unsupported-paint',
     /** A clipPath that cannot be (fully) converted. */
     'unsupported-clip-path',
-    /** `url(#id)` fill pointing at nothing, without fallback color; black is used. */
+    /** `url(#id)` paint without fallback color pointing at nothing (fill: black) or at an invalid gradient (not painted). */
     'missing-gradient',
     /** `clip-path="url(#id)"` pointing at nothing; ignored. */
     'missing-clip-path',

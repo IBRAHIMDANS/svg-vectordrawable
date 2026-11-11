@@ -1,7 +1,7 @@
 import { readFileSync, writeFileSync, readdirSync, statSync, mkdirSync } from 'node:fs';
-import { join, extname, basename, dirname } from 'node:path';
+import { join, extname, basename, dirname, relative } from 'node:path';
 import { convert } from './convert.js';
-import { androidResourceName, assertNoNameCollisions } from './resourceName.js';
+import { androidResourceName, assertNoNameCollisions, findNameCollisions, type NameCollision } from './resourceName.js';
 import type { ConvertOptions, ConvertResult, Warning } from './types.js';
 
 /** How default output file names are derived from input file names. */
@@ -20,8 +20,32 @@ export function defaultOutputPath(inputPath: string, outputDir?: string, naming?
 }
 
 /**
- * Fails when several inputs would be written to the same output path, before anything is written.
+ * Output path of `input`, found under the input directory `root`, in a batch written to `outputDir`:
+ * its path relative to `root` is kept (`root/a/b.svg` → `<outputDir>/a/b.xml`), except with
+ * `androidNames`, where outputs are flat since an Android resource directory has no subdirectories.
+ * Without `outputDir`, the output goes next to the input.
+ */
+export function batchOutputPath(input: string, root: string, outputDir?: string, naming?: FileNamingOptions): string {
+    if (outputDir === undefined || naming?.androidNames) return defaultOutputPath(input, outputDir, naming);
+    return defaultOutputPath(input, join(outputDir, relative(root, dirname(input))), naming);
+}
+
+/**
+ * The output paths shared by several inputs, in input order; empty when all are distinct.
  * Only checked with `androidNames`, where distinct source names can collapse to the same resource name.
+ */
+export function findOutputCollisions(
+    entries: readonly { input: string; output: string }[],
+    naming?: FileNamingOptions,
+): NameCollision[] {
+    return naming?.androidNames
+        ? findNameCollisions(entries.map(({ input, output }) => ({ input, name: output })))
+        : [];
+}
+
+/**
+ * Fails when several inputs would be written to the same output path, before anything is written.
+ * Only checked with `androidNames` (see {@link findOutputCollisions}).
  */
 export function assertDistinctOutputs(
     entries: readonly { input: string; output: string }[],
@@ -30,11 +54,18 @@ export function assertDistinctOutputs(
     if (naming?.androidNames) assertNoNameCollisions(entries.map(({ input, output }) => ({ input, name: output })));
 }
 
-/** The `*.svg` files directly inside `dir` (non-recursive, extension matched case-insensitively). */
-export function listSvgFiles(dir: string): string[] {
-    return readdirSync(dir)
-        .map((entry) => join(dir, entry))
-        .filter((p) => extname(p).toLowerCase() === '.svg' && statSync(p).isFile());
+/**
+ * The `*.svg` files inside `dir` (extension matched case-insensitively), sorted by name. With
+ * `recursive`, also those of its subdirectories, depth first; symbolic links to directories are not
+ * followed (no cycles).
+ */
+export function listSvgFiles(dir: string, recursive = false): string[] {
+    const entries = readdirSync(dir, { withFileTypes: true }).sort((a, b) => (a.name < b.name ? -1 : 1));
+    return entries.flatMap((entry) => {
+        const path = join(dir, entry.name);
+        if (entry.isDirectory()) return recursive ? listSvgFiles(path, true) : [];
+        return extname(entry.name).toLowerCase() === '.svg' && statSync(path).isFile() ? [path] : [];
+    });
 }
 
 /** Writes `content` to `target`, creating its parent directories first. */
