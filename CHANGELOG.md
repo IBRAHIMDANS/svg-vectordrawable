@@ -11,10 +11,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - `autoMirrored` option: adds `android:autoMirrored="true"` to the `<vector>` so Android flips it in right-to-left layouts; CLI `--auto-mirrored`.
 - `width` / `height` options (dp): replace `android:width` / `android:height` without touching the viewport. Given alone, the other dimension follows the SVG size's aspect ratio (rounded to `floatPrecision`); both with another ratio stretch the drawing, as on Android. A non-finite or non-positive value throws a `TypeError`. The `large-vector` warning is checked on the final size. CLI `--width <dp>` / `--height <dp>`.
+- Theme colors: the `currentColor` option accepts an Android color reference (`?attr/…`, `?android:attr/…`, `@color/…`, `@android:color/…`, optional `package:` prefix), emitted as is in `android:fillColor` / `android:strokeColor`; a malformed reference throws a `TypeError`. New `colorMap` option: SVG colors (any notation, compared as `#AARRGGBB`) → references. A reference carries no alpha: opacities and the mapped color's own alpha go to `fillAlpha` / `strokeAlpha` (an exact `#AARRGGBB` key wins over an opaque key, which matches its color at any alpha). Opaque gradient stops get the reference too (accepted by `aapt2` in `<item android:color>`); translucent ones keep their literal color with an `unsupported-paint` warning. CLI `--current-color <color|ref>` and `--color-map <color>=<ref>` (repeatable). `vectorDrawableToSvg` throws `Unsupported Android color` on a reference (it cannot resolve it).
 
 ### Fixed
 
 - `<script>` is silently ignored, like `<title>` / `<metadata>`, instead of being reported as `empty-path` ("produced no drawable geometry"). Scripts were never executed.
+
+### Internal
+
+- `aapt2-validate`: a `_themed` variant (`currentColor` and `colorMap` references on fills, strokes and gradient stops) is compiled and linked against declared `@color/brand` / `?attr/iconTint` resources.
 
 ## [0.3.0] - 2026-11-11
 

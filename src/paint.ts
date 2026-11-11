@@ -1,5 +1,5 @@
 import type { XastElement } from './ast.js';
-import { toAndroidColor } from './color.js';
+import { alphaAttr, type ResolvedColor } from './colorRef.js';
 import type { ConvertContext } from './context.js';
 import { dashPathData, ellipseDashPath, parseDasharray } from './dash.js';
 import { escapeXml, formatNumber } from './format.js';
@@ -16,6 +16,7 @@ import { fillOf, strokeWidthOf, type Inherited } from './inherited.js';
 import { normalizeArcFlags, pathBBox, transformPathData } from './pathData.js';
 import { isNone, presentation } from './style.js';
 import { multiply, scaleFactor, type Matrix } from './transform.js';
+import type { AndroidColor } from './types.js';
 import { parseLength } from './units.js';
 import { diagonal } from './viewport.js';
 
@@ -169,6 +170,44 @@ class PathBuilder {
     }
 }
 
+/** SVG 2 paints taken from the referencing element (`<use>`, marker), which the converter does not track. */
+const CONTEXT_PAINT = /^context-(?:fill|stroke)$/i;
+
+/** SVG's initial fill (black), the one `fillBlackForUnfilled` emits. */
+const INITIAL_FILL = '#FF000000' as AndroidColor;
+
+/**
+ * The Android color of a solid paint (literal or reference, through `ctx.colors`), null when nothing
+ * is painted (no value, `none`). A value the color parser cannot read is reported as
+ * `unsupported-paint` instead of silently dropping the paint. `context-fill` / `context-stroke` (taken from the `<use>` or marker, which
+ * the converter does not track) paint nothing. Anything else (`env()`, `var()`, `color-mix()`, a
+ * typo…) is an invalid value, which SVG ignores: renderers fall back to the inherited value, the
+ * converter to the initial one (the implicit black fill, no stroke) — exact unless an ancestor
+ * sets the property.
+ */
+function solidPaint(
+    ctx: ConvertContext,
+    value: string | undefined,
+    style: Inherited,
+    property: 'fill' | 'stroke',
+): ResolvedColor | null {
+    if (value === undefined || isNone(value)) return null;
+    const color = ctx.colors.paint(value, style.color);
+    if (color) return color;
+    const shown = value.trim();
+    const context = CONTEXT_PAINT.test(shown);
+    const fallback = property === 'fill' && !context && ctx.fillBlackForUnfilled ? INITIAL_FILL : null;
+    const outcome = fallback ? 'using the initial black fill' : `the ${property} is dropped`;
+    ctx.warn({
+        code: 'unsupported-paint',
+        message: context
+            ? `${property}="${shown}" (context paint) cannot be resolved; ${outcome}.`
+            : `${property}="${shown}" is not a color the converter can parse; ${outcome}.`,
+        node: 'path',
+    });
+    return fallback ? { color: fallback, alpha: 1 } : null;
+}
+
 /** Emits the fill attributes; true when the fill is painted. */
 function emitFill(ctx: ConvertContext, path: PathBuilder, style: Inherited): boolean {
     const fill = parsePaint(fillOf(style, ctx.fillBlackForUnfilled));
@@ -193,19 +232,17 @@ function emitFill(ctx: ConvertContext, path: PathBuilder, style: Inherited): boo
         fillColor = '#000000';
     }
     // A missing reference with a fallback color is valid SVG: the fallback is the rendering.
-    if (fillColor !== undefined && !isNone(fillColor)) {
-        const color = toAndroidColor(fillColor, undefined, style.color);
-        if (color) path.attr('fillColor', color);
-    }
+    const color = solidPaint(ctx, fillColor, style, 'fill');
+    if (color) path.attr('fillColor', color.color);
 
-    const fillAlpha = style.fillOpacity * style.opacityMul;
-    if (fillAlpha < 1) path.attr('fillAlpha', String(Math.max(fillAlpha, 0)));
+    const fillAlpha = alphaAttr(style.fillOpacity * style.opacityMul, color?.alpha ?? 1);
+    if (fillAlpha !== null) path.attr('fillAlpha', fillAlpha);
     if (style.fillRule === 'evenodd') path.attr('fillType', 'evenOdd');
-    return raw !== undefined || (fillColor !== undefined && !isNone(fillColor));
+    return raw !== undefined || color !== null;
 }
 
-/** A painted stroke: a resolvable gradient or an Android color. */
-type StrokePaint = { gradient: RawGradient } | { color: string };
+/** A painted stroke: a resolvable gradient or an Android color (literal or reference, see `ResolvedColor`). */
+type StrokePaint = { gradient: RawGradient } | ResolvedColor;
 
 /** Resolves the stroke paint (reporting unusable references); null when no stroke is painted. */
 function resolveStroke(ctx: ConvertContext, style: Inherited): StrokePaint | null {
@@ -228,9 +265,7 @@ function resolveStroke(ctx: ConvertContext, style: Inherited): StrokePaint | nul
             });
     }
     if (strokeGradient) return { gradient: strokeGradient };
-    const solidStroke =
-        strokeColor !== undefined && !isNone(strokeColor) ? toAndroidColor(strokeColor, undefined, style.color) : null;
-    return solidStroke ? { color: solidStroke } : null;
+    return solidPaint(ctx, strokeColor, style, 'stroke');
 }
 
 /**
@@ -288,8 +323,8 @@ function emitStroke(
     // Baked geometry is scaled, the stroke must follow (approximated for non-uniform scale).
     const strokeScale = bake ? scaleFactor(bake) : 1;
     path.attr('strokeWidth', formatNumber(strokeWidthOf(style) * strokeScale, ctx.precision));
-    const sa = style.strokeOpacity * style.opacityMul;
-    if (sa < 1) path.attr('strokeAlpha', String(Math.max(sa, 0)));
+    const sa = alphaAttr(style.strokeOpacity * style.opacityMul, 'alpha' in paint ? paint.alpha : 1);
+    if (sa !== null) path.attr('strokeAlpha', sa);
     if (style.strokeLinecap === 'round' || style.strokeLinecap === 'square')
         path.attr('strokeLineCap', style.strokeLinecap);
     if (style.strokeLinejoin === 'round' || style.strokeLinejoin === 'bevel' || style.strokeLinejoin === 'miter')
