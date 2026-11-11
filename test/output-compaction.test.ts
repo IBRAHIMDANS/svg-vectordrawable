@@ -130,7 +130,7 @@ describe('raw pathData is rounded to floatPrecision with optimize:false', () => 
 
     it('rounds long decimals only', () => {
         expect(pathData('M1.23456 2.5L3.1415926,4')).toBe('M1.235 2.5L3.142,4');
-        expect(pathData('M1.23456 2.5', 1)).toBe('M1.2 2.5');
+        expect(pathData('M1.23456 2.5h1', 1)).toBe('M1.2 2.5h1');
     });
 
     it('leaves short numbers and formatting byte-identical', () => {
@@ -142,9 +142,9 @@ describe('raw pathData is rounded to floatPrecision with optimize:false', () => 
     it('handles scientific notation and keeps tokens separated', () => {
         expect(pathData('M1e-7 2E-9L1.23456e1 5')).toBe('M0 0L12.346 5');
         // A rounded number losing its sign or its dot must not merge with its neighbour.
-        expect(pathData('M1-0.00001 2')).toBe('M1 0 2');
-        expect(pathData('M.5.00001 2')).toBe('M.5 0 2');
-        expect(pathData('M1.00001.5 2')).toBe('M1 .5 2');
+        expect(pathData('M1-0.00001 2 3')).toBe('M1 0 2 3');
+        expect(pathData('M.5.00001 2 3')).toBe('M.5 0 2 3');
+        expect(pathData('M1.00001.5 2 3')).toBe('M1 .5 2 3');
     });
 
     it('keeps arc flags separated', () => {
