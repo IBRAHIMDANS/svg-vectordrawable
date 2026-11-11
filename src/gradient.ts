@@ -3,6 +3,7 @@ import { toAndroidColor } from './color.js';
 import { presentation } from './style.js';
 import { applyPoint, IDENTITY, multiply, parseTransform, scaleFactor, type Matrix } from './transform.js';
 import type { Warning } from './types.js';
+import { parseLength } from './units.js';
 
 /** A gradient color stop, with its offset normalized to [0, 1]. */
 interface GradientStop {
@@ -83,12 +84,17 @@ function linearEnd(m: Matrix, vx: number, vy: number, sx: number, sy: number): [
     return [sx + wx / ww, sy + wy / ww];
 }
 
-/** Parses a coordinate (number or percentage). Percentages are taken relative to `ref`. */
+/**
+ * Parses a coordinate: a length in user units (absolute units resolved, `1in` → 96, in
+ * objectBoundingBox units too, per SVG) or a percentage of `ref`. Font-relative or malformed
+ * values keep their leading number, as before; nothing parseable yields `fallback`.
+ */
 function coord(value: string | undefined, fallback: number, ref: number): number {
     if (value === undefined) return fallback;
+    const length = parseLength(value, ref);
+    if (!Number.isNaN(length)) return length;
     const v = value.trim();
-    if (v.endsWith('%')) return (parseFloat(v) / 100) * ref;
-    const n = parseFloat(v);
+    const n = v.endsWith('%') ? (parseFloat(v) / 100) * ref : parseFloat(v);
     return Number.isNaN(n) ? fallback : n;
 }
 
@@ -123,7 +129,9 @@ function normalizeStops(stops: GradientStop[]): GradientStop[] {
 /**
  * Builds the gradient lookup, resolving `href`/`xlink:href` inheritance (shared stops/attributes).
  * Coordinates are kept raw; placement happens in {@link resolveGradient} so objectBoundingBox
- * gradients can use the filled path's bounding box.
+ * gradients can use the filled path's bounding box. Gradients without stops are left out, and
+ * so are those with a non-invertible gradientTransform (an invalid paint server: the paint's
+ * fallback color applies).
  */
 export function collectGradients(
     gradientEls: XastElement[],
@@ -168,13 +176,17 @@ export function collectGradients(
                 .filter((s): s is NonNullable<typeof s> => s !== null),
         );
         if (stops.length === 0) continue;
+        const matrix = parseTransform(a.gradientTransform);
+        // A non-invertible gradientTransform makes the paint server invalid (CSS Transforms 1 §8):
+        // like browsers (wpt gradient-transform-01/02), the paint then uses its fallback color.
+        if (matrix && isSingular(matrix)) continue;
 
         const tileMode = a.spreadMethod ? SPREAD[a.spreadMethod] : undefined;
         out.set(id, {
             type: el.name === 'radialGradient' ? 'radial' : 'linear',
             objectBox: (a.gradientUnits ?? 'objectBoundingBox') !== 'userSpaceOnUse',
             attrs: a,
-            matrix: parseTransform(a.gradientTransform),
+            matrix,
             stops,
             ...(tileMode ? { tileMode } : {}),
         });
