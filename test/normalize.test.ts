@@ -269,6 +269,75 @@ describe('normalize: shapes with a zero size warn in both modes', () => {
     });
 });
 
+describe('normalize: elements with empty geometry warn in both modes', () => {
+    const codes = (source: string, optimize: boolean): string[] =>
+        convert(source, { optimize }).warnings.map((w) => w.code);
+
+    for (const shape of [
+        '<path d=""/>',
+        "<path d=''/>",
+        '<path fill="#f00"/>',
+        '<polyline points=""/>',
+        '<polygon points=""/>',
+        '<polyline/>',
+        '<polygon fill="#f00"/>',
+        '<polyline points="10 10"/>',
+        '<polygon points="10,10 20"/>',
+        '<circle cx="50" cy="50"/>',
+        '<circle cx="50" cy="50" style="r:0"/>',
+        '<ellipse cx="50" cy="50" rx="5"/>',
+        '<ellipse cx="50" cy="50" ry="5"/>',
+    ]) {
+        it(`${shape}: optimize: true emits the same warnings as optimize: false`, () => {
+            const source = svg(`${shape}<path d="M0 0h10v10z"/>`);
+            expect(codes(source, true)).toEqual(codes(source, false));
+            // The 1000×1000 viewport adds `large-vector`.
+            expect(codes(source, true)).toEqual(['empty-path', 'large-vector']);
+            expect(countPaths(convert(source).xml)).toBe(1);
+        });
+
+        it(`${shape}: strict rejects it with empty-path in both modes`, () => {
+            for (const optimize of [true, false]) {
+                let error: unknown;
+                try {
+                    convert(svg(shape), { optimize, strict: true });
+                } catch (err) {
+                    error = err;
+                }
+                expect(error).toBeInstanceOf(ConversionError);
+                expect((error as ConversionError).warning.code).toBe('empty-path');
+            }
+        });
+    }
+
+    it('keeps converting shapes to paths otherwise', () => {
+        const names = elementNames(
+            svg(
+                '<path d="M0 0h1"/><polyline points="0 0 10 10"/><circle cx="5" cy="5" r="5"/><ellipse rx="5" ry="2"/>',
+            ),
+        );
+        expect(names.filter((n) => n !== 'path')).toEqual(['svg']);
+    });
+});
+
+describe('normalize: rgb() percentages', () => {
+    // wpt painting/reftests/paint-fill-attr-rgb-percent-rounding.svg: 20% of 255 = 51 (0x33),
+    // 50% = 127.5 → 128 (0x80); svgo's convertColors rounds 127.5 down to 0x7f.
+    for (const paint of ['fill="rgb(20% 50% 50%)"', 'style="fill: rgb(20% 50% 50%)"', 'fill="rgb(20%, 50%, 50%)"']) {
+        it(`${paint}: optimize: true matches optimize: false`, () => {
+            const source = svg(`<rect width="120" height="120" x="10" y="10" ${paint}/>`);
+            for (const optimize of [true, false])
+                expect(convert(source, { optimize }).xml).toContain('android:fillColor="#FF338080"');
+        });
+    }
+
+    it('keeps converting rgb() colors to hex otherwise', () => {
+        const [path] = parseSvg(svg('<path fill="rgb(255, 0, 0)" d="M0 0h10v10z"/>'), true).children[0]!
+            .children as XastElement[];
+        expect(path!.attributes?.fill).toBe('red');
+    });
+});
+
 describe('normalize: pathLength on basic shapes', () => {
     const dashed = 'fill="none" stroke="#000" stroke-width="10" stroke-dasharray="1 1" pathLength="4"';
 
