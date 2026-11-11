@@ -346,6 +346,17 @@ describe('fail-loud on unsupported', () => {
         expect(warnings).toEqual([]);
     });
 
+    it.each([false, true])('silently ignores <script> (optimize: %s), also inside a group', (optimize) => {
+        const doc = svg(
+            '<script>alert(1)</script><script href="x.js"/>' +
+                '<g opacity="0.5"><script>x</script><path d="M0 0h4v4z"/></g><path d="M5 5h4v4z"/>',
+        );
+        const { xml, warnings } = convert(doc, { optimize, strict: true });
+        expect(warnings).toEqual([]);
+        expect(xml).not.toContain('script');
+        expect(xml.match(/<path\b/g)).toHaveLength(2);
+    });
+
     it('throws in strict mode', () => {
         expect(() => convert(svg('<text>hi</text>'), { optimize: false, strict: true })).toThrow();
     });

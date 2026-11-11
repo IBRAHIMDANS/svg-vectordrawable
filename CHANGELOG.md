@@ -12,6 +12,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `autoMirrored` option: adds `android:autoMirrored="true"` to the `<vector>` so Android flips it in right-to-left layouts; CLI `--auto-mirrored`.
 - `width` / `height` options (dp): replace `android:width` / `android:height` without touching the viewport. Given alone, the other dimension follows the SVG size's aspect ratio (rounded to `floatPrecision`); both with another ratio stretch the drawing, as on Android. A non-finite or non-positive value throws a `TypeError`. The `large-vector` warning is checked on the final size. CLI `--width <dp>` / `--height <dp>`.
 
+### Fixed
+
+- `<script>` is silently ignored, like `<title>` / `<metadata>`, instead of being reported as `empty-path` ("produced no drawable geometry"). Scripts were never executed.
+
 ## [0.3.0] - 2026-11-11
 
 ### Fixed
