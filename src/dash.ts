@@ -174,8 +174,10 @@ function measureArc(arc: Arc, t0: number, t1: number, tolerance: number, depth: 
 
 /**
  * Segment of an SVG arc from p0 to p1 (`A rx ry phi large sweep`): a line when a radius is zero or the
- * end points coincide (SVG 2 out-of-range parameters), else the arc in center parameterization (same
- * conversion as pathAbsolute.ts `arcToCubics`, which only returns the cubics).
+ * end points coincide (SVG 2 out-of-range parameters), else the arc in center parameterization. Same
+ * conversion as pathAbsolute.ts `arcToCubics`, but not the same arithmetic (atan2 angles here, acos
+ * there): merging them moves dash cuts by up to 0.005 on arcs whose radii were scaled up, so they stay
+ * apart until that output change is accepted.
  */
 function makeArcSegment(p0: Point, p1: Point, args: number[], tolerance: number): Segment {
     let rx = Math.abs(args[0]!);
