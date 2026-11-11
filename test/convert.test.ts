@@ -1629,8 +1629,11 @@ describe('Android color references (currentColor / colorMap)', () => {
         });
     });
 
-    it('vectorDrawableToSvg refuses a reference it cannot render (Error, not a crash)', () => {
+    it('vectorDrawableToSvg previews a reference in gray unless options.colors maps it', () => {
         const { xml } = convert(path('fill="currentColor"'), themed);
-        expect(() => vectorDrawableToSvg(xml)).toThrow(/Unsupported Android color: \?attr\/colorPrimary/);
+        const unresolved: string[] = [];
+        expect(vectorDrawableToSvg(xml, { onUnresolvedColor: (r) => unresolved.push(r) })).toContain('fill="#808080"');
+        expect(unresolved).toEqual(['?attr/colorPrimary']);
+        expect(vectorDrawableToSvg(xml, { colors: { '?attr/colorPrimary': '#f00' } })).toContain('fill="#ff0000"');
     });
 });
