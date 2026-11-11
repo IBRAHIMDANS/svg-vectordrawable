@@ -137,7 +137,7 @@ export function convert(svg: string, options: ConvertOptions = {}): ConvertResul
         onWarn?.(w);
     };
 
-    const root = parseSvg(svg, optimize, svgoConfig, floatPrecision);
+    const root = parseSvg(svg, optimize, svgoConfig, floatPrecision, fillBlackForUnfilled);
     // Fold CSS transforms into attributes before <use> expansion, so that clones inherit them.
     applyCssProperties(root, warn);
     resolveUses(root); // inline <use> references so the walker sees concrete geometry
