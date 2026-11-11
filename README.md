@@ -162,7 +162,23 @@ svgvd icon.svg --strict=lossy  # fail only when content would be lost
 svgvd icon.svg --min-sdk 21    # warn when the output needs a higher API level
 svgvd arrow.svg --auto-mirrored --width 24   # RTL mirroring, 24dp wide (height follows the ratio)
 svgvd icons/ -o res/drawable/ --android-names   # Arrow-Left.svg → arrow_left.xml (valid resource names)
+cat icon.svg | svgvd > icon.xml   # stdin → stdout (also `svgvd -`, or `svgvd - -o icon.xml`)
+svgvd icons/ -r -o out/        # recursive: icons/a/b.svg → out/a/b.xml
+svgvd icons/ -o out/ --json    # JSON report on stdout, for CI (see below)
+svgvd icons/ -r --dry-run      # convert and report, write nothing
 ```
+
+`--json` prints one entry per file, `[{ input, output, warnings, minSdk, error }]`, and nothing else on
+stdout (human-readable lines stay on stderr). Each warning carries its `code` and `category`
+(`lossy`, `approximation`, `info`); `error` is `null` or `{ message, code?, category? }` (`code` when a
+warning was escalated by `--strict` / `--rule`). The XML then has to go to files: `--json` is refused
+with `--stdout`, or with stdin / `-s` without `-o file.xml`, unless `--dry-run`. The exit code is 1
+when any file fails, as without `--json`.
+
+With `--recursive` and `--android-names`, the outputs are written flat into `-o` (an Android resource
+directory has no subdirectories) and a name collision across subdirectories fails before anything is
+written. Symbolic links to directories are not followed. Without an input argument, `svgvd` reads
+stdin only when it is not a terminal, and prints the help when nothing is piped.
 
 ### Browser
 
