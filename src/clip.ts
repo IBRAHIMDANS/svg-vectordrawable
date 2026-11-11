@@ -20,23 +20,92 @@ import type { Viewport } from './viewport.js';
 
 type Box = { x: number; y: number; width: number; height: number };
 
-/** A mask resolved for one element: the clips that reproduce it (outermost first), or why it is not one. */
-export type MaskClip = { clipIds: string[] } | { reason: string };
+/**
+ * A mask resolved for one element: the clips that reproduce it (outermost first) and the uniform
+ * mask value inside them (`opacity`, 1 for a white or opaque mask), or why it is not one.
+ */
+export type MaskClip = { clipIds: string[]; opacity: number } | { reason: string };
 
-/** Mask content flattened into clip pieces; `strokeIgnored` when a stroke of the content was left out. */
+/**
+ * Mask content flattened into clip pieces; `strokeIgnored` when a stroke of the content was left
+ * out. Every piece paints the same mask `value`; `boxes` (one per piece) and `translucent` tell
+ * whether overlapping pieces would compose into another value.
+ */
 interface MaskPieces {
     pieces: string[];
+    boxes: Box[];
     strokeIgnored: boolean;
+    value?: number;
+    translucent: boolean;
+    /** Clips of the mask of the one masked element making up the content (content space). */
+    nested?: string[];
 }
 
-/** A mask's content as a registered clip, or why it is not clip-equivalent. */
-type MaskContent = { clipId: string; box: Box; strokeIgnored: boolean } | { reason: string };
+const emptyPieces = (): MaskPieces => ({ pieces: [], boxes: [], strokeIgnored: false, translucent: false });
+
+/** A mask's content as registered clips (intersected), or why it is not clip-equivalent. */
+type MaskContent = { clipIds: string[]; box: Box; strokeIgnored: boolean; value: number } | { reason: string };
 
 /** A `<mask>` element and the style its content inherits (from the mask's own ancestors). */
 interface MaskDef {
     el: XastElement;
     style: Inherited;
+    /** `mask-type: alpha` (otherwise luminance). */
+    alpha: boolean;
+    /** `color-interpolation` computes to `linearRGB` on the `<mask>` (luminance of linearized colors). */
+    linearRgb: boolean;
 }
+
+/** Two mask values closer than this are the same (8-bit colors differ by 1/255 at least). */
+const VALUE_EPSILON = 1e-3;
+
+/**
+ * The luminance of an opaque `#AARRGGBB` color, as `mask-type: luminance` reads it (CSS Masking 1
+ * §7.10.1 "Mask processing": the luminance-to-alpha coefficients of SVG 1.1 `feColorMatrix`, applied
+ * to the non-premultiplied color values, converted to linearRGB first only when `color-interpolation`
+ * on the mask element is `linearRGB`; the default `sRGB` uses the encoded values as they are).
+ * linearRGB is not converted (renderers differ on it): such a mask is refused unless its luminance
+ * is 0 or 1, which linearizing leaves unchanged.
+ */
+function luminanceOf(color: string): number {
+    const channel = (i: number): number => parseInt(color.slice(i, i + 2), 16) / 255;
+    return 0.2125 * channel(3) + 0.7154 * channel(5) + 0.0721 * channel(7);
+}
+
+/** `color-interpolation` keywords that set the property; anything else defers to the parent. */
+const INTERPOLATION_VALUES = new Set(['auto', 'srgb', 'linearrgb', 'initial']);
+
+/**
+ * true when `color-interpolation` (inherited) computes to `linearRGB` on the first of `nodes` (the
+ * element, then its ancestors nearest first): the nearest one setting it decides.
+ */
+function isLinearRgb(nodes: readonly XastElement[]): boolean {
+    for (const node of nodes) {
+        const value = presentation(node, 'color-interpolation')?.trim().toLowerCase();
+        if (value !== undefined && INTERPOLATION_VALUES.has(value)) return value === 'linearrgb';
+    }
+    return false;
+}
+
+/**
+ * True when a shape of mask content paints a visible stroke: a stroke `none`, of zero width, or
+ * fully transparent (color alpha, `stroke-opacity`, `opacity`) paints nothing, so ignoring it is no
+ * approximation. An unresolved color (`currentColor` unknown) counts as visible.
+ */
+function paintsMaskStroke(s: Inherited): boolean {
+    if (isNone(s.stroke) || !(strokeWidthOf(s) > 0)) return false;
+    const opacity = s.strokeOpacity * s.opacityMul;
+    if (/^url\(/i.test(s.stroke!.trim())) return opacity > 0;
+    const color = toAndroidColor(s.stroke, opacity, s.color);
+    return color === null || !color.startsWith('#00');
+}
+
+/** Interiors of two boxes intersect (touching edges do not overlap). */
+const overlaps = (a: Box, b: Box): boolean =>
+    a.x < b.x + b.width - EPSILON &&
+    b.x < a.x + a.width - EPSILON &&
+    a.y < b.y + b.height - EPSILON &&
+    b.y < a.y + a.height - EPSILON;
 
 const URL_REF = /^url\(\s*['"]?#([^'")\s]+)['"]?\s*\)/;
 
@@ -305,6 +374,10 @@ export class ClipPaths {
     private readonly maskContents = new Map<string, MaskContent>();
     /** Masks already reported as `mask-approximated` (once per mask, whatever the units). */
     private readonly approximatedMasks = new Set<string>();
+    /** `resolveMask` results per element: the opacity of a translucent mask is applied once. */
+    private readonly resolvedMasks = new WeakMap<XastElement, MaskClip>();
+    /** Masks whose content is being flattened: a mask used inside its own content is refused. */
+    private readonly resolvingMasks = new Set<string>();
     private syntheticCount = 0;
     /** Elements outside the SVG namespace: skipped by every walk, like the renderer (`isNotRendered`). */
     private readonly foreign: WeakSet<XastElement>;
@@ -461,8 +534,13 @@ export class ClipPaths {
             if (c.name === 'mask' && id && !this.masks.has(id)) {
                 let style = initialStyle(UNKNOWN_COLOR, this.viewport);
                 for (const a of ancestors) style = resolveStyle(a, style);
-                // Opacity is not inherited: only the mask's own (and its content's) counts.
-                this.masks.set(id, { el: c, style: resolveStyle(c, { ...style, opacityMul: 1 }) });
+                this.masks.set(id, {
+                    el: c,
+                    // Opacity is not inherited: only the mask's own (and its content's) counts.
+                    style: resolveStyle(c, { ...style, opacityMul: 1 }),
+                    alpha: (presentation(c, 'mask-type') ?? '').trim() === 'alpha',
+                    linearRgb: isLinearRgb([c, ...[...ancestors].reverse()]),
+                });
             }
             this.collectMasks(c, [...ancestors, c]);
         }
@@ -470,15 +548,23 @@ export class ClipPaths {
 
     /**
      * Resolves the `mask` of `el` (a group or drawable leaf) into clips, when the mask is
-     * *clip-equivalent*: its mask value is exactly 1 inside some shapes and 0 elsewhere, which is
-     * what a VectorDrawable `<clip-path>` (nonzero rule) draws. That holds when:
-     * - `mask-type` is `luminance` (default) and every painting shape is opaque white (luminance 1,
-     *   alpha 1), or `mask-type` is `alpha` and every painting shape is opaque (any color);
-     * - "opaque" covers the fill color alpha, `fill-opacity` and `opacity` (own and inherited
-     *   inside the mask; ancestors of the `<mask>` only pass inherited properties down);
-     * - no shape paints a gradient / pattern fill, or carries a `filter` / `mask` / `clip-path`;
-     *   only groups, paths and basic shapes (`<use>` is already inlined as groups) appear. Shapes that
-     *   paint nothing (fill and stroke `none`, `display: none`, hidden, empty geometry) are ignored;
+     * *clip-equivalent*: its mask value is one uniform value `v` inside some shapes and 0 elsewhere,
+     * which is a VectorDrawable `<clip-path>` (nonzero rule) around the element drawn at `v` times its
+     * opacity. When `v` < 1, the `opacity` of `el` is multiplied by `v` here (once per element), so the
+     * renderer folds it like any opacity (onto the leaves: a VectorDrawable group has no alpha; with
+     * `opacity-approximated` when the children of a group overlap). That holds when:
+     * - `mask-type` is `luminance` (default) and every painting shape has the same luminance × alpha
+     *   (see `luminanceOf`), or `mask-type` is `alpha` and every painting shape has the same alpha;
+     * - the alpha covers the fill color alpha, `fill-opacity` and `opacity` (own and inherited
+     *   inside the mask; ancestors of the `<mask>` only pass inherited properties down); translucent
+     *   shapes must not overlap (their values would compose into another one where they do);
+     * - no shape paints a gradient / pattern fill, or carries a `filter` / `clip-path`; only groups,
+     *   paths and basic shapes (`<use>` is already inlined as groups) appear. Shapes that paint
+     *   nothing (fill and stroke `none` or fully transparent, `display: none`, hidden, empty
+     *   geometry) are ignored;
+     * - a `mask` inside the content must be clip-equivalent itself: an element under it that only
+     *   paints (ignored) strokes is dropped; the element making up the whole content may carry one,
+     *   whose clips are intersected (nested clips) and whose value multiplies the content's;
      * - strokes are the one approximation: a clip-path has no stroke outline, so the stroke of the
      *   content is ignored (`mask-approximated`, once per mask) and a stroke-only shape is dropped;
      *   content left empty that way refuses the mask;
@@ -487,16 +573,26 @@ export class ClipPaths {
      * - `maskContentUnits` is `userSpaceOnUse` (default: the element's user space) or
      *   `objectBoundingBox` (content mapped onto the element's bbox);
      * - the mask region (`x`/`y`/`width`/`height`, `maskUnits` defaulting to objectBoundingBox
-     *   -10 % / -10 % / 120 % / 120 %) also clips: when it cuts the content, a second
-     *   rectangular clip is returned (nested Android clips intersect).
+     *   -10 % / -10 % / 120 % / 120 %) also clips: when it cuts the content, a rectangular clip is
+     *   added (nested Android clips intersect).
      * The clips live in the element's user space (after its own transform), like its clip-path.
      */
     resolveMask(el: XastElement, viewport: Viewport): MaskClip {
+        const known = this.resolvedMasks.get(el);
+        if (known) return known;
+        const mask = this.maskClip(el, viewport);
+        this.resolvedMasks.set(el, mask);
+        return mask;
+    }
+
+    /** The mask as clips and a uniform value (also used for a mask inside mask content). */
+    private maskClip(el: XastElement, viewport: Viewport): MaskClip {
         const ref = URL_REF.exec((presentation(el, 'mask') ?? '').trim());
         if (!ref) return { reason: 'not a url(#id) reference' };
         const id = ref[1]!;
         const mask = this.masks.get(id);
         if (!mask) return { reason: `unknown mask "${id}"` };
+        if (this.resolvingMasks.has(id)) return { reason: `mask "${id}" is used inside its own content` };
         const attrs = mask.el.attributes ?? {};
         const type = (presentation(mask.el, 'mask-type') ?? 'luminance').trim();
         if (type !== 'luminance' && type !== 'alpha') return { reason: `mask-type="${type}"` };
@@ -513,7 +609,9 @@ export class ClipPaths {
         let content = boxContent ? undefined : this.maskContents.get(id);
         if (!content) {
             const m = boxContent ? { a: bbox!.width, b: 0, c: 0, d: bbox!.height, e: bbox!.x, f: bbox!.y } : null;
+            this.resolvingMasks.add(id);
             content = this.maskContent(mask, m);
+            this.resolvingMasks.delete(id);
             if (!boxContent) this.maskContents.set(id, content);
         }
         if ('reason' in content) return content;
@@ -524,9 +622,10 @@ export class ClipPaths {
         const { x, y, width, height } = region;
         if (!inside && (width <= 0 || height <= 0)) return { reason: 'its region is empty' };
         if (content.strokeIgnored) this.reportApproximatedMask(id);
-        if (inside) return { clipIds: [content.clipId] };
+        const opacity = content.value;
+        if (inside) return { clipIds: content.clipIds, opacity };
         const rect = `M${x} ${y}H${x + width}V${y + height}H${x}Z`;
-        return { clipIds: [content.clipId, this.addResolvedClip('svgvd-mask-region', rect)] };
+        return { clipIds: [...content.clipIds, this.addResolvedClip('svgvd-mask-region', rect)], opacity };
     }
 
     /** Warns once per mask that the stroke of its content was ignored. */
@@ -540,11 +639,10 @@ export class ClipPaths {
         });
     }
 
-    /** The mask content as a registered clip, or why it is not clip-equivalent. */
+    /** The mask content as registered clips, or why it is not clip-equivalent. */
     private maskContent(mask: MaskDef, m: Matrix | null): MaskContent {
-        const alpha = (presentation(mask.el, 'mask-type') ?? '').trim() === 'alpha';
-        const acc: MaskPieces = { pieces: [], strokeIgnored: false };
-        const reason = this.flattenMask(mask.el, mask.style, m, alpha, acc);
+        const acc = emptyPieces();
+        const reason = this.flattenMask(mask.el, mask.style, m, mask, acc);
         if (reason) return { reason };
         const box = unionBBox(acc.pieces);
         if (!box)
@@ -553,54 +651,121 @@ export class ClipPaths {
                     ? 'its content only paints strokes, which a clip-path cannot draw'
                     : 'its content is empty (the element is hidden)',
             };
-        return { clipId: this.addResolvedClip('svgvd-mask', unite(acc.pieces)), box, strokeIgnored: acc.strokeIgnored };
+        if (acc.translucent && acc.boxes.some((a, i) => acc.boxes.slice(i + 1).some((b) => overlaps(a, b))))
+            return { reason: 'translucent content with overlapping shapes (their mask values compose)' };
+        return {
+            clipIds: [this.addResolvedClip('svgvd-mask', unite(acc.pieces)), ...(acc.nested ?? [])],
+            box,
+            strokeIgnored: acc.strokeIgnored,
+            value: acc.value ?? 1,
+        };
     }
 
     /**
-     * Flattens clip-equivalent mask content into absolute pathData pieces; returns a reason otherwise.
-     * Strokes are left out (flagged in `acc.strokeIgnored`): only fills become pieces.
+     * Flattens clip-equivalent mask content (the children of `node`) into absolute pathData pieces;
+     * returns a reason otherwise. Strokes are left out (flagged in `acc.strokeIgnored`): only fills
+     * become pieces.
      */
     private flattenMask(
         node: XastElement,
         style: Inherited,
         m: Matrix | null,
-        alpha: boolean,
+        def: MaskDef,
         acc: MaskPieces,
     ): string | null {
         for (const c of node.children ?? []) {
             if (c.type !== 'element' || !c.name || isNotRendered(c, this.foreign)) continue;
-            for (const prop of ['filter', 'mask', 'clip-path'])
-                if (!isNone(presentation(c, prop))) return `${prop} inside the mask`;
-            const s = resolveStyle(c, style);
-            const mm = childMatrix(c, m);
-            if (GROUPS.has(c.name)) {
-                const reason = this.flattenMask(c, s, mm, alpha, acc);
-                if (reason) return reason;
-                continue;
-            }
-            if (c.name !== 'path' && !SHAPE_NAMES.has(c.name)) return `<${c.name}> inside the mask`;
-            const d = pathDataOf(c, this.viewport, this.precision);
-            const fill = s.fill ?? '#000000'; // SVG's initial fill
-            const stroked = !isNone(s.stroke) && strokeWidthOf(s) > 0;
-            if (!d || isHidden(s) || (isNone(fill) && !stroked)) continue; // paints nothing
-            if (stroked) acc.strokeIgnored = true;
-            if (isNone(fill)) continue; // stroke-only: nothing left once the stroke is ignored
-            if (/^url\(/i.test(fill.trim())) return 'gradient or pattern fill';
-            const color = toAndroidColor(fill, s.fillOpacity * s.opacityMul, s.color);
-            if (!color) return `fill "${fill}" is not a solid color`;
-            if (!color.startsWith('#FF')) return 'translucent content';
-            if (!alpha && color !== '#FFFFFFFF') return `fill "${fill}" is not white (luminance below 1)`;
-            // Always transformed: the output is absolute, so pieces can be concatenated safely.
-            const piece = transformPathData(d, mm ?? IDENTITY);
-            if (s.fillRule !== 'evenodd') {
-                acc.pieces.push(piece);
-                continue;
-            }
+            const reason = isNone(presentation(c, 'mask'))
+                ? this.flattenElement(c, style, m, def, acc)
+                : this.flattenMasked(c, style, m, def, acc);
+            if (reason) return reason;
+        }
+        return null;
+    }
+
+    /**
+     * A masked element `c` of mask content, under a mask that must be clip-equivalent itself (each
+     * level exact). Only its fills count (see `flattenElement`): with none (only ignored strokes), it
+     * is dropped. Otherwise it must make up the whole content: its clips (moved into the content
+     * space) intersect the content's, its value multiplies it.
+     */
+    private flattenMasked(
+        c: XastElement,
+        style: Inherited,
+        m: Matrix | null,
+        def: MaskDef,
+        acc: MaskPieces,
+    ): string | null {
+        const own = emptyPieces();
+        const reason = this.flattenElement(c, style, m, def, own);
+        if (reason) return reason;
+        if (!own.pieces.length && !own.strokeIgnored) return null; // paints nothing
+        if (own.pieces.length && (acc.pieces.length || acc.nested))
+            return 'a masked element next to other content inside the mask';
+        // Each level must be exact: an inexact inner mask (a Figma outside stroke…) is no clip either.
+        const inner = this.maskClip(c, this.viewport);
+        if ('reason' in inner) return `mask inside the mask (${inner.reason})`;
+        if (own.strokeIgnored) acc.strokeIgnored = true;
+        if (!own.pieces.length) return null; // only strokes, ignored like any other
+        const mm = childMatrix(c, m);
+        acc.nested = mm
+            ? inner.clipIds.map((id) => this.addResolvedClip('svgvd-mask', transformPathData(this.cache.get(id)!, mm)))
+            : inner.clipIds;
+        acc.pieces.push(...own.pieces);
+        acc.boxes.push(...own.boxes);
+        acc.translucent = own.translucent;
+        acc.value = (own.value ?? 1) * inner.opacity;
+        return null;
+    }
+
+    /** Flattens one element of mask content (its own `mask` aside) into `acc`; a reason otherwise. */
+    private flattenElement(
+        c: XastElement,
+        style: Inherited,
+        m: Matrix | null,
+        def: MaskDef,
+        acc: MaskPieces,
+    ): string | null {
+        for (const prop of ['filter', 'clip-path'])
+            if (!isNone(presentation(c, prop))) return `${prop} inside the mask`;
+        const s = resolveStyle(c, style);
+        const mm = childMatrix(c, m);
+        if (GROUPS.has(c.name!)) return this.flattenMask(c, s, mm, def, acc);
+        if (c.name !== 'path' && !SHAPE_NAMES.has(c.name!)) return `<${c.name}> inside the mask`;
+        const d = pathDataOf(c, this.viewport, this.precision);
+        if (!d || isHidden(s)) return null; // paints nothing
+        if (paintsMaskStroke(s)) acc.strokeIgnored = true;
+        const fill = s.fill ?? '#000000'; // SVG's initial fill
+        if (isNone(fill)) return null; // nothing, or nothing left once the stroke is ignored
+        if (/^url\(/i.test(fill.trim())) return 'gradient or pattern fill';
+        const color = toAndroidColor(fill, s.fillOpacity * s.opacityMul, s.color);
+        if (!color) return `fill "${fill}" is not a solid color`;
+        const alpha = parseInt(color.slice(1, 3), 16) / 255;
+        if (alpha === 0) return null; // a fully transparent fill paints nothing
+        let value = alpha;
+        if (!def.alpha) {
+            const luminance = luminanceOf(color);
+            // Linearizing changes every luminance strictly between 0 and 1 (renderers differ): refused.
+            if (def.linearRgb && luminance > VALUE_EPSILON && luminance < 1 - VALUE_EPSILON)
+                return `fill "${fill}" under color-interpolation="linearRGB"`;
+            value *= luminance;
+        }
+        if (acc.nested) return 'a masked element next to other content inside the mask';
+        if (acc.value !== undefined && Math.abs(acc.value - value) > VALUE_EPSILON)
+            return `fill "${fill}" gives another mask value than the rest of the content (not uniform)`;
+        acc.value ??= value;
+        if (alpha < 1) acc.translucent = true;
+        // Always transformed: the output is absolute, so pieces can be concatenated safely.
+        let piece = transformPathData(d, mm ?? IDENTITY);
+        if (s.fillRule === 'evenodd') {
             // Positive orientation, like the pieces `unite` keeps or reverses: windings add up.
             const nonzero = evenOddToNonZero(piece, 1);
             if (nonzero === null) return 'fill-rule="evenodd" content with crossing or touching contours';
-            acc.pieces.push(nonzero);
+            piece = nonzero;
         }
+        acc.pieces.push(piece);
+        const box = pathBBox(piece);
+        if (box) acc.boxes.push(box);
         return null;
     }
 

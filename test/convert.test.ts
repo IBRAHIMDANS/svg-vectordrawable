@@ -1259,11 +1259,16 @@ describe('clip-equivalent masks', () => {
     });
 
     it.each([
-        ['a gray fill', '<rect width="10" height="10" fill="#808080"/>', /not white/],
-        ['the default black fill', '<rect width="10" height="10"/>', /not white/],
-        ['a semi-transparent white', '<rect width="10" height="10" fill="#fff" fill-opacity="0.5"/>', /translucent/],
-        ['an rgba white', '<rect width="10" height="10" fill="rgba(255,255,255,0.5)"/>', /translucent/],
-        ['a group opacity', '<g opacity="0.5"><rect width="10" height="10" fill="#fff"/></g>', /translucent/],
+        [
+            'non-uniform values',
+            '<rect width="5" height="10" fill="#fff"/><rect x="5" width="5" height="10" fill="#808080"/>',
+            /not uniform/,
+        ],
+        [
+            'overlapping translucent shapes',
+            '<rect width="8" height="8" fill="#fff" fill-opacity="0.5"/><rect x="4" y="4" width="8" height="8" fill="#fff" fill-opacity="0.5"/>',
+            /translucent content with overlapping shapes/,
+        ],
         ['only a stroke', '<rect width="10" height="10" fill="none" stroke="#fff"/>', /only paints strokes/],
         [
             'a gradient fill',
@@ -1299,13 +1304,31 @@ describe('clip-equivalent masks', () => {
         }
     });
 
-    it('keeps the warning for an alpha mask with translucent content', () => {
-        expectRejected(
-            svg(
-                `<mask id="m" mask-type="alpha"><rect width="10" height="10" fill="#000" opacity="0.4"/></mask>${square}`,
-            ),
-            /translucent/,
-        );
+    // A uniform mask value (luminance × alpha, or alpha alone in mask-type: alpha) is a clip plus an
+    // opacity (TASK-092): converted without warning, the value carried by the leaves' alpha.
+    it.each([
+        ['a gray fill', '<rect width="10" height="10" fill="#808080"/>', 0.502],
+        ['a semi-transparent white', '<rect width="10" height="10" fill="#fff" fill-opacity="0.5"/>', 0.5],
+        ['an rgba white', '<rect width="10" height="10" fill="rgba(255,255,255,0.5)"/>', 0.5],
+        ['a group opacity', '<g opacity="0.5"><rect width="10" height="10" fill="#fff"/></g>', 0.5],
+        ['an alpha mask with translucent content', '<rect width="10" height="10" fill="#000" opacity="0.4"/>', 0.4],
+    ])('converts a mask with %s as a clip and an opacity', (name, content, alpha) => {
+        const type = name.startsWith('an alpha mask') ? ' mask-type="alpha"' : '';
+        const doc = svg(`<mask id="m"${type}>${content}</mask>${square}`);
+        for (const optimize of [false, true]) {
+            const { xml, warnings } = convert(doc, { optimize, strict: true });
+            expect(warnings).toEqual([]);
+            expect(clipCount(xml)).toBe(1);
+            expect(Number(/android:fillAlpha="([\d.]+)"/.exec(xml)?.[1])).toBeCloseTo(alpha, 2);
+        }
+    });
+
+    it('converts a mask with the default black fill: the masked element is hidden', () => {
+        const doc = svg(`<mask id="m"><rect width="10" height="10"/></mask>${square}`);
+        for (const optimize of [false, true]) {
+            const { warnings } = convert(doc, { optimize, strict: true });
+            expect(warnings).toEqual([]);
+        }
     });
 
     it('keeps the warning for an unknown mask and an empty mask', () => {
@@ -1314,7 +1337,8 @@ describe('clip-equivalent masks', () => {
     });
 
     it('still throws in strict mode for a mask that is not clip-equivalent', () => {
-        const doc = svg(`<mask id="m"><rect width="10" height="10" fill="#808080"/></mask>${square}`);
+        const twoValues = '<rect width="5" height="10" fill="#fff"/><rect x="5" width="5" height="10" fill="#808080"/>';
+        const doc = svg(`<mask id="m">${twoValues}</mask>${square}`);
         expect(() => convert(doc, { optimize: false, strict: true })).toThrow(ConversionError);
     });
 });
