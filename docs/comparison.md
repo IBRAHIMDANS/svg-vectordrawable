@@ -165,16 +165,17 @@ Facts already established by the harness (from `scripts/compare-svg2vector/READM
 
 ## How `svg-vectordrawable` itself is checked
 
-From the README (Robustness) and the changelog:
+From the README (Robustness) and the changelog; the corpus, the issue #1 logo and the large input were
+remeasured on 2026-11-11 (the Android renderer figure was not):
 
-| Check              | What                                                                                                     | Where                                          |
-| ------------------ | -------------------------------------------------------------------------------------------------------- | ---------------------------------------------- |
-| Icon corpus        | 9,251 icons (Feather, Bootstrap Icons, Heroicons, Tabler; pinned versions), with and without svgo, in CI | `scripts/corpus.mjs`                           |
-| Android toolchain  | Fixtures compiled and linked with `aapt2` against `android.jar`                                          | `scripts/aapt2-validate.mjs`                   |
-| Visual regression  | Each fixture rendered with resvg next to its VectorDrawable; must match within 1 % of inked pixels       | `test/visual/`, `pnpm test:visual`             |
-| Android's renderer | Output rendered by layoutlib (Skia/hwui via Paparazzi); fixtures and Android probes match within 0.11 %  | `android-render/`, `pnpm run validate:android` |
-| Issue #1 logo      | Renders within 0.22 % of its source (dashes baked into geometry)                                         | `test/visual.test.ts`, changelog               |
-| Large input        | 10,000 paths: 24.6 s → under 2 s after skipping svgo's `mergePaths` above 500 drawable elements          | changelog                                      |
+| Check              | What                                                                                                                       | Where                                          |
+| ------------------ | -------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------- |
+| Icon corpus        | 9,251 icons (Feather, Bootstrap Icons, Heroicons, Tabler; pinned versions), with and without svgo, in CI: 0 warning        | `scripts/corpus.mjs`                           |
+| Android toolchain  | Fixtures compiled and linked with `aapt2` against `android.jar`                                                            | `scripts/aapt2-validate.mjs`                   |
+| Visual regression  | Each fixture rendered with resvg next to its VectorDrawable; must match within 1 % of inked pixels                         | `test/visual/`, `pnpm test:visual`             |
+| Android's renderer | Output rendered by layoutlib (Skia/hwui via Paparazzi); fixtures and Android probes match within 0.11 %                    | `android-render/`, `pnpm run validate:android` |
+| Issue #1 logo      | Renders within 0.17 % of its source, with and without svgo (dashes baked into geometry)                                    | `test/visual.test.ts`                          |
+| Large input        | 10,000 paths: 24.6 s → 0.8 s (10,000 filled squares, default config) after skipping svgo's `mergePaths` above 500 elements | changelog                                      |
 
 Limitations that apply to every converter, because VectorDrawable cannot express them, are listed in
 the README under _Known limitations_ (most `<mask>`, `<filter>`, `<pattern>`, `<text>`, `<image>`, group
