@@ -282,6 +282,7 @@ function runFallback(
         const target = fallbackPngPath(job.output, fallback.length > 1 ? `{${fallback.join(',')}}` : fallback[0]!);
         const source = file === undefined ? '' : `${file} `;
         io.stderr(`✓ ${source}→ ${target}${dryRun ? ' (dry run)' : ''} (PNG fallback: ${rejection.message})\n`);
+        deleteStale([job.output], 'stale XML', file, dryRun, io);
         return {
             input: job.input,
             output: null,
@@ -316,6 +317,7 @@ function runJob(job: Job, settings: RunSettings, io: CliIo): ReportEntry {
         } else {
             if (!dryRun) writeOutput(job.output, xml);
             if (file !== undefined) io.stderr(`✓ ${file} → ${job.output}${dryRun ? ' (dry run)' : ''}\n`);
+            deleteStale(allFallbackPngPaths(job.output), 'stale PNG fallback', file, dryRun, io);
         }
         return {
             input: job.input,
@@ -338,6 +340,40 @@ function runJob(job: Job, settings: RunSettings, io: CliIo): ReportEntry {
             error: reportError(err),
             fallback: null,
         };
+    }
+}
+
+/**
+ * The PNG fallback paths of `xmlOutput` for every known density, not only the requested ones: an
+ * earlier run may have asked for others, and any of them would still shadow the XML on Android.
+ */
+function allFallbackPngPaths(xmlOutput: string): string[] {
+    return Object.keys(DENSITIES).map((density) => fallbackPngPath(xmlOutput, density));
+}
+
+/**
+ * Deletes the outputs of the other form (XML or PNG fallback) of a job that was just written, so that
+ * an earlier run does not leave two resources of the same name; with `dryRun`, only says what would
+ * be deleted. Only the exact computed `paths` are touched, never a directory. A deletion that fails is
+ * reported as a warning, the output just written stays.
+ */
+function deleteStale(
+    paths: readonly string[],
+    reason: string,
+    file: string | undefined,
+    dryRun: boolean,
+    io: CliIo,
+): void {
+    const source = file === undefined ? '' : `${file} `;
+    for (const path of paths) {
+        const stat = lstatOrUndefined(path);
+        if (stat === undefined || stat.isDirectory()) continue;
+        try {
+            if (!dryRun) rmSync(path, { force: true });
+            io.stderr(`✓ ${source}→ ${path} deleted${dryRun ? ' (dry run)' : ''} (${reason})\n`);
+        } catch (err) {
+            io.stderr(`  ⚠ ${source}could not delete ${path} (${reason}): ${(err as Error).message}\n`);
+        }
     }
 }
 
