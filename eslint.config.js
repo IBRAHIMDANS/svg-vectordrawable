@@ -40,6 +40,13 @@ export default tseslint.config(
             globals: { ...globals.node },
         },
     },
+    // Documentation asset generators (e.g. the README before/after image) run on Node.
+    {
+        files: ['docs/assets/**/*.mjs'],
+        languageOptions: {
+            globals: { ...globals.node },
+        },
+    },
     // Playground (static page on GitHub Pages): browser modules, a classic worker, a Node smoke test.
     {
         files: ['playground/*.js'],
