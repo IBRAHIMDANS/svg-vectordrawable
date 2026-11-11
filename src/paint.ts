@@ -293,7 +293,7 @@ function dashedPathData(
             ? dashPathData(shape, pattern, offset, diag * DASH_TOLERANCE, {
                   // A baked path is re-rounded by transformPathData: keep full precision until then.
                   precision: bake ? 6 : ctx.precision,
-                  ...(pathLength !== undefined && pathLength > 0 ? { pathLength } : {}),
+                  ...(pathLength !== undefined && pathLength >= 0 ? { pathLength } : {}),
               })
             : null;
     if (dashed === null) {
