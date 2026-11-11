@@ -37,10 +37,16 @@ export function shapeToPathData(name: string, attrs: Attrs, options: ShapeOption
             if (w <= 0 || h <= 0) return null;
             const x = n('x', 'x');
             const y = n('y', 'y');
-            let rx = attrs.rx !== undefined ? n('rx', 'x') : n('ry', 'y');
-            let ry = attrs.ry !== undefined ? n('ry', 'y') : n('rx', 'x');
-            rx = Math.min(Math.max(rx, 0), w / 2);
-            ry = Math.min(Math.max(ry, 0), h / 2);
+            // SVG 2 used radii: a missing, `auto`, negative or unparsable radius is `auto` and takes
+            // the other radius (both `auto` → square corners); each is then clamped to half the side.
+            const radius = (key: string, axis: 'x' | 'y'): number | undefined => {
+                const v = parseLength(attrs[key], axis === 'x' ? viewport?.width : viewport?.height);
+                return v >= 0 ? v : undefined;
+            };
+            const rxUsed = radius('rx', 'x');
+            const ryUsed = radius('ry', 'y');
+            const rx = Math.min(rxUsed ?? ryUsed ?? 0, w / 2);
+            const ry = Math.min(ryUsed ?? rxUsed ?? 0, h / 2);
             if (rx > 0 || ry > 0) {
                 return (
                     p`M${x + rx},${y}h${w - 2 * rx}a${rx},${ry} 0 0 1 ${rx},${ry}` +
