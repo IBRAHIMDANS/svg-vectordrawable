@@ -546,6 +546,48 @@ export function resolveGradient(
     };
 }
 
+/**
+ * A gradient laid out over another element (the context element of `context-fill` /
+ * `context-stroke`, SVG 2 §13.3), as the equivalent `userSpaceOnUse` gradient of the painted
+ * shape: its geometry is resolved in the context element's user space (`bbox`, `viewport` for
+ * percentages), mapped to a common space by `contextToRoot`, then into the shape's user space by
+ * the inverse of `shapeToRoot`. Null when it cannot be: an `objectBoundingBox` gradient without a
+ * box (or over an empty one), or a non-invertible transform.
+ */
+export function contextGradient(
+    g: RawGradient,
+    contextToRoot: Matrix,
+    shapeToRoot: Matrix,
+    bbox: BBox | null,
+    viewport: Viewport,
+): RawGradient | null {
+    if (isSingular(contextToRoot) || isSingular(shapeToRoot)) return null;
+    if (g.objectBox && (!bbox || bbox.width <= 0 || bbox.height <= 0)) return null;
+    const frame = gradientFrame(g, bbox ?? { x: 0, y: 0, width: 0, height: 0 }, viewport);
+    const { refW, refH } = frame;
+    const a = g.attrs;
+    let attrs: Record<string, number>;
+    if (g.type === 'radial') {
+        const { cx, cy, r } = radialCircle(a, frame);
+        attrs = { cx, cy, r, fx: coord(a.fx, cx, refW), fy: coord(a.fy, cy, refH) };
+    } else
+        attrs = {
+            x1: coord(a.x1, 0, refW),
+            y1: coord(a.y1, 0, refH),
+            x2: coord(a.x2, refW, refW),
+            y2: coord(a.y2, 0, refH),
+        };
+    return {
+        ...g,
+        objectBox: false,
+        attrs: {
+            ...Object.fromEntries(Object.entries(attrs).map(([k, v]) => [k, String(v)])),
+            gradientUnits: 'userSpaceOnUse',
+        },
+        matrix: multiply(invert(shapeToRoot), multiply(contextToRoot, frame.base)),
+    };
+}
+
 /** Inverse of an invertible affine matrix. */
 function invert(m: Matrix): Matrix {
     const det = m.a * m.d - m.b * m.c;
