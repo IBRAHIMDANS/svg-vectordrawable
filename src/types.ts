@@ -6,7 +6,7 @@ export const WARNING_CODES = [
     'unsupported-element',
     /** A non-clip `mask`, `filter`, `marker*`, `vector-effect`, `paint-order` or unsupported join; ignored. */
     'unsupported-attribute',
-    /** A dash pattern that cannot be resolved (e.g. `em` units); the stroke is drawn solid. */
+    /** A dash pattern that cannot be resolved (e.g. `ex` units); the stroke is drawn solid. */
     'unsupported-stroke-dasharray',
     /** No longer emitted (gradient strokes are converted); kept for compatibility. */
     'unsupported-stroke-gradient',
