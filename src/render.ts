@@ -6,6 +6,7 @@ import {
     GROUPS,
     isNotRendered,
     pathDataOf,
+    switchChild,
     UNSUPPORTED,
     UNSUPPORTED_ATTRS,
 } from './elements.js';
@@ -127,6 +128,26 @@ function maskAsClips(el: XastElement, clipIds: readonly string[]): XastElement {
     return node;
 }
 
+/**
+ * A `<switch>` as the group it renders: its own attributes (transform, clip-path, opacity…) around
+ * the one child `switchChild` picks, if any. A pick depending on the device language is reported
+ * here, once, so the picked child's `systemLanguage` is dropped (not reported again).
+ */
+function switchAsGroup(ctx: ConvertContext, sw: XastElement): XastElement {
+    const { child, languageDependent } = switchChild(sw, foreignOf(ctx, sw));
+    if (languageDependent) {
+        const picked = child?.attributes?.systemLanguage === undefined ? 'the child without it' : 'the first child';
+        ctx.warn({
+            code: 'unsupported-attribute',
+            message: `systemLanguage on the children of <switch> depends on the device language, which a VectorDrawable cannot test; ${picked} is rendered.`,
+            node: 'switch',
+        });
+    }
+    if (!child) return { ...sw, children: [] };
+    const { systemLanguage: _, ...attributes } = child.attributes ?? {};
+    return { ...sw, children: [{ ...child, attributes }] };
+}
+
 /** Android `<group>` transform attributes of a decomposed matrix (identity parts omitted). */
 function groupTransformAttrs(ctx: ConvertContext, dec: Decomposed, pad: string): string[] {
     const parts: [string, number, number][] = [
@@ -142,7 +163,7 @@ function groupTransformAttrs(ctx: ConvertContext, dec: Decomposed, pad: string):
 }
 
 /**
- * Renders a `<g>` / `<a>`: as an Android `<group>` when its transform decomposes, otherwise by
+ * Renders a `<g>` / `<a>` (or a `<switch>`, see `switchAsGroup`): as an Android `<group>` when its transform decomposes, otherwise by
  * baking the transform into descendant geometry.
  */
 function renderGroup(
@@ -256,7 +277,7 @@ export function walk(ctx: ConvertContext, el: XastElement, parent: Inherited, pa
 
         // A transform on a drawable element behaves like a wrapping <g transform>: reuse that path.
         const transform = child.attributes?.transform;
-        if (!GROUPS.has(name) && transform) {
+        if (!GROUPS.has(name) && name !== 'switch' && transform) {
             const { transform: _, ...rest } = child.attributes!;
             const untransformed: XastElement = { ...child, attributes: rest };
             ctx.reported.add(untransformed); // its unsupported attributes were just reported
@@ -277,11 +298,9 @@ export function walk(ctx: ConvertContext, el: XastElement, parent: Inherited, pa
         }
 
         const style = resolveStyle(child, parent);
-        push(
-            GROUPS.has(name)
-                ? renderGroup(ctx, child, parent, style, pad, bake)
-                : renderLeaf(ctx, child, name, style, pad, bake),
-        );
+        if (name === 'switch') push(renderGroup(ctx, switchAsGroup(ctx, child), parent, style, pad, bake));
+        else if (GROUPS.has(name)) push(renderGroup(ctx, child, parent, style, pad, bake));
+        else push(renderLeaf(ctx, child, name, style, pad, bake));
     }
     return out.join('\n');
 }

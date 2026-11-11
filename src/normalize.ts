@@ -12,7 +12,11 @@ const DEFAULT_OVERRIDES = {
     convertShapeToPath: { convertArcs: true },
     // svgo 4.1 mis-reflects a smooth `s` that follows a cubic rewritten to `q`
     // (`c3-2 6-2 9 0s6 2 9 0` → wrong first control point). Keep cubics as cubics.
-    convertPathData: { convertToQ: false },
+    // `makeArcs` rewrites curves that fit a circle as arcs, then rounds the radius and the end
+    // point separately: on a (near) half circle, `a6.999 6.999 0 1 0 0 13.996` puts the centre
+    // ~0.12 unit off the chord, since the offset grows as sqrt(r × rounding error). Its
+    // threshold / tolerance only bound the fit, not that rounding, so it is turned off.
+    convertPathData: { convertToQ: false, makeArcs: false },
     // Keep ids: gradients / clip-paths are referenced by url(#id).
     cleanupIds: { remove: false },
 };
@@ -82,6 +86,22 @@ const MAY_HAVE_PATH_LENGTH = /\spathLength\s*=/;
 const MAY_HAVE_NEGATIVE_SIZE = /\s(?:width|height|r|rx|ry)\s*=\s*["']\s*-/;
 
 /**
+ * A zero `width` / `height` (rect), `r` (circle) or `rx` / `ry` (ellipse) also disables rendering.
+ * svgo's `removeHiddenElems` deletes such shapes silently, whereas `optimize: false` reports them
+ * with `empty-path` (and `strict` throws). Keep them as elements so both modes warn alike.
+ * Element-aware so that the common `<rect rx="0">` does not match.
+ */
+const MAY_HAVE_ZERO_SIZE =
+    /<(?:rect\b[^>]*?\s(?:width|height)|circle\b[^>]*?\sr|ellipse\b[^>]*?\sr[xy])\s*=\s*["']\s*[-+]?(?:0+\.?0*|\.0+)(?:e[-+]?\d+)?(?:px)?\s*["']/i;
+const ZERO_SIZE_HIDDEN_ELEMS = {
+    rectWidth0: false,
+    rectHeight0: false,
+    circleR0: false,
+    ellipseRX0: false,
+    ellipseRY0: false,
+};
+
+/**
  * svgo moves `transform` between groups and their children (`moveElemsAttrsToGroup`,
  * `moveGroupAttrsToElems`, `collapseGroups`) and bakes it into path data (`convertPathData`)
  * without reading the CSS `transform` property nor `transform-origin`, which the converter folds
@@ -114,6 +134,10 @@ function defaultConfigFor(svg: string, floatPrecision: number, fillBlackForUnfil
         }
     }
     if (MAY_HAVE_NEGATIVE_SIZE.test(svg)) overrides.convertShapeToPath = false;
+    if (MAY_HAVE_ZERO_SIZE.test(svg)) {
+        overrides.convertShapeToPath = false;
+        overrides.removeHiddenElems = ZERO_SIZE_HIDDEN_ELEMS;
+    }
     if (!fillBlackForUnfilled) {
         // `removeUnknownsAndDefaults` drops `fill="#000"` (black, #000000, rgb(0,0,0) once
         // `convertColors` has run) as the SVG default; without `fillBlackForUnfilled` the converter
@@ -131,6 +155,11 @@ function defaultConfigFor(svg: string, floatPrecision: number, fillBlackForUnfil
         overrides.removeNonInheritableGroupAttrs = false;
         if (overrides.convertPathData !== false)
             overrides.convertPathData = { ...DEFAULT_OVERRIDES.convertPathData, applyTransforms: false };
+    }
+    if (/<switch\b/.test(svg)) {
+        // A <switch> renders one child: merging or dropping its children changes which one.
+        overrides.mergePaths = false;
+        overrides.removeHiddenElems = false;
     }
     const params: Record<string, unknown> = { overrides };
     if (floatPrecision > SVGO_FLOAT_PRECISION) {
