@@ -100,11 +100,17 @@ test('a real thread that loops forever is terminated on time', async () => {
             const thread = new Worker("require('node:worker_threads').parentPort.on('message', () => { for (;;); });", {
                 eval: true,
             });
+            thread.unref(); // a thread a failed test left behind must not keep the run alive
             return {
                 onmessage: null,
                 onerror: null,
                 postMessage: (data) => thread.postMessage(data),
-                terminate: () => void thread.terminate(),
+                terminate: () => {
+                    void thread.terminate();
+                    // Worker#terminate() calls ref() until the thread has exited: undo it, or a thread
+                    // slow to stop keeps the test file's process alive (same as spawnWorker in helpers.ts).
+                    thread.unref();
+                },
             };
         },
         timeoutMs: 200,

@@ -194,7 +194,9 @@ export function loadPage(html: string, { spawnWorker, toMain }: PageOptions) {
         },
         TextDecoder,
         TextEncoder,
-        setTimeout,
+        // Real timers, but unref'd: the page arms a 10 s revokeObjectURL per download, which must not
+        // keep the test file's process alive once every test has passed.
+        setTimeout: (callback: () => void, ms?: number) => setTimeout(callback, ms).unref(),
         clearTimeout,
         console,
         fetch: blocked('fetch'),
