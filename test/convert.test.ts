@@ -798,10 +798,16 @@ describe('units & percentages', () => {
         expect(xml).toContain('android:height="96dp"');
     });
 
-    it('falls back to the viewBox size for font-relative root width/height', () => {
-        const { xml } = convert(svg('<path d="M0 0h1v1z"/>', 'viewBox="0 0 24 24" width="2em" height="3ex"'), raw);
+    it('falls back to the viewBox size for font-dependent root width/height (ex, ch)', () => {
+        const { xml } = convert(svg('<path d="M0 0h1v1z"/>', 'viewBox="0 0 24 24" width="2ch" height="3ex"'), raw);
         expect(xml).toContain('android:width="24dp"');
         expect(xml).toContain('android:height="24dp"');
+    });
+
+    it('resolves em on the root at 16px and derives the other side from the viewBox ratio', () => {
+        const { xml } = convert(svg('<path d="M0 0h1v1z"/>', 'viewBox="0 0 24 24" width="2em" height="3ex"'), raw);
+        expect(xml).toContain('android:width="32dp"');
+        expect(xml).toContain('android:height="32dp"');
     });
 
     it('resolves a percentage stroke-width against the normalized viewport diagonal', () => {
