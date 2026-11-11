@@ -3,10 +3,10 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { convert, ConversionError } from '../src/index.js';
-import { applyPoint } from '../src/transform.js';
+import { applyPoint, parseTransformOrigin } from '../src/transform.js';
 import type { XastElement } from '../src/ast.js';
 import { parseSvg } from '../src/normalize.js';
-import { boxOrigin, layoutWarnings, rootLayout, rootTransform } from '../src/viewport.js';
+import { layoutWarnings, nestedLayout, rootLayout, rootTransform } from '../src/viewport.js';
 import { vdToSvg } from './visual/vdToSvg.js';
 import { compareSvgs, DEFAULT_MAX_MISMATCH } from './visual/compare.js';
 
@@ -355,9 +355,36 @@ describe('viewport-relative units on an <svg>', () => {
     });
 });
 
+describe('CSS size of a nested <svg>', () => {
+    /** The nested `<svg>` of a 100×100 root, as the converter sees it. */
+    const nested = (attrs: string): XastElement =>
+        (
+            rootSvg(svg('width="100" height="100"', `<svg ${attrs}><rect width="10" height="10"/></svg>`), false)
+                .children ?? []
+        ).find((c): c is XastElement => c.type === 'element' && c.name === 'svg')!;
+    const vp = { width: 100, height: 100 };
+
+    // svgwg PR 1059 / WPT styling/nested-svg-sizing*.svg: the CSS properties do not apply to a
+    // nested <svg>, only its attributes do.
+    it('ignores x / y / width / height declarations: the attributes (or 0 / 100%) apply', () => {
+        const layout = nestedLayout(nested('width="80" style="width:50px; height: 25px; x: 10px"'), vp)!;
+        expect([layout.x, layout.y, layout.width, layout.height]).toEqual([0, 0, 80, 100]);
+        expect(nestedLayout(nested('width="80" style="width:0"'), vp)).not.toBeNull();
+    });
+
+    it('style="width:50px" renders like the attributes alone, without a warning', () => {
+        const body = (attrs: string): string =>
+            `<rect width="100" height="100" fill="blue"/><svg ${attrs} viewBox="0 0 10 10">` +
+            '<rect width="10" height="10" fill="green"/></svg>';
+        const source = svg('width="100" height="100"', body('width="80" style="width:50px;height:50px"'));
+        expectRendersLike(source, svg('width="100" height="100"', body('width="80"')));
+        expect(convert(source).warnings).toEqual([]);
+    });
+});
+
 describe('transform-origin on the root <svg>', () => {
     const at = (value: string): [number, number] | null => {
-        const o = boxOrigin(value, 200, 100);
+        const o = parseTransformOrigin(value, { width: 200, height: 100 });
         return o && [o.x, o.y];
     };
 
