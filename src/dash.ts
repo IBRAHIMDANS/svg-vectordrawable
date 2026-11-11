@@ -1,5 +1,5 @@
 import { formatNumber } from './format.js';
-import { fmt, toAbsolute } from './pathAbsolute.js';
+import { arcCenter, type ArcCenter, fmt, toAbsolute } from './pathAbsolute.js';
 import { transformPathData } from './pathData.js';
 import { parsePath } from './pathParse.js';
 import { IDENTITY } from './transform.js';
@@ -38,19 +38,6 @@ const MAX_DEPTH = 16;
 
 type Point = [number, number];
 
-/** Center parameterization of an elliptical arc (SVG 2 implementation notes, B.2.4). */
-interface Arc {
-    cx: number;
-    cy: number;
-    rx: number;
-    ry: number;
-    cosPhi: number;
-    sinPhi: number;
-    /** Start angle and signed sweep (radians); the segment parameter t maps to theta + t·delta. */
-    theta: number;
-    delta: number;
-}
-
 interface Segment {
     /** Start point then control points then end point (2 for a line, 3 for a quad, 4 for a cubic). */
     pts: Point[];
@@ -59,7 +46,7 @@ interface Segment {
     ts?: number[];
     ss?: number[];
     /** Elliptical arcs only (then `pts` holds the two end points). */
-    arc?: Arc;
+    arc?: ArcCenter;
 }
 
 interface Subpath {
@@ -154,7 +141,7 @@ function ellipseLength(rx: number, ry: number, a: number, b: number): number {
  * subdividing until arc length is linear in t within `tolerance / 2` at the quarter points of each
  * piece (so within about `tolerance` in between), which is what {@link paramAt} assumes.
  */
-function measureArc(arc: Arc, t0: number, t1: number, tolerance: number, depth: number, out: number[]): void {
+function measureArc(arc: ArcCenter, t0: number, t1: number, tolerance: number, depth: number, out: number[]): void {
     const angle = (t: number): number => arc.theta + t * arc.delta;
     const q: number[] = [];
     for (let k = 0; k < 4; k++)
@@ -174,40 +161,13 @@ function measureArc(arc: Arc, t0: number, t1: number, tolerance: number, depth: 
 
 /**
  * Segment of an SVG arc from p0 to p1 (`A rx ry phi large sweep`): a line when a radius is zero or the
- * end points coincide (SVG 2 out-of-range parameters), else the arc in center parameterization. Same
- * conversion as pathAbsolute.ts `arcToCubics`, but not the same arithmetic (atan2 angles here, acos
- * there): merging them moves dash cuts by up to 0.005 on arcs whose radii were scaled up, so they stay
- * apart until that output change is accepted.
+ * end points coincide (SVG 2 out-of-range parameters) or the center is out of double range, else the
+ * arc in center parameterization (the same {@link arcCenter} conversion `toAbsolute` lowers arcs with).
  */
 function makeArcSegment(p0: Point, p1: Point, args: number[], tolerance: number): Segment {
-    let rx = Math.abs(args[0]!);
-    let ry = Math.abs(args[1]!);
-    if (rx === 0 || ry === 0 || (p0[0] === p1[0] && p0[1] === p1[1])) return makeSegment([p0, p1], tolerance);
-    const phi = (args[2]! * Math.PI) / 180;
-    const cosPhi = Math.cos(phi);
-    const sinPhi = Math.sin(phi);
-    const dx = (p0[0] - p1[0]) / 2;
-    const dy = (p0[1] - p1[1]) / 2;
-    const x1 = cosPhi * dx + sinPhi * dy;
-    const y1 = -sinPhi * dx + cosPhi * dy;
-    // Radii too small to span the chord are scaled up uniformly.
-    const lambda = (x1 * x1) / (rx * rx) + (y1 * y1) / (ry * ry);
-    if (lambda > 1) {
-        rx *= Math.sqrt(lambda);
-        ry *= Math.sqrt(lambda);
-    }
-    const den = rx * rx * y1 * y1 + ry * ry * x1 * x1;
-    let coef = Math.sqrt(Math.max(0, rx * rx * ry * ry - den) / den);
-    if ((args[3] !== 0) === (args[4] !== 0)) coef = -coef;
-    const cxp = (coef * rx * y1) / ry;
-    const cyp = (-coef * ry * x1) / rx;
-    const cx = cosPhi * cxp - sinPhi * cyp + (p0[0] + p1[0]) / 2;
-    const cy = sinPhi * cxp + cosPhi * cyp + (p0[1] + p1[1]) / 2;
-    const theta = Math.atan2((y1 - cyp) / ry, (x1 - cxp) / rx);
-    let delta = Math.atan2((-y1 - cyp) / ry, (-x1 - cxp) / rx) - theta;
-    if (args[4] === 0 && delta > 0) delta -= 2 * Math.PI;
-    else if (args[4] !== 0 && delta < 0) delta += 2 * Math.PI;
-    const arc: Arc = { cx, cy, rx, ry, cosPhi, sinPhi, theta, delta };
+    const arc = arcCenter(p0[0], p0[1], args[0]!, args[1]!, args[2]!, args[3] !== 0, args[4] !== 0, p1[0], p1[1]);
+    if (!arc) return makeSegment([p0, p1], tolerance);
+    const { rx, ry, delta } = arc;
     // Circular arc: exact length, and arc length is linear in the angle.
     if (rx === ry) return { pts: [p0, p1], length: rx * Math.abs(delta), arc };
     const pairs: number[] = [];
@@ -218,7 +178,7 @@ function makeArcSegment(p0: Point, p1: Point, args: number[], tolerance: number)
 }
 
 /** Point and derivative (w.r.t. the angle) of an arc's ellipse at angle `a`. */
-function ellipseAt(arc: Arc, a: number): [Point, Point] {
+function ellipseAt(arc: ArcCenter, a: number): [Point, Point] {
     const { cx, cy, rx, ry, cosPhi, sinPhi } = arc;
     const c = Math.cos(a);
     const s = Math.sin(a);
@@ -229,7 +189,7 @@ function ellipseAt(arc: Arc, a: number): [Point, Point] {
 }
 
 /** Cubics (≤ 90° each, standard 4/3·tan(Δ/4) handles) of an arc between parameters ta and tb. */
-function arcCubics(arc: Arc, ta: number, tb: number): Point[][] {
+function arcCubics(arc: ArcCenter, ta: number, tb: number): Point[][] {
     const a0 = arc.theta + ta * arc.delta;
     const sweep = (tb - ta) * arc.delta;
     const n = Math.max(1, Math.ceil(Math.abs(sweep) / (Math.PI / 2) - 1e-9));

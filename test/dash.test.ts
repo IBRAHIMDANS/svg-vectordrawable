@@ -248,6 +248,24 @@ describe('dashPathData on elliptical arcs (measured on the true conic)', () => {
             expect(near(dashes[k]![1], at(Math.min(s + 10, 10 * Math.PI)))).toBeLessThan(TOL);
         });
     });
+
+    it('never emits NaN when the center radicand underflows (den === 0)', () => {
+        // End points 1e-170 apart: lambda and den underflow to 0, which used to give sqrt(0 / 0).
+        // Written out in full (1e-170 = 0.000…01), so the path tokenizer reads it as a plain decimal.
+        const tiny = `0.${'0'.repeat(169)}1`;
+        const d = dashPathData(`M0 0A1 1 0 0 1 ${tiny} 0h10`, [4, 2], 0, TOL)!;
+        expect(d).not.toMatch(/NaN/);
+        expect(d).toBe('M0 0L4 0M6 0L10 0');
+    });
+
+    it('cuts a scaled-up flattened half ellipse like toAbsolute lowers it (shared arcCenter)', () => {
+        // Radii 1 × 0.02 rotated 30° on a chord of length √425 (lambda ≫ 1): a half ellipse whose
+        // center is the chord midpoint. A dash longer than the arc keeps it whole, ending on (20, 5).
+        const whole = ends(dashPathData('M0 0A1 0.02 30 0 1 20 5', [1000, 1], 0, TOL, { precision: P })!);
+        expect(whole).toHaveLength(1);
+        expect(near(whole[0]![0], [0, 0])).toBeLessThan(TOL);
+        expect(near(whole[0]![1], [20, 5])).toBeLessThan(TOL);
+    });
 });
 
 describe('ellipseDashPath', () => {
