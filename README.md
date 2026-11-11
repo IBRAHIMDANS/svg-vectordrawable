@@ -39,7 +39,8 @@ import { convert } from 'svg-vectordrawable';
 
 const { xml, warnings, minSdk } = convert(svgString, {
     optimize: true, // run svgo normalization first (recommended)
-    currentColor: '#000', // value substituted for `currentColor`
+    currentColor: '#000', // value substituted for `currentColor`: a CSS color or an Android reference (see below)
+    colorMap: { '#1A73E8': '@color/brand' }, // SVG colors → Android color references
     floatPrecision: 3,
     fillBlackForUnfilled: true, // unfilled paths get black (SVG default)
     xmlTag: false, // prepend <?xml ...?>
@@ -56,6 +57,34 @@ const { xml, warnings, minSdk } = convert(svgString, {
 
 `convert` is synchronous and returns `{ xml, warnings, minSdk }`. `minSdk` is the Android API level the
 output needs: 24 when it uses gradients or `fillType="evenOdd"`, otherwise 21.
+
+### Theme colors (`currentColor` and `colorMap`)
+
+`currentColor` also accepts an Android color reference, emitted as is in `android:fillColor` /
+`android:strokeColor` so the icon follows the app theme (dark mode included): `?attr/colorOnSurface`,
+`?android:attr/colorAccent`, `@color/icon`, `@android:color/white`, with an optional `package:`
+prefix (`@com.example.lib:color/icon`). `colorMap` maps literal SVG colors to such references:
+
+```ts
+convert(svg, {
+    currentColor: '?attr/colorOnSurface',
+    colorMap: { '#1A73E8': '@color/brand', red: '?attr/colorError' },
+});
+```
+
+- Keys are any CSS color, compared after normalization to `#AARRGGBB`: `#f00`, `red` and `rgb(255,0,0)`
+  are the same key (two keys for one color with different references throw).
+- A reference carries no alpha: `fill-opacity`, `stroke-opacity` and `opacity` go to `fillAlpha` /
+  `strokeAlpha` as usual. The color's own alpha too: an exact `#AARRGGBB` key wins, otherwise an opaque
+  key matches its color at any alpha, e.g. `rgba(26,115,232,0.5)` with the map above gives
+  `@color/brand` and `android:fillAlpha="0.502"` (the reference's own alpha is multiplied by Android).
+- Gradient stops (`<item android:color>`, checked with `aapt2 link`) get the reference when opaque. An
+  `<item>` has no alpha, so a translucent stop keeps its literal color (black for a `currentColor`
+  reference) and is reported as `unsupported-paint`.
+- Only `currentColor` and `colorMap` produce references: a `fill="@color/x"` written in the SVG is not
+  copied. A malformed reference (`?colorPrimary`, `@color/1x`, `@drawable/x`…) throws a `TypeError`.
+- The resources must exist in the app (`aapt2 link` fails on an unknown `@color/…` or `?attr/…`).
+  `vectorDrawableToSvg` cannot resolve them: it throws `Unsupported Android color` for such a drawable.
 
 ### Preview
 
@@ -94,7 +123,7 @@ try {
 | `unsupported-attribute`        | non-clip `mask`, `filter`, `marker*`, `vector-effect`, `paint-order`, `arcs` joins — ignored |
 | `unsupported-stroke-dasharray` | dash pattern that cannot be resolved (`em`/`ex` units) — drawn solid                         |
 | `unsupported-stroke-gradient`  | no longer emitted (gradient strokes are supported); kept for compatibility                   |
-| `unsupported-paint`            | `<pattern>` paint — fallback color or black                                                  |
+| `unsupported-paint`            | `<pattern>` paint (fallback color or black); translucent stop mapped to a reference          |
 | `unsupported-style`            | CSS left in a `<style>` that could not be applied to elements — ignored                      |
 | `unsupported-clip-path`        | `objectBoundingBox` clip, evenodd clip with crossing contours, unconvertible content         |
 | `gradient-approximated`        | radial focal point; elliptical radial on a path that also has a solid stroke                 |
@@ -126,6 +155,7 @@ svgvd icons/ -o out/           # batch a directory
 svgvd icon.svg --stdout        # print to stdout
 svgvd -s '<svg>…</svg>'        # convert an inline SVG string
 svgvd icon.svg --xml-tag --tint '#FFFFFFFF'
+svgvd icon.svg --current-color '?attr/colorOnSurface' --color-map '#1A73E8=@color/brand'   # theme colors (repeatable map)
 svgvd icon.svg --strict        # fail on anything not representable
 svgvd icon.svg --strict --rule opacity-approximated=warn   # per-code severity
 svgvd icon.svg --strict=lossy  # fail only when content would be lost
