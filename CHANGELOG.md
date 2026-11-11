@@ -18,6 +18,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - `<script>` is silently ignored, like `<title>` / `<metadata>`, instead of being reported as `empty-path` ("produced no drawable geometry"). Scripts were never executed.
 
+### Documentation
+
+- `docs/integrations.md` and the README link the Gradle plugin, Vite plugin, MCP server and Figma plugin of `integrations/` (not published yet). The Gradle and Vite sections point to the plugins first and keep their recipes as alternatives without the plugin; new MCP server and Figma plugin sections. The stale "after 0.1.1" note on `rules` / `--android-names` now says they are available since 0.2.0.
+
 ### Internal
 
 - `aapt2-validate`: a `_themed` variant (`currentColor` and `colorMap` references on fills, strokes and gradient stops) is compiled and linked against declared `@color/brand` / `?attr/iconTint` resources.

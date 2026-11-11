@@ -252,6 +252,7 @@ A VectorDrawable simply cannot represent some SVG features. These are **warned**
 
 - [Migrating from `svg2vectordrawable`](docs/migration-from-svg2vectordrawable.md)
 - [Integrations](docs/integrations.md) (Node scripts, React Native icons, Gradle, Vite/webpack, CI)
+- Build plugins / MCP server: [Gradle plugin](integrations/gradle-plugin/README.md), [Vite plugin](integrations/vite-plugin/README.md), [MCP server](integrations/mcp-server/README.md), [Figma plugin](integrations/figma-plugin/README.md) (not published yet; [overview](docs/integrations.md#plugins-and-mcp-server))
 - [Comparison with `svg2vectordrawable` and Android Studio's Svg2Vector](docs/comparison.md)
 
 ## License
