@@ -1,7 +1,7 @@
 import type { XastElement } from './ast.js';
 import { ClipPaths } from './clip.js';
 import type { ConvertContext } from './context.js';
-import { collectByName } from './elements.js';
+import { collectByName, failsConditions } from './elements.js';
 import { colorRefs } from './colorRef.js';
 import { ConversionError } from './errors.js';
 import { escapeXml, formatNumber } from './format.js';
@@ -141,8 +141,26 @@ export function convert(svg: string, options: ConvertOptions = {}): ConvertResul
     // Fold CSS transforms into attributes before <use> expansion, so that clones inherit them.
     applyCssProperties(root, warn);
     resolveUses(root); // inline <use> references so the walker sees concrete geometry
-    const svgEl = (root.children ?? []).find((c) => c.type === 'element' && c.name === 'svg');
-    if (!svgEl) throw new Error('No <svg> root element found');
+    const found = (root.children ?? []).find((c) => c.type === 'element' && c.name === 'svg');
+    if (!found) throw new Error('No <svg> root element found');
+    // Conditional processing (SVG 2 §5.8) applies to the root too: when it fails, browsers render
+    // nothing, so the <vector> is emptied (still a valid drawable); being lossy, strict rejects it.
+    const excluded = failsConditions(found);
+    if (excluded)
+        warn({
+            code: 'unsupported-attribute',
+            message:
+                'The root <svg> fails its requiredExtensions / systemLanguage condition: nothing is rendered; the <vector> is empty.',
+            node: 'svg',
+        });
+    else if (found.attributes?.systemLanguage !== undefined)
+        warn({
+            code: 'unsupported-attribute',
+            message:
+                'systemLanguage on <svg> depends on the device language, which a VectorDrawable cannot test; ignored.',
+            node: 'svg',
+        });
+    const svgEl: XastElement = excluded ? { ...found, children: [] } : found;
 
     // svgo inlines what it can and drops the emptied <style>; any CSS left was not applied.
     if (elementsNamed(svgEl, 'style').some((s) => cssText(s) !== ''))
