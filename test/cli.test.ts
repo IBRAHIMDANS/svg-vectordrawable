@@ -860,6 +860,60 @@ describe('svgvd CLI', () => {
             expect(existsSync(out)).toBe(false);
         });
 
+        describe('stale outputs of the other form', () => {
+            let input: string;
+            const xml = (): string => join(dir, 'blur.xml');
+            const png = (density: string): string => join(dir, `drawable-${density}`, 'blur.png');
+
+            beforeEach(() => {
+                input = join(dir, 'blur.svg');
+                writeFileSync(input, BLUR);
+            });
+
+            it('deletes the PNGs of every density when the XML is written, and nothing else', () => {
+                const first = svgvd(input, '--strict', '--fallback-png', 'mdpi,xhdpi');
+                expect(first.status).toBe(0);
+                expect(first.stderr).not.toContain('deleted');
+                writeFileSync(join(dir, 'drawable-mdpi', 'other.png'), 'kept');
+                writeFileSync(join(dir, 'drawable-mdpi', 'blur.webp'), 'kept');
+                // Fixed (no --strict), and converted with another density list than the first run.
+                const res = svgvd(input, '--fallback-png', 'hdpi');
+                expect(res.status).toBe(0);
+                expect(existsSync(xml())).toBe(true);
+                expect(existsSync(png('mdpi'))).toBe(false);
+                expect(existsSync(png('xhdpi'))).toBe(false);
+                expect(readdirSync(join(dir, 'drawable-mdpi')).sort()).toEqual(['blur.webp', 'other.png']);
+                expect(res.stderr).toContain(`✓ ${input} → ${png('mdpi')} deleted (stale PNG fallback)\n`);
+                expect(res.stderr).toContain(`✓ ${input} → ${png('xhdpi')} deleted (stale PNG fallback)\n`);
+                expect(res.stderr.match(/deleted/g)).toHaveLength(2);
+            });
+
+            it('deletes the XML when the PNGs are written', () => {
+                expect(svgvd(input).status).toBe(0);
+                expect(existsSync(xml())).toBe(true);
+                const res = svgvd(input, '--strict', '--fallback-png', 'mdpi');
+                expect(res.status).toBe(0);
+                expect(existsSync(xml())).toBe(false);
+                expect(existsSync(png('mdpi'))).toBe(true);
+                expect(res.stderr).toContain(`✓ ${input} → ${xml()} deleted (stale XML)\n`);
+            });
+
+            it('deletes nothing with --dry-run, saying what would be deleted', () => {
+                expect(svgvd(input, '--strict', '--fallback-png', 'mdpi').status).toBe(0);
+                const res = svgvd(input, '--dry-run');
+                expect(res.status).toBe(0);
+                expect(existsSync(png('mdpi'))).toBe(true);
+                expect(existsSync(xml())).toBe(false);
+                expect(res.stderr).toContain(`✓ ${input} → ${png('mdpi')} deleted (dry run) (stale PNG fallback)\n`);
+            });
+
+            it('says nothing when there is no earlier output', () => {
+                const res = svgvd(input);
+                expect(res.status).toBe(0);
+                expect(res.stderr).not.toContain('deleted');
+            });
+        });
+
         it.each([
             [['-s', ICON], '--fallback-png writes PNG files'],
             [['FILE', '--stdout'], '--fallback-png writes PNG files'],
@@ -982,6 +1036,21 @@ describe('svgvd CLI', () => {
             rmSync(join(src, 'a.svg'));
             await eventually(() => expect(existsSync(join(out, 'a.xml'))).toBe(false));
             expect(session.io.stderr).toContain(`✓ ${join(src, 'a.svg')} removed → ${join(out, 'a.xml')} deleted`);
+            await session.stop();
+        });
+
+        it('replaces the XML by the PNG fallback and back, deleting the stale form', async () => {
+            const session = watchSvgvd(src, '-o', out, '--strict', '--fallback-png', 'mdpi');
+            const xml = join(out, 'a.xml');
+            const png = join(out, 'drawable-mdpi', 'a.png');
+            expect(existsSync(xml)).toBe(true);
+            writeFileSync(join(src, 'a.svg'), BLUR);
+            await eventually(() => expect(existsSync(xml)).toBe(false));
+            expect(existsSync(png)).toBe(true);
+            expect(session.io.stderr).toContain(`✓ ${join(src, 'a.svg')} → ${xml} deleted (stale XML)\n`);
+            writeFileSync(join(src, 'a.svg'), BLUE);
+            await eventually(() => expect(existsSync(png)).toBe(false));
+            expect(read(xml)).toBe(convert(BLUE, { strict: true }).xml);
             await session.stop();
         });
 

@@ -299,7 +299,8 @@ Limits of the converter itself, some of them **not warned**:
   and `optimize: false` handle them.
 - CLI without an input argument: stdin is read whenever it is not a TTY, so a pipe that is never closed
   (`docker run -i`) waits instead of printing the help.
-- `--fallback-png` writes the PNGs but does not delete an XML of the same name left by a previous run.
+- Switching `--fallback-png` density lists between runs (e.g. `all`, then `mdpi`) leaves the PNGs of the densities
+  no longer requested (the XML and the PNG fallback of a file do replace each other).
 - `clip-path: polygon(evenodd, …)` whose contours touch (a keyhole) stays nonzero, with `unsupported-clip-path`.
 - Unitless lengths are accepted in CSS `clip-path` shapes, where a browser drops the declaration (no warning).
 
