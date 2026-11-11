@@ -3,7 +3,14 @@ import { collectByName, GROUPS, isDisplayNone, pathDataOf, SKIP } from './elemen
 import { escapeXml } from './format.js';
 import type { XastElement } from './ast.js';
 import { initialStyle, isHidden, resolveStyle, strokeWidthOf, type Inherited } from './inherited.js';
-import { evenOddToNonZero, normalizeArcFlags, pathBBox, transformPathData } from './pathData.js';
+import {
+    evenOddToNonZero,
+    normalizeArcFlags,
+    pathBBox,
+    reversePathData,
+    transformPathData,
+    windingSign,
+} from './pathData.js';
 import { SHAPE_NAMES } from './shapes.js';
 import { isNone, presentation } from './style.js';
 import { IDENTITY, multiply, parseTransform, type Matrix } from './transform.js';
@@ -23,6 +30,21 @@ interface MaskDef {
 }
 
 const URL_REF = /^url\(\s*['"]?#([^'")\s]+)['"]?\s*\)/;
+
+/** `clip-path` values that clip nothing: `none` and the CSS-wide keywords resolving to it (not inherited). */
+const NO_CLIP = new Set(['none', 'initial', 'unset', 'revert', 'revert-layer']);
+
+/**
+ * Why a `clip-path` value other than `none` / `url(#id)` is not converted. CSS basic shapes are
+ * positioned in a reference box (`fill-box`, i.e. the object bounding box, by default on SVG
+ * elements) that `resolve` cannot measure: it only sees the element's attributes.
+ */
+function unsupportedClipReason(value: string): string {
+    if (/^url\(/i.test(value)) return 'references an external resource, which is not resolved';
+    if (/^(?:[a-z-]+\(|(?:content|padding|border|margin|fill|stroke|view)-box\b)/i.test(value))
+        return 'is a CSS basic shape or reference box, which is not converted';
+    return 'is not a url(#id) reference';
+}
 
 /**
  * Root `color` seen by mask content. The `currentColor` option is not known here: an unparseable
@@ -111,11 +133,21 @@ export class ClipPaths {
     /**
      * Resolves an element's `clip-path: url(#id)` into pathData; null when absent or unusable. Read
      * like any presentation property (inline `style` first, where svgo inlines `<style>` rules, then
-     * the attribute); never inherited, so only the element's own attributes count.
+     * the attribute); never inherited, so only the element's own attributes count. Any other value
+     * (CSS basic shape, geometry box, external url…) is reported as `unsupported-clip-path`.
      */
     resolve(attrs: Record<string, string>): string | null {
-        const m = URL_REF.exec((presentation({ type: 'element', attributes: attrs }, 'clip-path') ?? '').trim());
-        if (!m) return null;
+        const value = (presentation({ type: 'element', attributes: attrs }, 'clip-path') ?? '').trim();
+        if (!value || NO_CLIP.has(value.toLowerCase())) return null;
+        const m = URL_REF.exec(value);
+        if (!m) {
+            this.warn({
+                code: 'unsupported-clip-path',
+                message: `clip-path "${value}" ${unsupportedClipReason(value)}; ignored.`,
+                node: 'clip-path',
+            });
+            return null;
+        }
         const id = m[1]!;
         const clip = this.byId.get(id);
         if (!clip) {
@@ -178,10 +210,11 @@ export class ClipPaths {
      *   alpha 1), or `mask-type` is `alpha` and every painting shape is opaque (any color);
      * - "opaque" covers the fill color alpha, `fill-opacity` and `opacity` (own and inherited
      *   inside the mask; ancestors of the `<mask>` only pass inherited properties down);
-     * - no shape paints a stroke, a gradient / pattern, uses `fill-rule="evenodd"` (a clip-path is
-     *   nonzero), or carries a `filter` / `mask` / `clip-path`; only groups, paths and basic shapes
-     *   (`<use>` is already inlined as groups) appear. Shapes that paint nothing (fill and stroke
-     *   `none`, `display: none`, hidden, empty geometry) are ignored;
+     * - no shape paints a stroke, a gradient / pattern, or carries a `filter` / `mask` / `clip-path`;
+     *   only groups, paths and basic shapes (`<use>` is already inlined as groups) appear. Shapes that
+     *   paint nothing (fill and stroke `none`, `display: none`, hidden, empty geometry) are ignored;
+     * - a `fill-rule="evenodd"` shape is rewritten into the same region under nonzero (a clip-path is
+     *   nonzero), which fails only when its contours cross or touch;
      * - `maskContentUnits` is `userSpaceOnUse` (default: the element's user space) or
      *   `objectBoundingBox` (content mapped onto the element's bbox);
      * - the mask region (`x`/`y`/`width`/`height`, `maskUnits` defaulting to objectBoundingBox
@@ -233,7 +266,7 @@ export class ClipPaths {
         if (reason) return { reason };
         const box = unionBBox(pieces);
         if (!box) return { reason: 'its content is empty (the element is hidden)' };
-        return { clipId: this.addResolvedClip('svgvd-mask', pieces.join('')), box };
+        return { clipId: this.addResolvedClip('svgvd-mask', unite(pieces)), box };
     }
 
     /** Flattens clip-equivalent mask content into absolute pathData pieces; returns a reason otherwise. */
@@ -266,9 +299,16 @@ export class ClipPaths {
             if (!color) return `fill "${fill}" is not a solid color`;
             if (!color.startsWith('#FF')) return 'translucent content';
             if (!alpha && color !== '#FFFFFFFF') return `fill "${fill}" is not white (luminance below 1)`;
-            if (s.fillRule === 'evenodd') return 'fill-rule="evenodd" content';
             // Always transformed: the output is absolute, so pieces can be concatenated safely.
-            out.push(transformPathData(d, mm ?? IDENTITY));
+            const piece = transformPathData(d, mm ?? IDENTITY);
+            if (s.fillRule !== 'evenodd') {
+                out.push(piece);
+                continue;
+            }
+            // Positive orientation, like the pieces `unite` keeps or reverses: windings add up.
+            const nonzero = evenOddToNonZero(piece, 1);
+            if (nonzero === null) return 'fill-rule="evenodd" content with crossing or touching contours';
+            out.push(nonzero);
         }
         return null;
     }
@@ -385,6 +425,17 @@ export class ClipPaths {
             out.push(nonzero ?? d);
         }
     }
+}
+
+/**
+ * Concatenates nonzero pieces into one nonzero path covering their union. Overlapping pieces of
+ * opposite windings would cancel where they meet (the mask paints each shape on its own): a piece
+ * whose winding is negative everywhere is reversed. A piece whose sign cannot be proven (self-crossing
+ * contours…) is kept as is. A single piece is returned unchanged.
+ */
+function unite(pieces: readonly string[]): string {
+    if (pieces.length < 2) return pieces.join('');
+    return pieces.map((d) => (windingSign(d) === -1 ? reversePathData(d) : d)).join('');
 }
 
 type ClipRule = 'nonzero' | 'evenodd';

@@ -66,6 +66,30 @@ function exceedsPathDataLength(svg: string, limit: number): boolean {
  */
 const MAY_DASH = /stroke-dasharray/;
 
+/**
+ * `pathLength` rescales the dash pattern. svgo follows SVG 1.1, where only `<path>` accepts it:
+ * `removeUnknownsAndDefaults` strips it from `<rect>`, `<circle>`… (dashes 1 unit long instead of
+ * the authored fraction of the perimeter), and `mergePaths` joins paths that each carry it (the
+ * scale then uses the length of the merged path).
+ */
+const MAY_HAVE_PATH_LENGTH = /\spathLength\s*=/;
+
+/**
+ * A negative `width` / `height` / `r` / `rx` / `ry` is an error that disables rendering of the
+ * shape (the converter skips it with `empty-path`), but svgo's `convertShapeToPath` turns it into
+ * a path that gets drawn. Keep the shapes as elements whenever such a value may be present.
+ */
+const MAY_HAVE_NEGATIVE_SIZE = /\s(?:width|height|r|rx|ry)\s*=\s*["']\s*-/;
+
+/**
+ * svgo moves `transform` between groups and their children (`moveElemsAttrsToGroup`,
+ * `moveGroupAttrsToElems`, `collapseGroups`) and bakes it into path data (`convertPathData`)
+ * without reading the CSS `transform` property nor `transform-origin`, which the converter folds
+ * into the attribute after svgo (`applyCssProperties`); `removeNonInheritableGroupAttrs` drops
+ * `transform-origin` from groups. Keep the transforms where they are authored when one may be set.
+ */
+const MAY_HAVE_CSS_TRANSFORM = /(?<![\w-])transform\s*:|transform-(?:origin|box)/;
+
 /** svgo's own default `floatPrecision`: up to it, svgo's rounding is left exactly as it is. */
 const SVGO_FLOAT_PRECISION = 3;
 /** Above it, svgo's path and transform rounding falls back to `Math.round` (integers). */
@@ -73,7 +97,7 @@ const SVGO_MAX_FLOAT_PRECISION = 19;
 /** svgo keeps scale / matrix factors 2 decimals finer than coordinates (5 vs 3 by default). */
 const TRANSFORM_EXTRA_PRECISION = 2;
 
-function defaultConfigFor(svg: string, floatPrecision: number): Config {
+function defaultConfigFor(svg: string, floatPrecision: number, fillBlackForUnfilled: boolean): Config {
     const overrides: Record<string, unknown> = { ...DEFAULT_OVERRIDES };
     if (exceedsDrawableCount(svg, MERGE_PATHS_MAX_ELEMENTS)) overrides.mergePaths = false;
     if (exceedsPathDataLength(svg, CONVERT_PATH_DATA_MAX_LENGTH)) overrides.convertPathData = false;
@@ -83,6 +107,30 @@ function defaultConfigFor(svg: string, floatPrecision: number): Config {
         // reads as "no dashes": the stroke would turn solid with no warning. The converter rounds
         // numeric attributes itself, so skipping the plugin only keeps the authored values.
         overrides.cleanupNumericValues = false;
+        // pathLength only affects dashes here (markers are not converted).
+        if (MAY_HAVE_PATH_LENGTH.test(svg)) {
+            overrides.removeUnknownsAndDefaults = { unknownAttrs: false };
+            overrides.mergePaths = false;
+        }
+    }
+    if (MAY_HAVE_NEGATIVE_SIZE.test(svg)) overrides.convertShapeToPath = false;
+    if (!fillBlackForUnfilled) {
+        // `removeUnknownsAndDefaults` drops `fill="#000"` (black, #000000, rgb(0,0,0) once
+        // `convertColors` has run) as the SVG default; without `fillBlackForUnfilled` the converter
+        // would then paint nothing. svgo cannot keep a single default, so keep them all: the other
+        // ones match the converter's own defaults.
+        overrides.removeUnknownsAndDefaults = {
+            ...(overrides.removeUnknownsAndDefaults as object | undefined),
+            defaultAttrs: false,
+        };
+    }
+    if (MAY_HAVE_CSS_TRANSFORM.test(svg)) {
+        overrides.moveElemsAttrsToGroup = false;
+        overrides.moveGroupAttrsToElems = false;
+        overrides.collapseGroups = false;
+        overrides.removeNonInheritableGroupAttrs = false;
+        if (overrides.convertPathData !== false)
+            overrides.convertPathData = { ...DEFAULT_OVERRIDES.convertPathData, applyTransforms: false };
     }
     const params: Record<string, unknown> = { overrides };
     if (floatPrecision > SVGO_FLOAT_PRECISION) {
@@ -94,7 +142,7 @@ function defaultConfigFor(svg: string, floatPrecision: number): Config {
         params.floatPrecision = precision;
         overrides.convertTransform = { transformPrecision };
         if (overrides.convertPathData !== false)
-            overrides.convertPathData = { ...DEFAULT_OVERRIDES.convertPathData, transformPrecision };
+            overrides.convertPathData = { ...(overrides.convertPathData as object), transformPrecision };
     }
     return { plugins: [{ name: 'preset-default', params }] } as Config;
 }
@@ -102,13 +150,15 @@ function defaultConfigFor(svg: string, floatPrecision: number): Config {
 /**
  * Parses (and optionally normalizes) an SVG string into svgo's AST, reusing svgo as the XML
  * parser — no third-party parser needed. The capture plugin grabs the tree in the same pass.
- * `floatPrecision` only tunes the default svgo config; a caller-supplied `svgoConfig` is used as-is.
+ * `floatPrecision` and `fillBlackForUnfilled` only tune the default svgo config; a caller-supplied
+ * `svgoConfig` is used as-is.
  */
 export function parseSvg(
     svg: string,
     optimizeFlag: boolean,
     svgoConfig?: Config,
     floatPrecision = SVGO_FLOAT_PRECISION,
+    fillBlackForUnfilled = true,
 ): XastRoot {
     let captured: XastRoot | null = null;
     const capture = {
@@ -119,7 +169,9 @@ export function parseSvg(
         },
     };
 
-    const base = optimizeFlag ? (svgoConfig ?? defaultConfigFor(svg, floatPrecision)) : { plugins: [] };
+    const base = optimizeFlag
+        ? (svgoConfig ?? defaultConfigFor(svg, floatPrecision, fillBlackForUnfilled))
+        : { plugins: [] };
     const plugins = [...(base.plugins ?? []), capture] as Config['plugins'];
 
     try {

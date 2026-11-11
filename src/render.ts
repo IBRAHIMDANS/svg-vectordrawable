@@ -1,6 +1,14 @@
 import { clipPathElement, wrapClip } from './clip.js';
 import type { ConvertContext } from './context.js';
-import { GROUPS, isDisplayNone, pathDataOf, SKIP, UNSUPPORTED, UNSUPPORTED_ATTRS } from './elements.js';
+import {
+    ANIMATIONS,
+    foreignElements,
+    GROUPS,
+    isNotRendered,
+    pathDataOf,
+    UNSUPPORTED,
+    UNSUPPORTED_ATTRS,
+} from './elements.js';
 import { formatNumber } from './format.js';
 import type { XastElement } from './ast.js';
 import { checkGroupOpacity } from './groupOpacity.js';
@@ -22,6 +30,19 @@ import { nestedLayout, type Viewport } from './viewport.js';
 
 /** Nested `<svg>` attributes consumed by its viewport mapping (not inherited by its content). */
 const VIEWPORT_ATTRS = new Set(['x', 'y', 'width', 'height', 'viewBox', 'preserveAspectRatio']);
+
+/**
+ * Elements outside the SVG namespace, per conversion: computed on the first `walk` of a context,
+ * which receives the root `<svg>` (namespace scoping needs the whole tree). Synthetic copies made
+ * while walking are copies of SVG elements; their children are the original, classified, nodes.
+ */
+const foreignByContext = new WeakMap<ConvertContext, WeakSet<XastElement>>();
+
+function foreignOf(ctx: ConvertContext, root: XastElement): WeakSet<XastElement> {
+    let foreign = foreignByContext.get(ctx);
+    if (!foreign) foreignByContext.set(ctx, (foreign = foreignElements(root)));
+    return foreign;
+}
 
 /** A synthetic container holding `children`, walked like an element's content. */
 const fragment = (...children: XastElement[]): XastElement => ({ type: 'element', children });
@@ -64,6 +85,13 @@ function nestedSvg(
  */
 function reportUnsupportedAttrs(ctx: ConvertContext, el: XastElement, name: string, maskReason?: string): void {
     if (ctx.reported.has(el)) return;
+    // An empty systemLanguage is never rendered (see failsConditions); any other value depends on the device.
+    if (el.attributes?.systemLanguage !== undefined)
+        ctx.warn({
+            code: 'unsupported-attribute',
+            message: `systemLanguage on <${name}> depends on the device language, which a VectorDrawable cannot test; ignored.`,
+            node: name,
+        });
     for (const attr of UNSUPPORTED_ATTRS) {
         if (!isNone(presentation(el, attr))) {
             const why = attr === 'mask' && maskReason ? ` (${maskReason})` : '';
@@ -162,6 +190,15 @@ function renderLeaf(
     pad: string,
     bake: Matrix | undefined,
 ): string | null {
+    // A leaf's children are never walked: an animation of the leaf would otherwise vanish silently.
+    const foreign = foreignOf(ctx, el);
+    for (const child of el.children ?? [])
+        if (child.type === 'element' && ANIMATIONS.has(child.name ?? '') && !isNotRendered(child, foreign))
+            ctx.warn({
+                code: 'unsupported-element',
+                message: `<${child.name}> cannot be represented in a VectorDrawable; skipped.`,
+                node: child.name!,
+            });
     const d = pathDataOf(el, style.viewport, ctx.precision);
     if (d) {
         if (isHidden(style)) return null;
@@ -191,10 +228,11 @@ export function walk(ctx: ConvertContext, el: XastElement, parent: Inherited, pa
     const push = (xml: string | null): void => {
         if (xml?.trim()) out.push(xml);
     };
+    const foreign = foreignOf(ctx, el);
     for (const child of el.children ?? []) {
         if (child.type !== 'element' || !child.name) continue;
         const name = child.name;
-        if (SKIP.has(name)) continue;
+        if (isNotRendered(child, foreign)) continue; // nor its subtree
         if (UNSUPPORTED.has(name)) {
             ctx.warn({
                 code: 'unsupported-element',
@@ -203,7 +241,6 @@ export function walk(ctx: ConvertContext, el: XastElement, parent: Inherited, pa
             });
             continue;
         }
-        if (isDisplayNone(child)) continue; // not rendered, nor its subtree
 
         // A mask made of opaque shapes is a clip in disguise: render it as one.
         let maskReason: string | undefined;

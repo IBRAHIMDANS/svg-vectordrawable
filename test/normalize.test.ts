@@ -2,9 +2,11 @@ import { readFileSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
-import { convert } from '../src/index.js';
+import { convert, ConversionError } from '../src/index.js';
 import type { XastElement } from '../src/ast.js';
 import { parseSvg } from '../src/normalize.js';
+import { vdToSvg } from './visual/vdToSvg.js';
+import { compareSvgs, DEFAULT_MAX_MISMATCH } from './visual/compare.js';
 
 const svg = (inner: string): string => `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000 1000">${inner}</svg>`;
 
@@ -152,4 +154,222 @@ describe('convert() forwards floatPrecision to svgo', () => {
         expect(xml).toContain('2.123');
         expect(xml).not.toContain('2.1234');
     });
+});
+
+const wptRepro = (name: string): string =>
+    readFileSync(fileURLToPath(new URL(`wpt-repro/${name}`, import.meta.url)), 'utf8');
+
+/** Names of the elements in svgo's output tree, depth first. */
+const elementNames = (input: string): string[] => {
+    const names: string[] = [];
+    const walk = (node: { children?: XastElement[] }): void => {
+        for (const child of node.children ?? []) {
+            if (child.type !== 'element' || child.name === undefined) continue;
+            names.push(child.name);
+            walk(child);
+        }
+    };
+    walk(parseSvg(input, true));
+    return names;
+};
+
+describe('normalize: shapes with a negative size are not drawn', () => {
+    it('wpt-negative-size-shape.svg: optimize: true matches optimize: false and its blank source', () => {
+        const source = wptRepro('wpt-negative-size-shape.svg');
+        const reference = convert(source, { optimize: false });
+        for (const optimize of [true, false]) {
+            const { xml, warnings } = convert(source, { optimize });
+            expect(xml).toBe(reference.xml);
+            expect(countPaths(xml)).toBe(0);
+            expect(warnings.map((w) => w.code)).toEqual(['empty-path', 'empty-path']);
+            const result = compareSvgs(source, vdToSvg(xml));
+            expect(result.sizeMismatch).toBeNull();
+            expect(result.mismatch).toBeLessThan(DEFAULT_MAX_MISMATCH);
+        }
+    });
+
+    it('wpt-negative-size-shape.svg: strict rejects it with empty-path in both modes', () => {
+        const source = wptRepro('wpt-negative-size-shape.svg');
+        for (const optimize of [true, false]) {
+            let error: unknown;
+            try {
+                convert(source, { optimize, strict: true });
+            } catch (err) {
+                error = err;
+            }
+            expect(error).toBeInstanceOf(ConversionError);
+            expect((error as ConversionError).warning.code).toBe('empty-path');
+        }
+    });
+
+    for (const shape of [
+        '<rect width="-10" height="10"/>',
+        '<rect width="10" height="-10"/>',
+        '<rect width="10" height=" -10"/>',
+        "<circle cx='50' cy='50' r='-5'/>",
+        '<ellipse cx="50" cy="50" rx="-5" ry="10"/>',
+        '<ellipse cx="50" cy="50" rx="5" ry="-10"/>',
+    ]) {
+        it(`skips ${shape}`, () => {
+            const { xml, warnings } = convert(svg(shape));
+            expect(countPaths(xml)).toBe(0);
+            // The 1000×1000 viewport adds `large-vector`.
+            expect(warnings.map((w) => w.code)).toEqual(['empty-path', 'large-vector']);
+        });
+    }
+
+    it('keeps converting shapes to paths otherwise (a negative stroke-width does not count)', () => {
+        expect(elementNames(svg('<rect stroke="#000" stroke-width="-1" width="10" height="10"/>'))).toEqual([
+            'svg',
+            'path',
+        ]);
+    });
+});
+
+describe('normalize: pathLength on basic shapes', () => {
+    const dashed = 'fill="none" stroke="#000" stroke-width="10" stroke-dasharray="1 1" pathLength="4"';
+
+    it('wpt-pathlength-shape.svg: optimize: true emits the dashes of optimize: false', () => {
+        const source = wptRepro('wpt-pathlength-shape.svg');
+        const { xml } = convert(source);
+        expect(xml).toBe(convert(source, { optimize: false }).xml);
+        // Perimeter 200, pathLength 4: dashes and gaps of 50, offset by 50 → the right and left sides.
+        expect(xml).toContain('android:pathData="M60 10L60 60M10 60L10 10"');
+    });
+
+    for (const shape of [
+        `<rect x="10" y="10" width="200" height="100" ${dashed}/>`,
+        `<line x1="10" y1="10" x2="210" y2="10" ${dashed}/>`,
+        `<polyline points="10 10 210 10 210 110" ${dashed}/>`,
+        `<polygon points="10 10 210 10 210 110" ${dashed}/>`,
+        `<circle cx="100" cy="100" r="50" ${dashed}/>`,
+        `<ellipse cx="100" cy="100" rx="80" ry="50" ${dashed}/>`,
+    ]) {
+        it(`keeps it on ${shape.slice(0, shape.indexOf(' '))}>`, () => {
+            const input = svg(shape);
+            expect(convert(input).xml).toBe(convert(input, { optimize: false }).xml);
+        });
+    }
+
+    it('does not merge paths that each carry a pathLength', () => {
+        const path = (y: number): string => `<path d="M10 ${y}h200" ${dashed}/>`;
+        const input = svg(path(10) + path(50));
+        expect(convert(input).xml).toBe(convert(input, { optimize: false }).xml);
+    });
+});
+
+describe('normalize: CSS transform, transform-origin, transform-box', () => {
+    /** Attributes of the first `<path>` in svgo's output tree. */
+    const firstPath = (input: string, floatPrecision?: number): Record<string, string> => {
+        const find = (node: XastElement): XastElement | undefined =>
+            node.name === 'path' ? node : (node.children ?? []).map(find).find(Boolean);
+        return (
+            find({ type: 'root', children: parseSvg(input, true, undefined, floatPrecision).children })?.attributes ??
+            {}
+        );
+    };
+    const group = (style: string): string =>
+        svg(`<g transform="translate(10 20)"${style}><path d="M0 0h10v10H0z"/></g>`);
+
+    it('keeps group transforms where they are authored when one may be set', () => {
+        expect(elementNames(group(''))).toEqual(['svg', 'path']);
+        for (const style of [
+            ' style="transform: scale(2)"',
+            ' style="transform-origin: 5px 5px"',
+            ' transform-origin="5 5"',
+            ' style="transform-box: view-box"',
+        ])
+            expect(elementNames(group(style)), style).toEqual(['svg', 'g', 'path']);
+    });
+
+    it('keeps transform-origin on the group', () => {
+        const root = parseSvg(group(' transform-origin="5 5"'), true);
+        expect(JSON.stringify(root)).toContain('"transform-origin":"5 5"');
+    });
+
+    it('does not bake transforms into path data, even at a higher floatPrecision', () => {
+        const input = svg('<path transform="rotate(90)" transform-origin="5 5" d="M0 0h10v10H0z"/>');
+        for (const floatPrecision of [3, 6]) expect(firstPath(input, floatPrecision).transform).toBeDefined();
+        expect(firstPath(svg('<path transform="translate(1 1)" d="M0 0h10v10H0z"/>')).transform).toBeUndefined();
+    });
+
+    it('keeps a long path as authored (convertPathData stays off)', () => {
+        const d = `M0 0${'l1 1l1-1'.repeat(7_000)}`;
+        expect(firstPath(svg(`<path style="transform: scale(2)" d="${d}"/>`)).d).toBe(d);
+    });
+
+    it('is not triggered by a property merely ending in transform', () => {
+        expect(
+            elementNames(
+                svg('<g transform="translate(10 20)" style="-webkit-transform: none"><path d="M0 0h10"/></g>'),
+            ),
+        ).toEqual(['svg', 'path']);
+    });
+});
+
+describe('normalize: explicit black fill with fillBlackForUnfilled: false', () => {
+    /** Effective `fill` attribute of every `<path>` in svgo's output tree (inherited from ancestors). */
+    const pathFills = (input: string, optimize: boolean, fillBlackForUnfilled?: boolean): (string | undefined)[] => {
+        const out: (string | undefined)[] = [];
+        const walk = (node: XastElement, inherited: string | undefined): void => {
+            const fill = node.attributes?.fill ?? inherited;
+            if (node.name === 'path') out.push(fill);
+            for (const child of node.children ?? []) if (child.type === 'element') walk(child, fill);
+        };
+        const root = parseSvg(input, optimize, undefined, undefined, fillBlackForUnfilled);
+        for (const child of root.children ?? []) if (child.type === 'element') walk(child, undefined);
+        return out;
+    };
+    const square = (attrs: string, x = 0): string => `<path${attrs} d="M${x} 0h10v10H${x}z"/>`;
+    const BLACK = /^(?:#000|#000000|black|rgb\(0,\s*0,\s*0\))$/;
+
+    for (const black of ['#000', '#000000', 'black', 'rgb(0,0,0)', 'rgb(0, 0, 0)'])
+        for (const optimize of [true, false]) {
+            it(`keeps fill="${black}" on a path (optimize: ${optimize})`, () => {
+                const fills = pathFills(svg(square(` fill="${black}"`)), optimize, false);
+                expect(fills).toHaveLength(1);
+                expect(fills[0]).toMatch(BLACK);
+            });
+
+            it(`keeps fill="${black}" on a group (optimize: ${optimize})`, () => {
+                const fills = pathFills(svg(`<g fill="${black}">${square('')}${square('', 20)}</g>`), optimize, false);
+                expect(fills.length).toBeGreaterThan(0); // mergePaths may join the two squares
+                for (const fill of fills) expect(fill).toMatch(BLACK);
+            });
+        }
+
+    it('keeps a black child fill overriding a colored parent fill', () => {
+        const input = svg(`<g fill="#f00">${square('')}<g>${square(' fill="black"', 20)}</g></g>`);
+        for (const fillBlackForUnfilled of [true, false])
+            for (const optimize of [true, false]) {
+                const [red, black] = pathFills(input, optimize, fillBlackForUnfilled);
+                expect(red).toMatch(/^(?:#f00|red)$/);
+                expect(black).toMatch(BLACK);
+            }
+    });
+
+    it('leaves the default svgo config unchanged when fillBlackForUnfilled is true', () => {
+        const input = svg(`<g fill="#000">${square(' stroke-width="1" fill-opacity="1" fill-rule="nonzero"')}</g>`);
+        expect(parseSvg(input, true, undefined, undefined, true)).toEqual(parseSvg(input, true));
+    });
+
+    it('keeps the pathLength override (unknownAttrs: false) when both apply', () => {
+        const input = svg('<rect width="10" height="10" fill="#000" stroke-dasharray="1 1" pathLength="4"/>');
+        const json = JSON.stringify(parseSvg(input, true, undefined, undefined, false));
+        expect(json).toContain('"pathLength":"4"');
+        expect(json).toMatch(/"fill":"(?:#000|black)"/);
+    });
+});
+
+describe('convert() keeps an explicit black fill with fillBlackForUnfilled: false', () => {
+    const doc = (fill: string): string =>
+        `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M2 2h20v20H2z" fill="${fill}"/></svg>`;
+
+    for (const fill of ['#000', '#000000', 'black', 'rgb(0,0,0)'])
+        it(`emits fill="${fill}" in both modes`, () => {
+            for (const optimize of [true, false]) {
+                const { xml } = convert(doc(fill), { optimize, fillBlackForUnfilled: false });
+                expect(xml).toContain('android:fillColor="#FF000000"');
+            }
+        });
 });
