@@ -23,6 +23,15 @@ type Box = { x: number; y: number; width: number; height: number };
 /** A mask resolved for one element: the clips that reproduce it (outermost first), or why it is not one. */
 export type MaskClip = { clipIds: string[] } | { reason: string };
 
+/** Mask content flattened into clip pieces; `strokeIgnored` when a stroke of the content was left out. */
+interface MaskPieces {
+    pieces: string[];
+    strokeIgnored: boolean;
+}
+
+/** A mask's content as a registered clip, or why it is not clip-equivalent. */
+type MaskContent = { clipId: string; box: Box; strokeIgnored: boolean } | { reason: string };
+
 /** A `<mask>` element and the style its content inherits (from the mask's own ancestors). */
 interface MaskDef {
     el: XastElement;
@@ -111,7 +120,9 @@ export class ClipPaths {
     private readonly cache = new Map<string, string | null>();
     private readonly masks = new Map<string, MaskDef>();
     /** Mask content resolved once per mask (userSpaceOnUse content does not depend on the element). */
-    private readonly maskContents = new Map<string, { clipId: string; box: Box } | { reason: string }>();
+    private readonly maskContents = new Map<string, MaskContent>();
+    /** Masks already reported as `mask-approximated` (once per mask, whatever the units). */
+    private readonly approximatedMasks = new Set<string>();
     private syntheticCount = 0;
 
     constructor(
@@ -210,9 +221,12 @@ export class ClipPaths {
      *   alpha 1), or `mask-type` is `alpha` and every painting shape is opaque (any color);
      * - "opaque" covers the fill color alpha, `fill-opacity` and `opacity` (own and inherited
      *   inside the mask; ancestors of the `<mask>` only pass inherited properties down);
-     * - no shape paints a stroke, a gradient / pattern, or carries a `filter` / `mask` / `clip-path`;
+     * - no shape paints a gradient / pattern fill, or carries a `filter` / `mask` / `clip-path`;
      *   only groups, paths and basic shapes (`<use>` is already inlined as groups) appear. Shapes that
      *   paint nothing (fill and stroke `none`, `display: none`, hidden, empty geometry) are ignored;
+     * - strokes are the one approximation: a clip-path has no stroke outline, so the stroke of the
+     *   content is ignored (`mask-approximated`, once per mask) and a stroke-only shape is dropped;
+     *   content left empty that way refuses the mask;
      * - a `fill-rule="evenodd"` shape is rewritten into the same region under nonzero (a clip-path is
      *   nonzero), which fails only when its contours cross or touch;
      * - `maskContentUnits` is `userSpaceOnUse` (default: the element's user space) or
@@ -251,31 +265,52 @@ export class ClipPaths {
 
         const region = this.maskRegion(attrs, boxUnits ? bbox : null, viewport);
         if (!region) return { reason: 'its region (x/y/width/height) cannot be resolved' };
-        if (contains(region, content.box)) return { clipIds: [content.clipId] };
+        const inside = contains(region, content.box);
         const { x, y, width, height } = region;
-        if (width <= 0 || height <= 0) return { reason: 'its region is empty' };
+        if (!inside && (width <= 0 || height <= 0)) return { reason: 'its region is empty' };
+        if (content.strokeIgnored) this.reportApproximatedMask(id);
+        if (inside) return { clipIds: [content.clipId] };
         const rect = `M${x} ${y}H${x + width}V${y + height}H${x}Z`;
         return { clipIds: [content.clipId, this.addResolvedClip('svgvd-mask-region', rect)] };
     }
 
-    /** The mask content as a registered clip, or why it is not clip-equivalent. */
-    private maskContent(mask: MaskDef, m: Matrix | null): { clipId: string; box: Box } | { reason: string } {
-        const alpha = (presentation(mask.el, 'mask-type') ?? '').trim() === 'alpha';
-        const pieces: string[] = [];
-        const reason = this.flattenMask(mask.el, mask.style, m, alpha, pieces);
-        if (reason) return { reason };
-        const box = unionBBox(pieces);
-        if (!box) return { reason: 'its content is empty (the element is hidden)' };
-        return { clipId: this.addResolvedClip('svgvd-mask', unite(pieces)), box };
+    /** Warns once per mask that the stroke of its content was ignored. */
+    private reportApproximatedMask(id: string): void {
+        if (this.approximatedMasks.has(id)) return;
+        this.approximatedMasks.add(id);
+        this.warn({
+            code: 'mask-approximated',
+            message: `mask "${id}": the stroke of its content is ignored (a clip-path draws no stroke); the masked area differs along the stroked outlines.`,
+            node: 'mask',
+        });
     }
 
-    /** Flattens clip-equivalent mask content into absolute pathData pieces; returns a reason otherwise. */
+    /** The mask content as a registered clip, or why it is not clip-equivalent. */
+    private maskContent(mask: MaskDef, m: Matrix | null): MaskContent {
+        const alpha = (presentation(mask.el, 'mask-type') ?? '').trim() === 'alpha';
+        const acc: MaskPieces = { pieces: [], strokeIgnored: false };
+        const reason = this.flattenMask(mask.el, mask.style, m, alpha, acc);
+        if (reason) return { reason };
+        const box = unionBBox(acc.pieces);
+        if (!box)
+            return {
+                reason: acc.strokeIgnored
+                    ? 'its content only paints strokes, which a clip-path cannot draw'
+                    : 'its content is empty (the element is hidden)',
+            };
+        return { clipId: this.addResolvedClip('svgvd-mask', unite(acc.pieces)), box, strokeIgnored: acc.strokeIgnored };
+    }
+
+    /**
+     * Flattens clip-equivalent mask content into absolute pathData pieces; returns a reason otherwise.
+     * Strokes are left out (flagged in `acc.strokeIgnored`): only fills become pieces.
+     */
     private flattenMask(
         node: XastElement,
         style: Inherited,
         m: Matrix | null,
         alpha: boolean,
-        out: string[],
+        acc: MaskPieces,
     ): string | null {
         for (const c of node.children ?? []) {
             if (c.type !== 'element' || !c.name || SKIP.has(c.name) || isDisplayNone(c)) continue;
@@ -284,7 +319,7 @@ export class ClipPaths {
             const s = resolveStyle(c, style);
             const mm = childMatrix(c, m);
             if (GROUPS.has(c.name)) {
-                const reason = this.flattenMask(c, s, mm, alpha, out);
+                const reason = this.flattenMask(c, s, mm, alpha, acc);
                 if (reason) return reason;
                 continue;
             }
@@ -293,7 +328,8 @@ export class ClipPaths {
             const fill = s.fill ?? '#000000'; // SVG's initial fill
             const stroked = !isNone(s.stroke) && strokeWidthOf(s) > 0;
             if (!d || isHidden(s) || (isNone(fill) && !stroked)) continue; // paints nothing
-            if (stroked) return 'stroked content';
+            if (stroked) acc.strokeIgnored = true;
+            if (isNone(fill)) continue; // stroke-only: nothing left once the stroke is ignored
             if (/^url\(/i.test(fill.trim())) return 'gradient or pattern fill';
             const color = toAndroidColor(fill, s.fillOpacity * s.opacityMul, s.color);
             if (!color) return `fill "${fill}" is not a solid color`;
@@ -302,13 +338,13 @@ export class ClipPaths {
             // Always transformed: the output is absolute, so pieces can be concatenated safely.
             const piece = transformPathData(d, mm ?? IDENTITY);
             if (s.fillRule !== 'evenodd') {
-                out.push(piece);
+                acc.pieces.push(piece);
                 continue;
             }
             // Positive orientation, like the pieces `unite` keeps or reverses: windings add up.
             const nonzero = evenOddToNonZero(piece, 1);
             if (nonzero === null) return 'fill-rule="evenodd" content with crossing or touching contours';
-            out.push(nonzero);
+            acc.pieces.push(nonzero);
         }
         return null;
     }

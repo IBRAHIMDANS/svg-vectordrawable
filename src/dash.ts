@@ -1,5 +1,7 @@
 import { formatNumber } from './format.js';
+import { fmt, toAbsolute } from './pathAbsolute.js';
 import { transformPathData } from './pathData.js';
+import { parsePath } from './pathParse.js';
 import { IDENTITY } from './transform.js';
 import { parseLength } from './units.js';
 
@@ -14,12 +16,18 @@ import { parseLength } from './units.js';
  * - a zero-length dash yields a zero-length segment (`M p L p`), which Android/Skia caps as a
  *   dot with round/square caps (and draws nothing with butt caps, as SVG does).
  *
- * Lines are cut exactly. Quadratic and cubic Béziers (arcs are lowered to cubics first) are cut at
- * arc-length parameters and emitted as exact De Casteljau sub-curves, so the output stays compact
- * and smooth: only the *position* of a cut is approximated. Arc length is measured by adaptive
- * subdivision until, for each piece, control polygon length − chord length ≤ `tolerance`, and the
- * piece length is Gravesen's estimate `(2·chord + (n−1)·polygon) / (n+1)`, whose error is a small
- * fraction of that bound.
+ * Lines are cut exactly. Quadratic and cubic Béziers are cut at arc-length parameters and emitted
+ * as exact De Casteljau sub-curves, so the output stays compact and smooth: only the *position* of a
+ * cut is approximated. Arc length is measured by adaptive subdivision until, for each piece, control
+ * polygon length − chord length ≤ `tolerance`, and the piece length is Gravesen's estimate
+ * `(2·chord + (n−1)·polygon) / (n+1)`, whose error is a small fraction of that bound.
+ *
+ * Elliptical arcs (`A`, hence `<circle>` / `<ellipse>`) are measured on the true conic, not on their
+ * cubic approximation, which is longer than the curve (+0.014 % for a circle: 0.09 on r = 100, enough
+ * to shift every cut and to start a parasitic dash before the end of a full circle). A circular arc
+ * has the exact length r·|Δθ| and is cut at exact angles; an elliptical one is cut at angles found by
+ * Gauss–Legendre integration of its speed. Each dash piece is then emitted as cubics of ≤ 90°, the
+ * same lowering as a plain arc.
  */
 
 /** Above this many dashes for one path, dashing gives up (null) rather than emit huge pathData. */
@@ -30,6 +38,19 @@ const MAX_DEPTH = 16;
 
 type Point = [number, number];
 
+/** Center parameterization of an elliptical arc (SVG 2 implementation notes, B.2.4). */
+interface Arc {
+    cx: number;
+    cy: number;
+    rx: number;
+    ry: number;
+    cosPhi: number;
+    sinPhi: number;
+    /** Start angle and signed sweep (radians); the segment parameter t maps to theta + t·delta. */
+    theta: number;
+    delta: number;
+}
+
 interface Segment {
     /** Start point then control points then end point (2 for a line, 3 for a quad, 4 for a cubic). */
     pts: Point[];
@@ -37,6 +58,8 @@ interface Segment {
     /** Curves only: parameters and cumulative lengths of the flattening pieces (both start at 0). */
     ts?: number[];
     ss?: number[];
+    /** Elliptical arcs only (then `pts` holds the two end points). */
+    arc?: Arc;
 }
 
 interface Subpath {
@@ -94,13 +117,137 @@ function makeSegment(pts: Point[], tolerance: number): Segment {
     if (pts.length === 2) return { pts, length: dist(pts[0]!, pts[1]!) };
     const pairs: number[] = [];
     measure(pts, 0, 1, tolerance, 0, pairs);
+    return { pts, ...lengthTable(pairs) };
+}
+
+/** Cumulates flattening pieces given as (t, length) pairs into a segment's length and ts / ss tables. */
+function lengthTable(pairs: number[]): { length: number; ts: number[]; ss: number[] } {
     const ts = [0];
     const ss = [0];
     for (let i = 0; i < pairs.length; i += 2) {
         ts.push(pairs[i]!);
         ss.push(ss[ss.length - 1]! + pairs[i + 1]!);
     }
-    return { pts, length: ss[ss.length - 1]!, ts, ss };
+    return { length: ss[ss.length - 1]!, ts, ss };
+}
+
+/** Nodes and weights of 5-point Gauss–Legendre quadrature on [−1, 1]. */
+const GL_NODES = [0, 0.5384693101056831, -0.5384693101056831, 0.906179845938664, -0.906179845938664];
+const GL_WEIGHTS = [
+    0.5688888888888889, 0.47862867049936647, 0.47862867049936647, 0.23692688505618908, 0.23692688505618908,
+];
+
+/** Length of an ellipse arc between angles a and b (rotation does not change lengths). */
+function ellipseLength(rx: number, ry: number, a: number, b: number): number {
+    const half = (b - a) / 2;
+    const mid = (a + b) / 2;
+    let sum = 0;
+    for (let k = 0; k < GL_NODES.length; k++) {
+        const t = mid + half * GL_NODES[k]!;
+        sum += GL_WEIGHTS[k]! * Math.hypot(rx * Math.sin(t), ry * Math.cos(t));
+    }
+    return Math.abs(half) * sum;
+}
+
+/**
+ * Appends (t, length) pieces of an ellipse arc on parameters [t0, t1] (angle = theta + t·delta),
+ * subdividing until arc length is linear in t within `tolerance / 2` at the quarter points of each
+ * piece (so within about `tolerance` in between), which is what {@link paramAt} assumes.
+ */
+function measureArc(arc: Arc, t0: number, t1: number, tolerance: number, depth: number, out: number[]): void {
+    const angle = (t: number): number => arc.theta + t * arc.delta;
+    const q: number[] = [];
+    for (let k = 0; k < 4; k++)
+        q.push(ellipseLength(arc.rx, arc.ry, angle(t0 + ((t1 - t0) * k) / 4), angle(t0 + ((t1 - t0) * (k + 1)) / 4)));
+    const length = q[0]! + q[1]! + q[2]! + q[3]!;
+    let deviation = 0;
+    for (let k = 1, acc = 0; k < 4; k++)
+        deviation = Math.max(deviation, Math.abs((acc += q[k - 1]!) - (length * k) / 4));
+    if (deviation <= tolerance / 2 || depth >= MAX_DEPTH) {
+        out.push(t1, length);
+        return;
+    }
+    const mid = (t0 + t1) / 2;
+    measureArc(arc, t0, mid, tolerance, depth + 1, out);
+    measureArc(arc, mid, t1, tolerance, depth + 1, out);
+}
+
+/**
+ * Segment of an SVG arc from p0 to p1 (`A rx ry phi large sweep`): a line when a radius is zero or the
+ * end points coincide (SVG 2 out-of-range parameters), else the arc in center parameterization (same
+ * conversion as pathAbsolute.ts `arcToCubics`, which only returns the cubics).
+ */
+function makeArcSegment(p0: Point, p1: Point, args: number[], tolerance: number): Segment {
+    let rx = Math.abs(args[0]!);
+    let ry = Math.abs(args[1]!);
+    if (rx === 0 || ry === 0 || (p0[0] === p1[0] && p0[1] === p1[1])) return makeSegment([p0, p1], tolerance);
+    const phi = (args[2]! * Math.PI) / 180;
+    const cosPhi = Math.cos(phi);
+    const sinPhi = Math.sin(phi);
+    const dx = (p0[0] - p1[0]) / 2;
+    const dy = (p0[1] - p1[1]) / 2;
+    const x1 = cosPhi * dx + sinPhi * dy;
+    const y1 = -sinPhi * dx + cosPhi * dy;
+    // Radii too small to span the chord are scaled up uniformly.
+    const lambda = (x1 * x1) / (rx * rx) + (y1 * y1) / (ry * ry);
+    if (lambda > 1) {
+        rx *= Math.sqrt(lambda);
+        ry *= Math.sqrt(lambda);
+    }
+    const den = rx * rx * y1 * y1 + ry * ry * x1 * x1;
+    let coef = Math.sqrt(Math.max(0, rx * rx * ry * ry - den) / den);
+    if ((args[3] !== 0) === (args[4] !== 0)) coef = -coef;
+    const cxp = (coef * rx * y1) / ry;
+    const cyp = (-coef * ry * x1) / rx;
+    const cx = cosPhi * cxp - sinPhi * cyp + (p0[0] + p1[0]) / 2;
+    const cy = sinPhi * cxp + cosPhi * cyp + (p0[1] + p1[1]) / 2;
+    const theta = Math.atan2((y1 - cyp) / ry, (x1 - cxp) / rx);
+    let delta = Math.atan2((-y1 - cyp) / ry, (-x1 - cxp) / rx) - theta;
+    if (args[4] === 0 && delta > 0) delta -= 2 * Math.PI;
+    else if (args[4] !== 0 && delta < 0) delta += 2 * Math.PI;
+    const arc: Arc = { cx, cy, rx, ry, cosPhi, sinPhi, theta, delta };
+    // Circular arc: exact length, and arc length is linear in the angle.
+    if (rx === ry) return { pts: [p0, p1], length: rx * Math.abs(delta), arc };
+    const pairs: number[] = [];
+    // Start from ≤ 90° pieces: a piece symmetric about an axis would hide its non-linearity.
+    const quarters = Math.max(1, Math.ceil(Math.abs(delta) / (Math.PI / 2)));
+    for (let k = 0; k < quarters; k++) measureArc(arc, k / quarters, (k + 1) / quarters, tolerance, 0, pairs);
+    return { pts: [p0, p1], ...lengthTable(pairs), arc };
+}
+
+/** Point and derivative (w.r.t. the angle) of an arc's ellipse at angle `a`. */
+function ellipseAt(arc: Arc, a: number): [Point, Point] {
+    const { cx, cy, rx, ry, cosPhi, sinPhi } = arc;
+    const c = Math.cos(a);
+    const s = Math.sin(a);
+    return [
+        [cx + cosPhi * rx * c - sinPhi * ry * s, cy + sinPhi * rx * c + cosPhi * ry * s],
+        [-cosPhi * rx * s - sinPhi * ry * c, -sinPhi * rx * s + cosPhi * ry * c],
+    ];
+}
+
+/** Cubics (≤ 90° each, standard 4/3·tan(Δ/4) handles) of an arc between parameters ta and tb. */
+function arcCubics(arc: Arc, ta: number, tb: number): Point[][] {
+    const a0 = arc.theta + ta * arc.delta;
+    const sweep = (tb - ta) * arc.delta;
+    const n = Math.max(1, Math.ceil(Math.abs(sweep) / (Math.PI / 2) - 1e-9));
+    const step = sweep / n;
+    const k = (4 / 3) * Math.tan(step / 4);
+    const out: Point[][] = [];
+    let [p, dp] = ellipseAt(arc, a0);
+    for (let i = 1; i <= n; i++) {
+        const [q, dq] = ellipseAt(arc, a0 + i * step);
+        out.push([p, [p[0] + k * dp[0], p[1] + k * dp[1]], [q[0] - k * dq[0], q[1] - k * dq[1]], q]);
+        p = q;
+        dp = dq;
+    }
+    return out;
+}
+
+/** The geometry of a segment between parameters ta ≤ tb, as Bézier point lists (lines: 2 points). */
+function pieces(seg: Segment, ta: number, tb: number): Point[][] {
+    if (seg.arc) return arcCubics(seg.arc, ta, tb);
+    return [seg.pts.length === 2 ? lerpLine(seg.pts, ta, tb) : subCurve(seg.pts, ta, tb)];
 }
 
 /** Curve parameter at arc length `s` from the segment start (linear within a flattening piece). */
@@ -122,15 +269,19 @@ function paramAt(seg: Segment, s: number): number {
     return s1 > s0 ? t0 + ((s - s0) / (s1 - s0)) * (ts[lo]! - t0) : t0;
 }
 
-/** Splits a path into subpaths of line / quad / cubic segments, in absolute coordinates. */
+/** Splits a path into subpaths of line / quad / cubic / arc segments, in absolute coordinates. */
 function parseSubpaths(d: string, tolerance: number): Subpath[] {
-    // transformPathData lowers everything to absolute M/L/C/Q/Z with plain decimal numbers.
-    const tokens = transformPathData(d, IDENTITY).match(/[MLCQZ]|-?\d*\.?\d+/g) ?? [];
+    const commands = parsePath(d);
+    // Arcs are measured on the true ellipse: hand toAbsolute a line to the arc's end point instead, so
+    // it maps commands one to one (it would lower an arc to cubics) and still resolves relative and
+    // shorthand coordinates. Coordinates are rounded like transformPathData output.
+    const arcArgs = commands.map((c) => (c.cmd === 'A' || c.cmd === 'a' ? c.args : null));
+    const abs = toAbsolute(
+        commands.map((c, k) => (arcArgs[k] ? { cmd: c.cmd === 'A' ? 'L' : 'l', args: c.args.slice(5) } : c)),
+    );
     const subpaths: Subpath[] = [];
     let current: Subpath | null = null;
     let pen: Point = [0, 0];
-    let i = 0;
-    const num = (): number => Number(tokens[i++]);
     const open = (): Subpath => {
         if (!current) {
             current = { start: pen, segments: [], closed: false, length: 0 };
@@ -138,10 +289,11 @@ function parseSubpaths(d: string, tolerance: number): Subpath[] {
         }
         return current;
     };
-    while (i < tokens.length) {
-        const cmd = tokens[i++]!;
+    abs.forEach(({ cmd, args }, k) => {
+        const pts: Point[] = [pen];
+        for (let j = 0; j + 1 < args.length; j += 2) pts.push([Number(fmt(args[j]!)), Number(fmt(args[j + 1]!))]);
         if (cmd === 'M') {
-            pen = [num(), num()];
+            pen = pts[1]!;
             current = null;
         } else if (cmd === 'Z') {
             const sp = open();
@@ -150,13 +302,11 @@ function parseSubpaths(d: string, tolerance: number): Subpath[] {
             pen = sp.start;
             current = null; // a drawing command after Z starts a new subpath at the same point
         } else {
-            const count = cmd === 'L' ? 1 : cmd === 'Q' ? 2 : 3;
-            const pts: Point[] = [pen];
-            for (let k = 0; k < count; k++) pts.push([num(), num()]);
-            open().segments.push(makeSegment(pts, tolerance));
+            const arc = arcArgs[k];
+            open().segments.push(arc ? makeArcSegment(pen, pts[1]!, arc, tolerance) : makeSegment(pts, tolerance));
             pen = pts[pts.length - 1]!;
         }
-    }
+    });
     for (const sp of subpaths) sp.length = sp.segments.reduce((sum, s) => sum + s.length, 0);
     return subpaths;
 }
@@ -218,19 +368,18 @@ class Writer {
                 return;
             }
             if (a < b && s1 > a && s0 < b) {
-                const ta = paramAt(seg, a - s0);
-                const tb = paramAt(seg, b - s0);
-                const piece = seg.pts.length === 2 ? lerpLine(seg.pts, ta, tb) : subCurve(seg.pts, ta, tb);
-                if (move) this.parts.push(`M${this.pt(piece[0]!)}`);
-                move = false;
-                const cmd = piece.length === 2 ? 'L' : piece.length === 3 ? 'Q' : 'C';
-                this.parts.push(
-                    cmd +
-                        piece
-                            .slice(1)
-                            .map((p) => this.pt(p))
-                            .join(' '),
-                );
+                for (const piece of pieces(seg, paramAt(seg, a - s0), paramAt(seg, b - s0))) {
+                    if (move) this.parts.push(`M${this.pt(piece[0]!)}`);
+                    move = false;
+                    const cmd = piece.length === 2 ? 'L' : piece.length === 3 ? 'Q' : 'C';
+                    this.parts.push(
+                        cmd +
+                            piece
+                                .slice(1)
+                                .map((p) => this.pt(p))
+                                .join(' '),
+                    );
+                }
                 if (s1 >= b) return;
             }
             s0 = s1;
@@ -249,6 +398,7 @@ class Writer {
 /** Point at arc length `s` from the start of a segment. */
 function pointAt(seg: Segment, s: number): Point {
     const t = paramAt(seg, s);
+    if (seg.arc) return ellipseAt(seg.arc, seg.arc.theta + t * seg.arc.delta)[0];
     return seg.pts.length === 2 ? lerpLine(seg.pts, t, t)[0]! : subCurve(seg.pts, 0, t).at(-1)!;
 }
 

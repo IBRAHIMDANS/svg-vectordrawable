@@ -46,10 +46,20 @@ const alphaOf = (literal: string): number => parseInt(literal.slice(1, 3), 16) /
 const isCurrentColor = (value: string): boolean => value.trim().toLowerCase() === 'currentcolor';
 
 /**
+ * Why a fully transparent option color is refused. CSS reads 8 hex digits as `#RRGGBBAA`, so the
+ * Android `#AARRGGBB` black `#FF000000` is red at alpha 0: every shape painted with it would vanish
+ * without a warning. A zero alpha is never useful here (a transparent `currentColor` hides its shapes,
+ * a transparent `colorMap` key only matches invisible paints), so it throws instead of guessing the
+ * notation; 8 digits with a non-zero alpha stay CSS, as documented.
+ */
+const TRANSPARENT = 'fully transparent; 8 hex digits are CSS #RRGGBBAA, not Android #AARRGGBB';
+
+/**
  * Validates the `currentColor` and `colorMap` options (`TypeError` on a malformed value) and returns
  * their resolver. `currentColor` is a CSS color or an Android reference. `colorMap` maps SVG colors,
  * compared as `#AARRGGBB`, to references: an exact key wins, otherwise an opaque key matches its RGB
- * at any alpha, which then goes to `fillAlpha` / `strokeAlpha`. `warn` reports translucent stops.
+ * at any alpha, which then goes to `fillAlpha` / `strokeAlpha`. A fully transparent `currentColor`
+ * or key throws too (see {@link TRANSPARENT}). `warn` reports translucent stops.
  */
 export function colorRefs(
     currentColor: string,
@@ -61,12 +71,15 @@ export function colorRefs(
     const current = currentColor.trim();
     const currentRef = isColorReference(current) ? current : null;
     // An unparseable color would silently drop every shape painted with `currentColor`.
-    if (currentRef === null && toAndroidColor(current, 1, current) === null)
+    const currentLiteral = currentRef === null ? toAndroidColor(current, 1, current) : null;
+    if (currentRef === null && currentLiteral === null)
         throw new TypeError(
             /^[@?]/.test(current)
                 ? `Invalid currentColor: ${JSON.stringify(currentColor)} (malformed reference, ${EXPECTED})`
                 : `Invalid currentColor: ${JSON.stringify(currentColor)} (expected a CSS color or an Android color reference)`,
         );
+    if (currentLiteral?.startsWith('#00'))
+        throw new TypeError(`Invalid currentColor: ${JSON.stringify(currentColor)} (${TRANSPARENT})`);
 
     const map = new Map<string, string>();
     if (colorMap !== undefined) {
@@ -77,6 +90,8 @@ export function colorRefs(
             const literal = toAndroidColor(key, undefined, 'none');
             if (literal === null)
                 throw new TypeError(`Invalid colorMap key: ${JSON.stringify(key)} (expected a CSS color)`);
+            if (literal.startsWith('#00'))
+                throw new TypeError(`Invalid colorMap key: ${JSON.stringify(key)} (${TRANSPARENT})`);
             const ref = typeof value === 'string' ? value.trim() : '';
             if (!isColorReference(ref))
                 throw new TypeError(

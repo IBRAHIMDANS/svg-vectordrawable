@@ -40,10 +40,11 @@ const WPT_DIR = 'svg';
  * `converted+mismatch` files known to be harness artefacts, not converter bugs (path relative to
  * `svg/` → reason): resvg 2.6 renders the SOURCE differently from the wpt reference, while the
  * converter follows the reference. They are still reported, separately. A real bug never goes here:
- * it gets a fixture `test/fixtures/wpt-<name>.svg` and a correction task. Some entries are currently
- * rejected by `strict` for another reason (an `<html:link>` raising `empty-path`) and only show up once
- * that is fixed. A file whose root has no size is rejected for good (`unsupported-attribute`): it never
- * belongs here.
+ * it gets a fixture `test/fixtures/wpt-<name>.svg` and a correction task. Every entry is checked
+ * against the wpt reference (`<link rel="match">`), not just against the mismatch. An entry that never
+ * yields a mismatch (it matches, it is rejected in both modes, or it is not in the filtered corpus) is
+ * reported as stale: it hides nothing and must go. A file whose root has no size is rejected for good
+ * (`unsupported-attribute`): it never belongs here.
  */
 const RESVG_HSL =
     'resvg paints hsl() with fractional or space-separated components black; the converter emits #339377 like the reference';
@@ -51,6 +52,12 @@ const RESVG_CSS_COLOR_4 =
     'resvg does not parse CSS Color 4 functions (hwb(), lab(), lch(), oklab(), oklch(), color()) and paints black; the converter emits #339377 like the reference';
 const RESVG_PATH_LENGTH =
     'resvg ignores pathLength when laying out dashes; the converter scales the dashes like the reference';
+const RESVG_CSS_TRANSFORM =
+    'resvg ignores the CSS transform / transform-origin properties; the converter applies them like the reference';
+const RESVG_TRANSFORM_ORIGIN_ATTR =
+    'resvg ignores the transform-origin attribute; the converter applies it like the reference';
+const RESVG_SYMBOL_SIZE =
+    'resvg does not clip a <symbol> without viewBox to its width / height; the converter clips it like the reference (optimize: false)';
 /** `paint-fill-<color>.svg` (CSS) and `paint-fill-attr-<color>.svg` (attribute) for each color. */
 const paintFill = (colors, reason) =>
     colors
@@ -80,6 +87,12 @@ const KNOWN_ARTEFACTS = new Map([
     ['shapes/reftests/pathlength-001.svg', RESVG_PATH_LENGTH],
     ['shapes/reftests/pathlength-002.svg', RESVG_PATH_LENGTH],
     ['shapes/reftests/pathlength-004a.svg', RESVG_PATH_LENGTH],
+    ['shapes/line-dasharray.svg', RESVG_PATH_LENGTH],
+    ['styling/render/transform.svg', RESVG_CSS_TRANSFORM],
+    ['styling/render/transform-origin.svg', RESVG_CSS_TRANSFORM],
+    // Its `rel="match"` names transform-origin-not-explicit-style-ref.svg; the file is -visual-ref.svg.
+    ['styling/render/transform-origin-not-explicit-style-visual.svg', RESVG_TRANSFORM_ORIGIN_ATTR],
+    ['struct/reftests/use-symbol-inline-css-003.svg', RESVG_SYMBOL_SIZE],
 ]);
 
 /**
@@ -356,6 +369,26 @@ function parseArgs(argv) {
     return opts;
 }
 
+/**
+ * KNOWN_ARTEFACTS entries with no `mismatch` row, with the reason: an entry is only meaningful while it
+ * labels a mismatch, and one that is rejected or filtered out would otherwise stay invisible.
+ */
+function staleArtefacts(rows) {
+    const stale = [];
+    for (const file of KNOWN_ARTEFACTS.keys()) {
+        const own = rows.filter((r) => r.file === file);
+        if (own.some((r) => r.category === 'mismatch')) continue;
+        const why =
+            own.length === 0
+                ? 'not in the filtered corpus (missing, or excluded)'
+                : own
+                      .map((r) => `${r.category === 'match' ? 'matches' : r.category} (optimize=${r.optimize})`)
+                      .join(', ');
+        stale.push({ file, why });
+    }
+    return stale;
+}
+
 function report({ total, selected, excluded }, rows, seconds) {
     const pct = (n) => `${(n * 100).toFixed(2)}%`;
     const count = (category, optimize) => rows.filter((r) => r.category === category && r.optimize === optimize).length;
@@ -401,12 +434,9 @@ function report({ total, selected, excluded }, rows, seconds) {
     bugs.forEach((r) => console.log(line(r)));
     console.log(`[wpt] converted+mismatch, known harness artefacts: ${artefacts.length}`);
     artefacts.forEach((r) => console.log(`${line(r)}\n        ↳ ${KNOWN_ARTEFACTS.get(r.file)}`));
-    for (const file of KNOWN_ARTEFACTS.keys()) {
-        const own = rows.filter((r) => r.file === file);
-        if (own.length > 0 && own.every((r) => r.category === 'match')) {
-            console.log(`    (stale) ${file} now matches in both modes: remove it from KNOWN_ARTEFACTS`);
-        }
-    }
+    const stale = staleArtefacts(rows);
+    console.log(`[wpt] KNOWN_ARTEFACTS entries that hide no mismatch (stale): ${stale.length}`);
+    stale.forEach(({ file, why }) => console.log(`    ${file}: ${why}, remove it from KNOWN_ARTEFACTS`));
     if (unrenderable.length > 0) {
         console.log(`[wpt] Sources resvg cannot render (not judged): ${unrenderable.length}`);
         unrenderable.forEach((r) => console.log(`    ${r.file} (optimize=${r.optimize}): ${r.message}`));

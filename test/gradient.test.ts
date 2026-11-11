@@ -4,6 +4,7 @@ import { describe, expect, it } from 'vitest';
 import { convert } from '../src/index.js';
 import {
     collectGradients,
+    linearRgbStops,
     renderGradient,
     resolveEllipticalRadial,
     resolveGradient,
@@ -504,4 +505,360 @@ describe('wpt reproductions render like their wpt reference', () => {
             });
         }
     }
+});
+
+describe('collectGradients — empty or invalid attributes do not block href inheritance', () => {
+    const svg = (defs: string, shape = '<rect width="100" height="100" fill="url(#g)"/>'): string =>
+        `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><defs>${defs}</defs>${shape}</svg>`;
+    const coords = (xml: string): string => xml.match(/<gradient\s[^>]*>/)![0].replace(/\s+/g, ' ');
+    const both = (input: string): string[] => [true, false].map((optimize) => coords(convert(input, { optimize }).xml));
+    const stops = '<stop offset="0" stop-color="green"/><stop offset="1" stop-color="red"/>';
+
+    // wpt pservers/reftests/{linear,radial}-gradient-transform-empty-attr.svg
+    it('inherits the template gradientTransform under gradientTransform="" (linear), in both modes', () => {
+        const input = svg(
+            `<linearGradient id="t" gradientTransform="translate(1,0)">${stops}</linearGradient>` +
+                '<linearGradient id="g" href="#t" gradientTransform=""/>',
+        );
+        for (const g of both(input)) expect(g).toContain('android:startX="100" android:startY="0" android:endX="200"');
+    });
+
+    it('inherits the template gradientTransform under gradientTransform="" (radial), in both modes', () => {
+        const input = svg(
+            `<radialGradient id="t" gradientTransform="translate(0,-2)">${stops}</radialGradient>` +
+                '<radialGradient id="g" xlink:href="#t" gradientTransform="" xmlns:xlink="http://www.w3.org/1999/xlink"/>',
+        );
+        for (const g of both(input)) expect(g).toContain('android:centerX="50" android:centerY="-150"');
+    });
+
+    it('treats an invalid value like an empty one, for every inherited attribute', () => {
+        const cases: [template: string, own: string, expected: string][] = [
+            ['gradientTransform="translate(1,0)"', 'gradientTransform="foo"', 'android:startX="100"'],
+            ['x2="0.5"', 'x2=""', 'android:endX="50"'],
+            ['x2="0.5"', 'x2="abc"', 'android:endX="50"'],
+            ['gradientUnits="userSpaceOnUse" x2="50"', 'gradientUnits=""', 'android:endX="50"'],
+            ['gradientUnits="userSpaceOnUse" x2="50"', 'gradientUnits="bogus"', 'android:endX="50"'],
+            ['spreadMethod="reflect" x2="0.5"', 'spreadMethod=""', 'android:tileMode="mirror"'],
+            ['spreadMethod="reflect" x2="0.5"', 'spreadMethod="Reflect"', 'android:tileMode="mirror"'],
+        ];
+        for (const [template, own, expected] of cases) {
+            const input = svg(
+                `<linearGradient id="t" ${template}>${stops}</linearGradient><linearGradient id="g" href="#t" ${own}/>`,
+            );
+            for (const g of both(input)) expect(g, own).toContain(expected);
+        }
+    });
+
+    it('still lets a valid value override the template', () => {
+        const input = (own: string): string =>
+            svg(
+                `<linearGradient id="t" gradientTransform="translate(1,0)" x2="0.5">${stops}</linearGradient>` +
+                    `<linearGradient id="g" href="#t" ${own}/>`,
+            );
+        for (const g of both(input('gradientTransform="scale(2)"'))) expect(g).toContain('android:startX="0"');
+        for (const g of both(input('x2="1"')))
+            expect(g).toContain('android:startX="100" android:startY="0" android:endX="200"');
+    });
+
+    it('keeps the initial value for an invalid attribute without a template', () => {
+        const input = svg(
+            `<linearGradient id="g" x2="abc" gradientUnits="bogus" gradientTransform="foo">${stops}</linearGradient>`,
+        );
+        for (const g of both(input))
+            expect(g).toContain('android:startX="0" android:startY="0" android:endX="100" android:endY="0"');
+    });
+});
+
+/** 16 alternating white / black stops: their linearRGB blend needs more items than the cap allows. */
+const STRIPES = Array.from(
+    { length: 16 },
+    (_, i) => `<stop offset="${(i + 1) / 16}" stop-color="${i % 2 ? 'black' : 'white'}"/>`,
+).join('');
+
+describe('gradient features VectorDrawable cannot express are reported on use', () => {
+    const svg = (defs: string, shapes = '<rect width="100" height="100" fill="url(#g)"/>'): string =>
+        `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><defs>${defs}</defs>${shapes}</svg>`;
+    const codes = (input: string, optimize: boolean): string[] =>
+        convert(input, { optimize }).warnings.map((w) => w.code);
+
+    it('replaces an unparseable stop-color with black and reports unsupported-paint', () => {
+        const input = svg(
+            '<linearGradient id="g"><stop offset="0" stop-color="nonsense"/><stop offset="1" stop-color="red"/></linearGradient>',
+        );
+        for (const optimize of [true, false]) {
+            const { xml, warnings } = convert(input, { optimize });
+            expect(xml).toContain('<item android:offset="0" android:color="#FF000000" />');
+            expect(xml).toContain('<item android:offset="1" android:color="#FFFF0000" />');
+            expect(warnings).toEqual([
+                expect.objectContaining({
+                    code: 'unsupported-paint',
+                    node: 'stop',
+                    message: expect.stringContaining('"nonsense"'),
+                }),
+            ]);
+        }
+    });
+
+    it('keeps the stop-opacity on the black replacement', () => {
+        const stops = collectGradients(
+            [linear('g', [stop({ offset: '0', 'stop-color': 'nonsense', 'stop-opacity': '0.5' })])],
+            '#000',
+            noWarn,
+        ).get('g')?.stops;
+        expect(stops?.[0]?.color).toBe('#80000000');
+    });
+
+    it('reports color-interpolation="linearRGB" it cannot match (a stop mapped to a color resource)', () => {
+        const input = svg(
+            '<linearGradient id="g" color-interpolation="linearRGB"><stop offset="0" stop-color="white"/><stop offset="1" stop-color="blue"/></linearGradient>',
+        );
+        for (const optimize of [true, false]) {
+            expect(codes(input, optimize)).toEqual([]);
+            const { warnings } = convert(input, { optimize, colorMap: { blue: '@color/sea' } });
+            expect(warnings.map((w) => w.code)).toEqual(['gradient-approximated']);
+            expect(warnings[0]?.message).toContain('color-interpolation="linearRGB"');
+        }
+    });
+
+    it('reports SMIL animations in a gradient, its stops or its template as unsupported-element', () => {
+        const input = svg(
+            '<linearGradient id="t"><animate attributeName="x2" to="0.5" dur="1s"/></linearGradient>' +
+                '<linearGradient id="g" href="#t"><set attributeName="y2" to="1"/>' +
+                '<stop offset="0" stop-color="green"><animate attributeName="stop-color" to="blue" dur="1s"/></stop>' +
+                '<stop offset="1" stop-color="red"/></linearGradient>',
+        );
+        for (const optimize of [true, false]) {
+            const { warnings } = convert(input, { optimize });
+            expect(warnings.map((w) => [w.code, w.node])).toEqual([
+                ['unsupported-element', 'set'],
+                ['unsupported-element', 'animate'],
+                ['unsupported-element', 'animate'],
+            ]);
+        }
+    });
+
+    it('reports once per gradient, however many shapes use it, and not at all when it is unused', () => {
+        const defs = `<linearGradient id="g" color-interpolation="linearRGB"><stop offset="0" stop-color="nonsense"/>${STRIPES}</linearGradient>`;
+        const twice =
+            '<rect width="40" height="40" fill="url(#g)"/><rect x="50" width="40" height="40" fill="none" stroke="url(#g)"/>';
+        for (const optimize of [true, false]) {
+            expect(codes(svg(defs, twice), optimize)).toEqual(['unsupported-paint', 'gradient-approximated']);
+            expect(codes(svg(defs, '<rect width="10" height="10"/>'), optimize)).toEqual([]);
+        }
+    });
+
+    it('reports for an elliptical radial drawn exactly in a group too', () => {
+        const input = svg(
+            `<radialGradient id="g" gradientTransform="scale(1 0.5)" color-interpolation="linearRGB">${STRIPES}</radialGradient>`,
+        );
+        for (const optimize of [true, false]) {
+            const { xml, warnings } = convert(input, { optimize });
+            expect(xml).toContain('android:scaleY="0.5"');
+            expect(warnings.map((w) => w.code)).toEqual(['gradient-approximated']);
+        }
+    });
+});
+
+describe('color-interpolation="linearRGB" — intermediate stops in linear light', () => {
+    const toLinear = (c: number): number => (c <= 0.04045 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4);
+    const toEncoded = (l: number): number => (l <= 0.0031308 ? 12.92 * l : 1.055 * l ** (1 / 2.4) - 0.055);
+    const channels = (color: string): number[] => [1, 3, 5, 7].map((i) => parseInt(color.slice(i, i + 2), 16));
+    /** Exact linearRGB blend of two `#AARRGGBB` colors at t, 0–255 per channel. */
+    const blend = (a: string, b: string, t: number): number[] => {
+        const ca = channels(a);
+        const cb = channels(b);
+        return ca.map((c, k) => {
+            if (k === 0) return c + (cb[k]! - c) * t;
+            const l = toLinear(c / 255) + (toLinear(cb[k]! / 255) - toLinear(c / 255)) * t;
+            return 255 * toEncoded(l);
+        });
+    };
+    /** sRGB (VectorDrawable) interpolation of `stops` at offset x, 0–255 per channel. */
+    const srgbAt = (stops: { offset: number; color: string }[], x: number): number[] => {
+        const i = stops.findIndex((s) => s.offset >= x);
+        if (i <= 0) return channels(stops[Math.max(i, 0)]!.color);
+        const a = stops[i - 1]!;
+        const b = stops[i]!;
+        const t = b.offset > a.offset ? (x - a.offset) / (b.offset - a.offset) : 1;
+        return channels(a.color).map((c, k) => c + (channels(b.color)[k]! - c) * t);
+    };
+
+    it('samples black → white in linear light, within 1 % everywhere, with few stops', () => {
+        const stops = linearRgbStops([
+            { offset: 0, color: '#FF000000' },
+            { offset: 1, color: '#FFFFFFFF' },
+        ])!;
+        expect(stops.length).toBeLessThanOrEqual(10);
+        expect(stops.length).toBeGreaterThan(2);
+        expect(stops[0]).toEqual({ offset: 0, color: '#FF000000' });
+        expect(stops.at(-1)).toEqual({ offset: 1, color: '#FFFFFFFF' });
+        for (const [i, s] of stops.entries()) {
+            if (i > 0) expect(s.offset).toBeGreaterThan(stops[i - 1]!.offset);
+            // every intermediate stop is the exact blend at its offset, rounded to 8 bits
+            expect(channels(s.color)).toEqual(blend('#FF000000', '#FFFFFFFF', s.offset).map(Math.round));
+        }
+        let worst = 0;
+        for (let x = 0; x <= 1; x += 1 / 1024) {
+            const exact = blend('#FF000000', '#FFFFFFFF', x);
+            srgbAt(stops, x).forEach((c, k) => (worst = Math.max(worst, Math.abs(c - exact[k]!))));
+        }
+        expect(worst).toBeLessThan(2.55);
+        // the declared stops alone are far off: mid-gray is 188 in linear light, 128 in sRGB
+        expect(Math.round(blend('#FF000000', '#FFFFFFFF', 0.5)[1]!)).toBe(188);
+    });
+
+    it('interpolates alpha linearly and adds nothing to a segment already within tolerance', () => {
+        expect(
+            linearRgbStops([
+                { offset: 0, color: '#FF102030' },
+                { offset: 1, color: '#80112131' },
+            ]),
+        ).toEqual([
+            { offset: 0, color: '#FF102030' },
+            { offset: 1, color: '#80112131' },
+        ]);
+    });
+
+    it('adds nothing to a hard stop (two stops at the same offset)', () => {
+        const stops = [
+            { offset: 0, color: '#FFFF0000' },
+            { offset: 0.5, color: '#FFFF0000' },
+            { offset: 0.5, color: '#FF0000FF' },
+            { offset: 1, color: '#FF0000FF' },
+        ];
+        expect(linearRgbStops(stops)).toEqual(stops);
+    });
+
+    it('gives up on a color resource reference or beyond the stop cap', () => {
+        expect(
+            linearRgbStops([
+                { offset: 0, color: '@color/brand' },
+                { offset: 1, color: '#FFFFFFFF' },
+            ]),
+        ).toBeNull();
+        const stripes = Array.from({ length: 16 }, (_, i) => ({
+            offset: (i + 1) / 16,
+            color: i % 2 ? '#FF000000' : '#FFFFFFFF',
+        }));
+        expect(linearRgbStops(stripes)).toBeNull();
+    });
+
+    it('leaves sRGB, auto, initial and invalid values exactly as declared', () => {
+        const declared = [stop({ offset: '0', 'stop-color': 'black' }), stop({ offset: '1', 'stop-color': 'white' })];
+        for (const value of [undefined, 'sRGB', 'auto', 'initial', 'bogus']) {
+            const attrs: Record<string, string> = value ? { 'color-interpolation': value } : {};
+            expect(stopsOf(linear('g', declared, attrs))).toEqual([
+                { offset: 0, color: '#FF000000' },
+                { offset: 1, color: '#FFFFFFFF' },
+            ]);
+        }
+    });
+
+    describe('inheritance of the property', () => {
+        const declared = (): XastElement[] => [
+            stop({ offset: '0', 'stop-color': 'black' }),
+            stop({ offset: '1', 'stop-color': 'white' }),
+        ];
+        const group = (attributes: Record<string, string>, children: XastElement[]): XastElement => ({
+            type: 'element',
+            name: 'g',
+            attributes,
+            children,
+        });
+        /** Stop count of gradient `id` collected under `root`. */
+        const countIn = (root: XastElement, els: XastElement[], id = 'g'): number | undefined =>
+            collectGradients(els, '#000', noWarn, undefined, root).get(id)?.stops.length;
+
+        it('is inherited from a document ancestor (attribute or style)', () => {
+            for (const attrs of <Record<string, string>[]>[
+                { 'color-interpolation': 'linearRGB' },
+                { style: 'color-interpolation:linearRGB' },
+            ]) {
+                const g = linear('g', declared());
+                const root = group({}, [group(attrs, [group({}, [g])])]);
+                expect(countIn(root, [g])).toBeGreaterThan(2);
+                // without the document, only the element itself is read
+                expect(collectGradients([g], '#000', noWarn).get('g')?.stops.length).toBe(2);
+            }
+        });
+
+        it('lets the nearest value win, and defers inherit / unset / invalid values to the parent', () => {
+            const own = linear('g', declared(), { 'color-interpolation': 'sRGB' });
+            expect(countIn(group({ 'color-interpolation': 'linearRGB' }, [own]), [own])).toBe(2);
+            for (const value of ['inherit', 'unset', 'bogus']) {
+                const g = linear('g', declared(), { 'color-interpolation': value });
+                expect(countIn(group({ 'color-interpolation': 'linearRGB' }, [g]), [g])).toBeGreaterThan(2);
+            }
+        });
+
+        it('does not flow through href: the referencing gradient decides', () => {
+            const template = linear('t', declared(), { 'color-interpolation': 'linearRGB' });
+            const g = linear('g', [], { href: '#t' });
+            const root = group({}, [template, g]);
+            expect(countIn(root, [template, g], 't')).toBeGreaterThan(2);
+            expect(countIn(root, [template, g])).toBe(2);
+            const plain = linear('t', declared());
+            const linearRef = linear('g', [], { href: '#t', 'color-interpolation': 'linearRGB' });
+            expect(countIn(group({}, [plain, linearRef]), [plain, linearRef])).toBeGreaterThan(2);
+        });
+    });
+
+    // wpt pservers/reftests/gradient-color-interpolation.svg. Its root has no size (rejected in strict
+    // mode), so it is rendered here with a viewBox. resvg ignores color-interpolation, so the reference
+    // is the exact linear-light blend drawn with 256 sRGB stops per segment.
+    describe('wpt gradient-color-interpolation.svg renders like its linear-light reference', () => {
+        const colors = [
+            [0, '#FFFFFFFF'],
+            [0.33, '#FF0000FF'],
+            [0.66, '#FFFF0000'],
+            [1, '#FFFFFF00'],
+        ] as const;
+        const gradient = (attrs: string, stops: string): string =>
+            '<svg xmlns="http://www.w3.org/2000/svg" width="48" height="48" viewBox="0 0 240 240"><defs>' +
+            `<linearGradient id="gradientLinearRGB" gradientUnits="objectBoundingBox"${attrs}>${stops}</linearGradient></defs>` +
+            '<rect x="20" y="20" width="200" height="200" style="fill:url(#gradientLinearRGB)"/></svg>';
+        const declared =
+            '<stop offset="0" stop-color="white"/><stop offset=".33" stop-color="blue"/>' +
+            '<stop offset=".66" stop-color="red"/><stop offset="1" stop-color="yellow"/>';
+        const source = gradient(' color-interpolation="linearRGB"', declared);
+        const rgb = (c: number[]): string =>
+            '#' +
+            c
+                .slice(1)
+                .map((v) => Math.round(v).toString(16).padStart(2, '0'))
+                .join('');
+        const dense = colors.slice(1).flatMap(([o1, c1], i) => {
+            const [o0, c0] = colors[i]!;
+            return Array.from({ length: 257 }, (_, k) => {
+                const t = k / 256;
+                return `<stop offset="${o0 + (o1 - o0) * t}" stop-color="${rgb(blend(c0, c1, t))}"/>`;
+            });
+        });
+        const reference = gradient('', dense.join(''));
+        /** 3 ≈ 1 % of a channel: far stricter than the default visual tolerance. */
+        const TIGHT = 3;
+
+        for (const optimize of [true, false]) {
+            it(`within 1 % of the reference (optimize: ${optimize})`, () => {
+                const { xml, warnings } = convert(source, { optimize, strict: true });
+                expect(warnings).toEqual([]);
+                const result = compareSvgs(reference, vdToSvg(xml), TIGHT);
+                expect(result.inked).toBeGreaterThan(0);
+                expect(result.mismatch).toBeLessThan(DEFAULT_MAX_MISMATCH);
+                // the plain sRGB rendering is far off at the same tolerance
+                const srgb = convert(gradient('', declared), { optimize }).xml;
+                expect(compareSvgs(reference, vdToSvg(srgb), TIGHT).mismatch).toBeGreaterThan(0.3);
+            });
+        }
+
+        // convert() passes the root to collectGradients: the property inherited from an ancestor applies.
+        for (const optimize of [true, false]) {
+            it(`inherits color-interpolation from the root <svg> through convert() (optimize: ${optimize})`, () => {
+                const inherited = gradient('', declared).replace('<svg ', '<svg color-interpolation="linearRGB" ');
+                const { xml, warnings } = convert(inherited, { optimize, strict: true });
+                expect(warnings).toEqual([]);
+                expect(compareSvgs(reference, vdToSvg(xml), TIGHT).mismatch).toBeLessThan(DEFAULT_MAX_MISMATCH);
+            });
+        }
+    });
 });

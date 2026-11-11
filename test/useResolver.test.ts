@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { convert } from '../src/index.js';
 import { MAX_EXPANDED_NODES, resolveUses } from '../src/useResolver.js';
 import type { XastElement } from '../src/ast.js';
+import { USE_INSTANCE_ATTR } from '../src/inherited.js';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -295,7 +296,7 @@ describe('resolveUses — <symbol viewBox> viewport', () => {
 
     it('clips a symbol without viewBox to the use viewport, without scaling it', () => {
         const wrapper = resolveSymbol({}, { x: '2', y: '3', width: '10', height: '6' });
-        expect(wrapper.attributes).toEqual({ transform: 'translate(2 3)' });
+        expect(wrapper.attributes).toEqual({ transform: 'translate(2 3)', [USE_INSTANCE_ATTR]: '' });
         const { clipGroup, clipPath, content } = parts(wrapper);
         expect(clipGroup).toBeDefined();
         expect(onlyChild(clipPath as XastElement).attributes).toEqual({ x: '0', y: '0', width: '10', height: '6' });
@@ -322,7 +323,7 @@ describe('resolveUses — <symbol viewBox> viewport', () => {
 
     it('leaves a symbol without viewBox nor absolute size unclipped', () => {
         const wrapper = resolveSymbol({}, { x: '2', y: '3', width: '50%' });
-        expect(wrapper.attributes).toEqual({ transform: 'translate(2 3)' });
+        expect(wrapper.attributes).toEqual({ transform: 'translate(2 3)', [USE_INSTANCE_ATTR]: '' });
         const symbolAsGroup = onlyChild(wrapper);
         expect(symbolAsGroup.attributes).toEqual({ id: 's' });
         expect(onlyChild(symbolAsGroup).name).toBe('path');
@@ -404,6 +405,136 @@ describe('resolveUses — wpt reproductions render like their source', () => {
                 expect(result.mismatch).toBeLessThan(DEFAULT_MAX_MISMATCH);
             }
         }
+    });
+});
+
+describe('resolveUses — context-fill / context-stroke', () => {
+    it('wpt-paint-context-fill.svg renders like the wpt reference (the use fill)', () => {
+        const svg = readFileSync(
+            join(fileURLToPath(new URL('.', import.meta.url)), 'wpt-repro', 'wpt-paint-context-fill.svg'),
+            'utf8',
+        );
+        // resvg 2.6 paints context-fill black: compare with the source as a browser resolves it.
+        const reference = svg.replaceAll('fill="context-fill"', 'fill="green"');
+        for (const optimize of [false, true]) {
+            const { xml, warnings } = convert(svg, { optimize, strict: true });
+            expect(warnings).toEqual([]);
+            const result = compareSvgs(reference, vdToSvg(xml));
+            expect(result.sizeMismatch).toBeNull();
+            expect(result.inked).toBeGreaterThan(0);
+            expect(result.mismatch).toBeLessThan(DEFAULT_MAX_MISMATCH);
+        }
+    });
+
+    const doc = (defs: string, body: string): string =>
+        `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><defs>${defs}</defs>${body}</svg>`;
+    const rect = (paint: string): string => `<rect id="r" width="10" height="10" ${paint}/>`;
+    const run = (svg: string): { xml: string; codes: string[] } => {
+        const { xml, warnings } = convert(svg, { optimize: false });
+        return { xml, codes: warnings.map((w) => w.code) };
+    };
+
+    it("resolves context-fill / context-stroke to the <use>'s fill / stroke", () => {
+        const { xml, codes } = run(
+            doc(
+                rect('fill="context-fill" stroke="context-stroke" stroke-width="2"'),
+                '<use href="#r" fill="#00f" stroke="#f00"/>',
+            ),
+        );
+        expect(codes).toEqual([]);
+        expect(xml).toContain('android:fillColor="#FF0000FF"');
+        expect(xml).toContain('android:strokeColor="#FFFF0000"');
+    });
+
+    it('crosses the paints: context-fill on stroke, context-stroke on fill', () => {
+        const { xml, codes } = run(
+            doc(
+                rect('fill="context-stroke" stroke="context-fill" stroke-width="2"'),
+                '<use href="#r" fill="#00f" stroke="#f00"/>',
+            ),
+        );
+        expect(codes).toEqual([]);
+        expect(xml).toContain('android:fillColor="#FFFF0000"');
+        expect(xml).toContain('android:strokeColor="#FF0000FF"');
+    });
+
+    it("takes the use's inherited paint (style or ancestor), not the target's ancestors", () => {
+        const { xml, codes } = run(
+            doc(
+                '<g id="t" fill="#f00"><rect width="10" height="10" style="fill:context-fill"/></g>',
+                '<g fill="#0f0"><use href="#t"/></g>',
+            ),
+        );
+        expect(codes).toEqual([]);
+        expect(xml).toContain('android:fillColor="#FF00FF00"');
+    });
+
+    it('an unset use paint is the initial one: black fill, no stroke', () => {
+        const { xml, codes } = run(
+            doc(rect('fill="context-fill" stroke="context-stroke" stroke-width="2"'), '<use href="#r"/>'),
+        );
+        expect(codes).toEqual([]);
+        expect(xml).toContain('android:fillColor="#FF000000"');
+        expect(xml).not.toContain('strokeColor');
+    });
+
+    it('currentcolor on the use is resolved with the color of the painted element (wpt paint-context-003)', () => {
+        const { xml, codes } = run(
+            doc(
+                '<g id="g" color="#008000"><rect width="10" height="10" fill="context-fill"/></g>',
+                '<g color="#f00"><use href="#g" fill="currentcolor"/></g>',
+            ),
+        );
+        expect(codes).toEqual([]);
+        expect(xml).toContain('android:fillColor="#FF008000"');
+    });
+
+    it('uses the nearest <use> as context element through nested instances', () => {
+        const { xml, codes } = run(
+            doc(
+                `${rect('fill="context-fill"')}<g id="mid" fill="#f00"><use href="#r" fill="#0f0"/></g>`,
+                '<use href="#mid" fill="#00f"/>',
+            ),
+        );
+        expect(codes).toEqual([]);
+        expect(xml).toContain('android:fillColor="#FF00FF00"');
+        // The inner use passes on its context's paint when it is itself context-fill.
+        const passed = run(
+            doc(
+                `${rect('fill="context-fill"')}<g id="mid"><use href="#r" fill="context-fill"/></g>`,
+                '<use href="#mid" fill="#00f"/>',
+            ),
+        );
+        expect(passed.codes).toEqual([]);
+        expect(passed.xml).toContain('android:fillColor="#FF0000FF"');
+    });
+
+    it('keeps the warning for a gradient context paint (laid out over the use, not the shape)', () => {
+        const grad =
+            '<linearGradient id="lg"><stop offset="0" stop-color="#f00"/><stop offset="1" stop-color="#00f"/></linearGradient>';
+        const { xml, codes } = run(doc(`${grad}${rect('fill="context-fill"')}`, '<use href="#r" fill="url(#lg)"/>'));
+        expect(codes).toEqual(['unsupported-paint']);
+        expect(xml).not.toContain('<gradient');
+    });
+
+    it('keeps the warning outside a <use> instance', () => {
+        const { codes } = run(doc('', rect('fill="context-fill"')));
+        expect(codes).toEqual(['unsupported-paint']);
+        // Rendered directly (not through the use), the target has no context element either.
+        expect(run(doc('', `${rect('fill="context-fill"')}<use href="#r" fill="#00f"/>`)).codes).toEqual([
+            'unsupported-paint',
+        ]);
+    });
+});
+
+describe('resolveUses — <symbol> size', () => {
+    it('ignores CSS width / height on the <symbol>: its attributes size the viewport (wpt use-symbol-inline-css-003)', () => {
+        const svg =
+            '<svg xmlns="http://www.w3.org/2000/svg" width="200" height="200"><defs>' +
+            '<symbol id="sym" width="100" height="100" style="width:150px;height:150px">' +
+            '<rect width="200" height="200" fill="green"/></symbol></defs><use href="#sym"/></svg>';
+        const { xml } = convert(svg, { optimize: false });
+        expect(xml).toContain('<clip-path android:pathData="M0,0h100v100h-100z" />');
     });
 });
 

@@ -92,8 +92,9 @@ The server talks MCP over stdin/stdout; it does not read files or open network c
 ## Option coverage
 
 The tools expose the options of the published `svg-vectordrawable` release they depend on (0.3.x).
-`autoMirrored`, `width` and `height` exist in the library's development branch but not in 0.3.0; they
-will be added here once released.
+Not yet exposed, because 0.3.0 does not have them (it would silently ignore them): `autoMirrored`,
+`width`, `height`, `colorMap`, and color references (`?attr/…`, `@color/…`) as `currentColor`. They
+exist in the library's development branch and will be added here once released.
 
 ## Development
 

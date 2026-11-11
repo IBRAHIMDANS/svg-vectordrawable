@@ -16,8 +16,20 @@ an ESM browser build under `svg-vectordrawable/browser` (`convert` only, no file
 > Sections marked **Example — not published** are sketches to copy into your project. They are not
 > packages you can install.
 
-> `rules`, `ConversionError`, `--rule` and `--android-names` are listed under `[Unreleased]` in the
-> changelog: they need the release after 0.1.1.
+`rules`, `ConversionError`, `--rule` and `--android-names` are available since 0.2.0.
+
+## Plugins and MCP server
+
+Ready-made integrations live in [`integrations/`](../integrations), each with its own README. They are
+merged in this repository but **not published yet** (npm / Gradle Plugin Portal): until they are, build
+them from source as their READMEs describe.
+
+| Integration                                              | Package / plugin id                        | What it does                                                                                |
+| -------------------------------------------------------- | ------------------------------------------ | ------------------------------------------------------------------------------------------- |
+| [Gradle plugin](../integrations/gradle-plugin/README.md) | `io.github.ibrahimdans.svg-vectordrawable` | Converts a folder of SVGs into generated `res/drawable` resources for every Android variant |
+| [Vite plugin](../integrations/vite-plugin/README.md)     | `vite-plugin-svg-vectordrawable`           | Converts a folder of SVGs into a `res/drawable` folder at build time and in watch mode      |
+| [MCP server](../integrations/mcp-server/README.md)       | `svg-vectordrawable-mcp`                   | Lets an AI assistant convert SVG to VectorDrawable and preview a VectorDrawable as SVG      |
+| [Figma plugin](../integrations/figma-plugin/README.md)   | (Figma Community, not listed yet)          | Converts the selected Figma layers to VectorDrawable XML inside Figma, offline              |
 
 ## Node build script
 
@@ -124,6 +136,17 @@ Gradients in VectorDrawable require API 24+, which adaptive icons (API 26+) alwa
 
 ## Gradle (Android project)
 
+**Plugin (not published yet):** the [Gradle plugin](../integrations/gradle-plugin/README.md)
+(`id("io.github.ibrahimdans.svg-vectordrawable")`) registers a cacheable
+`convert<Variant>SvgToVectorDrawable` task per Android variant, wired before the resource merge, and
+passes the variant's `minSdk`. It runs the `svgvd` CLI, so it needs **Node.js 18+** on the `PATH` and
+`svg-vectordrawable` installed in the folder the CLI runs in (the root project by default). The
+`command` property changes how the CLI is started (default `npx --no-install svgvd`, `npx.cmd` on
+Windows), for instance `listOf("node", "tools/node_modules/svg-vectordrawable/dist/cli.js")`; see its
+README for `sourceDir`, `strict`, `androidNames`, `extraArgs`, `workingDir` and `cliFiles`.
+
+### Without the plugin
+
 Call the CLI from an `Exec` task that runs before the build. `--android-names` makes the output file
 names valid resource names (`[a-z][a-z0-9_]*`, not a Java keyword) and fails before writing anything
 if two SVGs map to the same name.
@@ -162,6 +185,15 @@ tasks.named("preBuild") { dependsOn(convertSvgIcons) }
   versions also offer `androidComponents { onVariants { … } }` for generated resources.
 
 ## Vite
+
+**Plugin (not published yet):** the [Vite plugin](../integrations/vite-plugin/README.md)
+(`vite-plugin-svg-vectordrawable`, also a Rollup plugin) converts every `*.svg` of an `input` folder
+into an `output` folder such as `android/app/src/main/res/drawable`, incrementally and in watch mode.
+Use it when the web project and the Android app share the same icons.
+
+### Without the plugin: import the XML as a string
+
+A different use: the XML as a JavaScript value rather than files on disk.
 
 **Example — not published.** A plugin that turns `import xml from './icon.svg?vd'` into the
 VectorDrawable XML string (for instance in a web tool that previews or exports Android drawables):
@@ -285,3 +317,31 @@ curl -s https://example.com/icon.svg | npx svgvd - --strict -o app/src/main/res/
 
 To also check that the generated XML compiles, run `aapt2 compile` / `aapt2 link` on the output, as
 this repository does in `scripts/aapt2-validate.mjs`, or simply build the Android app.
+
+## MCP server
+
+**Not published yet.** The [MCP server](../integrations/mcp-server/README.md)
+(`svg-vectordrawable-mcp`, stdio, Node.js 18+) lets an AI assistant use the library. It exposes two
+tools:
+
+- `convert`: SVG markup → `{ xml, warnings, minSdk }`, with the options `strict` (`true`, `false` or
+  `"lossy"`), `currentColor`, `floatPrecision`, `minSdk` and `tint`;
+- `preview`: VectorDrawable XML → `{ svg }`, with `density` and `applyTint`.
+
+Inputs are limited to 2 MB, and each call runs in a worker thread stopped after 10 seconds
+(`SVGVD_MCP_TIMEOUT_MS` changes it). The server reads no files and opens no network connection. Once
+published, it starts with `npx -y svg-vectordrawable-mcp`, for instance in Claude Code:
+
+```sh
+claude mcp add svg-vectordrawable -- npx -y svg-vectordrawable-mcp
+```
+
+Until then, build it from `integrations/mcp-server` (`pnpm install && pnpm run build`) and register
+`node <path>/integrations/mcp-server/dist/index.js` as the command.
+
+## Figma plugin
+
+**Not published yet** on the Figma Community. The [Figma plugin](../integrations/figma-plugin/README.md)
+converts the selected layers with the `browser-lite` build, inside Figma and without network access:
+it shows the XML, the warnings and a preview, and copies or downloads the drawables (a `.zip` for
+several layers). Its README explains how to build it and import it as a development plugin.

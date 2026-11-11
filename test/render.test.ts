@@ -2,7 +2,7 @@ import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import { convert } from '../src/index.js';
-import { failsConditions, foreignElements } from '../src/elements.js';
+import { failsConditions, foreignElements, switchChild } from '../src/elements.js';
 import type { XastElement } from '../src/ast.js';
 import { compareSvgs, DEFAULT_MAX_MISMATCH } from './visual/compare.js';
 import { vdToSvg } from './visual/vdToSvg.js';
@@ -160,6 +160,179 @@ describe('conditional processing (SVG 2 §5.8)', () => {
     });
 });
 
+describe('<switch> renders its first child passing conditional processing (SVG 2 §5.6.3)', () => {
+    const visual = (doc: string, optimize: boolean): string => {
+        const { xml, warnings } = convert(doc, { optimize, strict: true });
+        expect(warnings).toEqual([]);
+        const result = compareSvgs(doc, vdToSvg(xml));
+        expect(result.sizeMismatch).toBeNull();
+        expect(result.inked).toBeGreaterThan(0);
+        expect(result.mismatch).toBeLessThan(DEFAULT_MAX_MISMATCH);
+        return xml;
+    };
+
+    it.each(MODES)(
+        'wpt struct-cond-01: the failing child and the later ones are bypassed (optimize: %s)',
+        (optimize) => {
+            const xml = visual(
+                svg(
+                    '<switch><rect fill="#f00" width="12" height="12" requiredExtensions="http://example.org/bogus"/>' +
+                        '<rect fill="#008000" y="12" width="12" height="12"/><rect fill="#00f" x="12" width="12" height="12"/>' +
+                        '</switch>',
+                ),
+                optimize,
+            );
+            expect(pathCount(xml)).toBe(1);
+            expect(xml).toContain('#FF008000');
+        },
+    );
+
+    it.each(MODES)('wpt use-switch: a <use> can instance a <switch> (optimize: %s)', (optimize) => {
+        const xml = visual(
+            svg(
+                '<defs><switch id="s"><rect width="24" height="24" fill="#008000"/><rect width="4" height="4" fill="#f00"/>' +
+                    '</switch></defs><rect x="2" y="2" width="20" height="20" fill="#f00"/><use href="#s"/>',
+            ),
+            optimize,
+        );
+        expect(pathCount(xml)).toBe(2);
+    });
+
+    it.each(MODES)(
+        'Illustrator export: the private-extension <foreignObject> is bypassed silently (optimize: %s)',
+        (optimize) => {
+            const xml = visual(
+                svg(
+                    '<switch><foreignObject requiredExtensions="http://ns.adobe.com/AdobeIllustrator/10.0/" ' +
+                        'width="1" height="1"/><g i:extraneous="self"><rect width="12" height="24" fill="#f00"/>' +
+                        '<rect x="12" width="12" height="24" fill="#008000"/></g></switch>',
+                    ' xmlns:i="http://ns.adobe.com/AdobeIllustrator/10.0/"',
+                ),
+                optimize,
+            );
+            expect(pathCount(xml)).toBe(2);
+        },
+    );
+
+    it.each(MODES)(
+        'the <switch> attributes apply to the chosen child (transform, clip-path, opacity) (optimize: %s)',
+        (optimize) => {
+            visual(
+                svg(
+                    '<clipPath id="c"><rect width="12" height="24"/></clipPath>' +
+                        '<switch transform="translate(2 0)" clip-path="url(#c)" opacity="0.5" fill="#008000">' +
+                        '<rect width="20" height="24"/><rect width="24" height="24" fill="#f00"/></switch>',
+                ),
+                optimize,
+            );
+        },
+    );
+
+    it.each(MODES)(
+        'no candidate → nothing; text, <desc>, foreign elements are not candidates (optimize: %s)',
+        (optimize) => {
+            const doc = svg(
+                '<switch><rect width="4" height="4" requiredExtensions=""/><rect width="4" height="4" systemLanguage=""/>' +
+                    '</switch><switch> text <desc>d</desc><title>t</title><h:p>p</h:p><!-- c -->' +
+                    '<rect x="8" width="4" height="4"/></switch><switch/>',
+                ` xmlns:h="${XHTML_NS}"`,
+            );
+            const { xml, warnings } = convert(doc, { optimize, strict: true });
+            expect(warnings).toEqual([]);
+            expect(pathCount(xml)).toBe(1);
+            expect(xml).toMatch(/M8[ ,]0h4v4/);
+        },
+    );
+
+    it.each(MODES)('the chosen child is reported like any child (<text>) (optimize: %s)', (optimize) => {
+        expect(codes(svg(`<switch><text>a</text>${RECT}</switch>`), optimize)).toEqual(['unsupported-element']);
+    });
+
+    it.each(MODES)('a nested <switch> picks again (optimize: %s)', (optimize) => {
+        const xml = visual(
+            svg(
+                `<switch><switch><rect requiredExtensions="" width="4" height="4"/>${RECT}</switch>` +
+                    '<rect width="24" height="24" fill="#f00"/></switch>',
+            ),
+            optimize,
+        );
+        expect(pathCount(xml)).toBe(1);
+    });
+
+    // optimize: true is left out: svgo's removeHiddenElems drops the display="none" child first.
+    it('display does not take part in the choice: a chosen display="none" child renders nothing', () => {
+        const doc = svg(`<switch><rect width="4" height="4" display="none"/>${RECT}</switch>`);
+        const { xml, warnings } = convert(doc, { optimize: false, strict: true });
+        expect(warnings).toEqual([]);
+        expect(pathCount(xml)).toBe(0);
+    });
+
+    it.each(MODES)(
+        'systemLanguage: the catch-all child is rendered, the choice reported once (optimize: %s)',
+        (optimize) => {
+            const doc = svg(
+                '<switch><g systemLanguage="fr"><rect width="4" height="4" fill="#f00"/></g>' +
+                    `<rect width="24" height="24" fill="#008000"/><rect systemLanguage="en" width="2" height="2"/></switch>`,
+            );
+            const { xml, warnings } = convert(doc, { optimize });
+            expect(warnings.map((w) => [w.code, w.node])).toEqual([['unsupported-attribute', 'switch']]);
+            expect(warnings[0]!.message).toMatch(/device language.*the child without it is rendered/);
+            expect(pathCount(xml)).toBe(1);
+            expect(xml).toContain('#FF008000');
+            expect(() => convert(doc, { optimize, strict: true })).toThrow(
+                /systemLanguage on the children of <switch>/,
+            );
+        },
+    );
+
+    it.each(MODES)(
+        'systemLanguage without a catch-all: the first candidate, reported once (optimize: %s)',
+        (optimize) => {
+            const doc = svg(
+                '<switch><rect systemLanguage="de" requiredExtensions="" width="2" height="2"/>' +
+                    '<rect systemLanguage="fr" width="24" height="24" fill="#008000"/>' +
+                    '<rect systemLanguage="en" width="4" height="4" fill="#f00"/></switch>',
+            );
+            const { xml, warnings } = convert(doc, { optimize });
+            expect(warnings.map((w) => [w.code, w.node])).toEqual([['unsupported-attribute', 'switch']]);
+            expect(warnings[0]!.message).toMatch(/the first child is rendered/);
+            expect(pathCount(xml)).toBe(1);
+            expect(xml).toContain('#FF008000');
+        },
+    );
+
+    it.each(MODES)('a catch-all before every language child still reports the choice (optimize: %s)', (optimize) => {
+        // Firefox ranks a language match above the catch-all whatever the order.
+        const doc = svg(`<switch>${RECT}<rect systemLanguage="en" width="4" height="4" fill="#f00"/></switch>`);
+        expect(codes(doc, optimize)).toEqual(['unsupported-attribute']);
+    });
+
+    it('switchChild', () => {
+        const el = (name: string, attributes: Record<string, string> = {}): XastElement => ({
+            type: 'element',
+            name,
+            attributes,
+        });
+        const sw = (...children: XastElement[]): XastElement => ({ type: 'element', name: 'switch', children });
+        const none = new WeakSet<XastElement>();
+        const [a, b] = [el('rect'), el('g')];
+        expect(switchChild(sw(), none)).toEqual({ child: undefined, languageDependent: false });
+        expect(switchChild(sw({ type: 'text' }, el('desc'), a, b), none)).toEqual({
+            child: a,
+            languageDependent: false,
+        });
+        expect(switchChild(sw(el('rect', { requiredExtensions: '' }), b), none).child).toBe(b);
+        expect(switchChild(sw(el('rect', { display: 'none' }), b), none).child).not.toBe(b);
+        const fr = el('g', { systemLanguage: 'fr' });
+        expect(switchChild(sw(fr, a), none)).toEqual({ child: a, languageDependent: true });
+        expect(switchChild(sw(fr, el('g', { systemLanguage: 'en' })), none)).toEqual({
+            child: fr,
+            languageDependent: true,
+        });
+        expect(switchChild(sw(a, b), new WeakSet([a])).child).toBe(b);
+    });
+});
+
 describe('foreignElements', () => {
     const el = (name: string, attributes: Record<string, string> = {}, children: XastElement[] = []): XastElement => ({
         type: 'element',
@@ -195,5 +368,30 @@ describe('foreignElements', () => {
     it('reads a document without any xmlns as SVG', () => {
         const rect = el('rect');
         expect(foreignElements(el('svg', {}, [rect])).has(rect)).toBe(false);
+    });
+});
+
+describe('<switch> survives svgo and group opacity checks', () => {
+    const doc = (body: string): string => `<svg xmlns="${SVG_NS}" viewBox="0 0 24 24">${body}</svg>`;
+
+    it.each(MODES)('does not merge or drop the alternatives of a switch (optimize: %s)', (optimize) => {
+        const xml = convert(
+            doc('<switch><path d="M0 0h12v12H0z" fill="#0f0"/><path d="M12 12h12v12H12z" fill="#0f0"/></switch>'),
+            { optimize },
+        ).xml;
+        // Only the first alternative: one sub-path (a merged path would carry both).
+        const paths = [...xml.matchAll(/android:pathData="([^"]*)"/g)].map((m) => m[1]!);
+        expect(paths).toHaveLength(1);
+        expect(paths[0]!.match(/[Mm]/g)).toHaveLength(1);
+    });
+
+    it.each(MODES)('counts the chosen child of a switch for group opacity overlaps (optimize: %s)', (optimize) => {
+        const { warnings } = convert(
+            doc(
+                '<g opacity=".5"><switch><rect width="12" height="12"/></switch><rect x="6" width="12" height="12"/></g>',
+            ),
+            { optimize },
+        );
+        expect(warnings.map((w) => w.code)).toContain('opacity-approximated');
     });
 });

@@ -1,10 +1,22 @@
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import {
+    existsSync,
+    mkdirSync,
+    mkdtempSync,
+    readdirSync,
+    readFileSync,
+    rmSync,
+    symlinkSync,
+    writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { run, type CliIo, type ReportEntry } from '../src/cli.js';
 
 const ICON = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M0 0h24v24H0z" fill="#f00"/></svg>';
+const BLUR =
+    '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><filter id="f"><feGaussianBlur stdDeviation="1"/></filter><circle cx="12" cy="12" r="8" fill="#1A73E8" filter="url(#f)"/></svg>';
+const DENSITY_DIRS = ['drawable-hdpi', 'drawable-mdpi', 'drawable-xhdpi', 'drawable-xxhdpi', 'drawable-xxxhdpi'];
 const DASHED =
     '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M0 0L24 24" stroke="#000" stroke-dasharray="1ex"/></svg>';
 
@@ -575,6 +587,7 @@ describe('svgvd CLI', () => {
                     warnings: [],
                     minSdk: null,
                     error: { message: 'no such file or directory' },
+                    fallback: null,
                 },
                 {
                     input: join(src, 'dashed.svg'),
@@ -582,14 +595,23 @@ describe('svgvd CLI', () => {
                     warnings: [expect.objectContaining({ code: 'unsupported-stroke-dasharray', category: 'lossy' })],
                     minSdk: 21,
                     error: null,
+                    fallback: null,
                 },
-                { input: join(src, 'icon.svg'), output: join(out, 'icon.xml'), warnings: [], minSdk: 21, error: null },
+                {
+                    input: join(src, 'icon.svg'),
+                    output: join(out, 'icon.xml'),
+                    warnings: [],
+                    minSdk: 21,
+                    error: null,
+                    fallback: null,
+                },
                 {
                     input: join(src, 'invalid.svg'),
                     output: null,
                     warnings: [],
                     minSdk: null,
                     error: { message: expect.stringMatching(/^Invalid SVG/) },
+                    fallback: null,
                 },
             ]);
             expect(existsSync(join(out, 'icon.xml'))).toBe(true);
@@ -603,7 +625,7 @@ describe('svgvd CLI', () => {
             const res = svgvd(input, '--json');
             expect(res.status).toBe(0);
             expect(parseReport(res.stdout)).toEqual([
-                { input, output: join(dir, 'icon.xml'), warnings: [], minSdk: 21, error: null },
+                { input, output: join(dir, 'icon.xml'), warnings: [], minSdk: 21, error: null, fallback: null },
             ]);
         });
 
@@ -624,12 +646,12 @@ describe('svgvd CLI', () => {
             const stdin = svgvdStdin(ICON, ['-', '-o', target, '--json']);
             expect(stdin.status).toBe(0);
             expect(parseReport(stdin.stdout)).toEqual([
-                { input: '-', output: target, warnings: [], minSdk: 21, error: null },
+                { input: '-', output: target, warnings: [], minSdk: 21, error: null, fallback: null },
             ]);
             const inline = svgvd('-s', ICON, '--json', '--dry-run');
             expect(inline.status).toBe(0);
             expect(parseReport(inline.stdout)).toEqual([
-                { input: null, output: null, warnings: [], minSdk: 21, error: null },
+                { input: null, output: null, warnings: [], minSdk: 21, error: null, fallback: null },
             ]);
         });
 
@@ -702,6 +724,172 @@ describe('svgvd CLI', () => {
         it('documents the options in the help', () => {
             const help = svgvd('--help').stdout;
             for (const flag of ['--recursive', '--json', '--dry-run', 'svgvd -']) expect(help).toContain(flag);
+        });
+    });
+
+    describe('--fallback-png', () => {
+        /** Width and height of a PNG file, from its IHDR chunk. */
+        const pngSize = (path: string): [number, number] => {
+            const png = readFileSync(path);
+            return [png.readUInt32BE(16), png.readUInt32BE(20)];
+        };
+
+        /** A source directory with a rejected (filter) and a convertible SVG. */
+        function sources(): string {
+            const src = join(dir, 'src');
+            mkdirSync(src);
+            writeFileSync(join(src, 'blur.svg'), BLUR);
+            writeFileSync(join(src, 'icon.svg'), ICON);
+            return src;
+        }
+
+        it('renders a rejected SVG to one PNG per density, without XML, and converts the others', () => {
+            const out = join(dir, 'out');
+            const res = svgvd(sources(), '-o', out, '--strict', '--fallback-png', 'all', '--json');
+            expect(res.status).toBe(0);
+            expect(readdirSync(out).sort()).toEqual([...DENSITY_DIRS, 'icon.xml']);
+            expect(DENSITY_DIRS.map((d) => readdirSync(join(out, d)))).toEqual(DENSITY_DIRS.map(() => ['blur.png']));
+            expect(
+                ['mdpi', 'hdpi', 'xhdpi', 'xxhdpi', 'xxxhdpi'].map((d) =>
+                    pngSize(join(out, `drawable-${d}`, 'blur.png')),
+                ),
+            ).toEqual([
+                [24, 24],
+                [36, 36],
+                [48, 48],
+                [72, 72],
+                [96, 96],
+            ]);
+            const [blur, icon] = parseReport(res.stdout);
+            expect(blur).toEqual({
+                input: join(dir, 'src', 'blur.svg'),
+                output: null,
+                warnings: [],
+                minSdk: null,
+                error: null,
+                fallback: {
+                    outputs: ['mdpi', 'hdpi', 'xhdpi', 'xxhdpi', 'xxxhdpi'].map((d) =>
+                        join(out, `drawable-${d}`, 'blur.png'),
+                    ),
+                    reason: expect.objectContaining({ code: 'unsupported-attribute', category: 'lossy' }),
+                },
+            });
+            expect(icon).toMatchObject({ output: join(out, 'icon.xml'), fallback: null });
+            expect(res.stderr).toContain(
+                `→ ${join(out, 'drawable-{mdpi,hdpi,xhdpi,xxhdpi,xxxhdpi}', 'blur.png')} (PNG fallback: [unsupported-attribute]`,
+            );
+        });
+
+        it('writes beside an Android drawable directory, with the resource name', () => {
+            const src = join(dir, 'src');
+            mkdirSync(src);
+            writeFileSync(join(src, 'Soft-Blur.svg'), BLUR);
+            const res = join(dir, 'res');
+            const status = svgvd(
+                src,
+                '-o',
+                join(res, 'drawable'),
+                '--android-names',
+                '--strict',
+                '--fallback-png',
+                'xhdpi,mdpi',
+            ).status;
+            expect(status).toBe(0);
+            expect(readdirSync(res).sort()).toEqual(['drawable-mdpi', 'drawable-xhdpi']);
+            expect(pngSize(join(res, 'drawable-xhdpi', 'soft_blur.png'))).toEqual([48, 48]);
+        });
+
+        it('follows --width / --height, and renders a single source next to -o file.xml', () => {
+            const target = join(dir, 'out', 'blur.xml');
+            const res = svgvdStdin(BLUR, ['-', '-o', target, '--strict', '--width', '48', '--fallback-png', 'hdpi']);
+            expect(res.status).toBe(0);
+            expect(pngSize(join(dir, 'out', 'drawable-hdpi', 'blur.png'))).toEqual([72, 72]);
+            expect(existsSync(target)).toBe(false);
+        });
+
+        it('writes no PNG when the conversion succeeds, even lossy', () => {
+            const input = join(dir, 'blur.svg');
+            writeFileSync(input, BLUR);
+            const res = svgvd(input, '--fallback-png', 'all');
+            expect(res.status).toBe(0);
+            expect(res.stderr).toContain('[unsupported-attribute]');
+            expect(readdirSync(dir).sort()).toEqual(['blur.svg', 'blur.xml']);
+        });
+
+        it('does not fall back on an invalid SVG', () => {
+            const input = join(dir, 'invalid.svg');
+            writeFileSync(input, 'not svg');
+            const res = svgvd(input, '--strict', '--fallback-png', 'all', '--json', '--dry-run');
+            expect(res.status).toBe(1);
+            expect(parseReport(res.stdout)[0]).toMatchObject({
+                error: { message: expect.stringMatching(/^Invalid SVG/) },
+                fallback: null,
+            });
+        });
+
+        it('reports the PNGs without writing them with --dry-run', () => {
+            const out = join(dir, 'out');
+            const res = svgvd(sources(), '-o', out, '--strict', '--fallback-png', 'mdpi', '--dry-run', '--json');
+            expect(res.status).toBe(0);
+            expect(parseReport(res.stdout)[0]!.fallback!.outputs).toEqual([join(out, 'drawable-mdpi', 'blur.png')]);
+            expect(res.stderr).toContain('blur.png (dry run)');
+            expect(existsSync(out)).toBe(false);
+        });
+
+        it.each([
+            [['-s', ICON], '--fallback-png writes PNG files'],
+            [['FILE', '--stdout'], '--fallback-png writes PNG files'],
+            [['FILE', '--fallback-png'], 'Missing value for --fallback-png'],
+        ])('refuses %j', (args, message) => {
+            const input = join(dir, 'icon.svg');
+            writeFileSync(input, ICON);
+            const res = svgvd(
+                ...args.map((a) => (a === 'FILE' ? input : a)),
+                ...(args.includes('--fallback-png') ? [] : ['--fallback-png', 'all']),
+            );
+            expect(res.status).toBe(1);
+            expect(res.stderr).toContain(message);
+        });
+
+        it('rejects an unknown density', () => {
+            const res = svgvd('-s', ICON, '--fallback-png', 'mdpi,ldpi');
+            expect(res.status).toBe(1);
+            expect(res.stderr).toContain(
+                'Invalid --fallback-png (expected all, or a comma list of mdpi,hdpi,xhdpi,xxhdpi,xxxhdpi): mdpi,ldpi',
+            );
+        });
+
+        it('documents the option in the help', () => {
+            expect(svgvd('--help').stdout).toContain('--fallback-png <d>');
+        });
+
+        describe('without @resvg/resvg-js', () => {
+            afterEach(() => {
+                vi.doUnmock('node:module');
+                vi.resetModules();
+            });
+
+            it('fails the rejected file with a one-line message and exit code 1, converting the others', async () => {
+                vi.resetModules();
+                vi.doMock('node:module', async (importOriginal) => ({
+                    ...(await importOriginal<typeof import('node:module')>()),
+                    createRequire: () => (id: string) => {
+                        throw Object.assign(new Error(`Cannot find module '${id}'`), { code: 'MODULE_NOT_FOUND' });
+                    },
+                }));
+                const cli = await import('../src/cli.js');
+                let stderr = '';
+                const out = join(dir, 'out');
+                const status = cli.run([sources(), '-o', out, '--strict', '--fallback-png', 'all'], {
+                    stdout: () => {},
+                    stderr: (text) => (stderr += text),
+                });
+                expect(status).toBe(1);
+                expect(stderr).toContain(
+                    `✗ ${join(dir, 'src', 'blur.svg')}: [unsupported-attribute] filter on <path> cannot be represented in a VectorDrawable; ignored. PNG fallback failed: The PNG fallback needs @resvg/resvg-js, which is not installed: npm install @resvg/resvg-js\n`,
+                );
+                expect(readdirSync(out)).toEqual(['icon.xml']);
+            });
         });
     });
 });

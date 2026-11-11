@@ -16,6 +16,10 @@
 // and system fonts are never loaded: the PNG is byte-identical from one run (and machine) to the next.
 //
 //   pnpm build && node docs/assets/generate-comparison.mjs
+//
+// The middle label carries the version read from package.json, so the release workflow
+// (.github/workflows/prepare-release.yml) reruns this script after the version bump and commits the PNG
+// with it. Run it by hand only to preview a change to the image.
 
 import { execFileSync } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';

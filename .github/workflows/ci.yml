@@ -27,6 +27,18 @@ jobs:
             - run: pnpm run format:check
             - run: pnpm run test
             - run: pnpm run build
+            # integrations/figma-plugin has no dependencies of its own: it uses the root toolchain (tsc, tsup)
+            # and inlines the dist/browser-lite.global.js just built. The other integrations (vite-plugin,
+            # gradle-plugin, mcp-server) have their own lockfiles, build against svg-vectordrawable from npm
+            # and run in integrations-plugins.yml / integrations-mcp.yml.
+            - name: Figma plugin typecheck
+              run: pnpm exec tsc -p integrations/figma-plugin/tsconfig.json
+            - name: Figma plugin build and tests
+              working-directory: integrations/figma-plugin
+              # --test-force-exit: worker.terminate() re-refs the test's worker thread, which then sometimes
+              # keeps ui-test.ts alive after every test has passed. timeout-minutes bounds any other hang.
+              timeout-minutes: 5
+              run: node scripts/build.ts && node --test --test-force-exit "test/*-test.ts"
             - name: Playground smoke test
               # Real worker.js against the fresh browser-lite bundle; pages.yml only runs it after merge.
               if: matrix.node-version == 22

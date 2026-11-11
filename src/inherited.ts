@@ -22,6 +22,34 @@ export interface Inherited {
     opacityMul: number;
     /** Size of the nearest viewport (viewBox units): the reference for percentage lengths. */
     viewport: Viewport;
+    /**
+     * Paints of the context element (SVG 2 §13.3: the nearest `<use>` instancing this content),
+     * read by `context-fill` / `context-stroke`; undefined outside a `<use>` instance. A paint left
+     * undefined is the initial one (black fill, no stroke), like an unset `fill` / `stroke`.
+     */
+    context?: { fill?: string; stroke?: string };
+}
+
+/**
+ * Marks the `<g>` that replaces an expanded `<use>` (see useResolver.ts): it is the context element
+ * of its content. Not an SVG attribute, so nothing else reads it.
+ */
+export const USE_INSTANCE_ATTR = 'data-svgvd-use-instance';
+
+const CONTEXT_PAINT = /^context-(fill|stroke)$/i;
+const URL_PAINT = /^url\(/i;
+
+/**
+ * `fill` / `stroke` value with `context-fill` / `context-stroke` replaced by the context element's
+ * paint (undefined: its initial paint). Kept as the keyword, which paint.ts reports, when there is no
+ * context element or when that paint is a paint server: SVG 2 lays it out over the context
+ * element's bounding box and user space, not the shape's, which the converter does not track.
+ */
+function contextResolved(value: string, context: Inherited['context']): string | undefined {
+    const which = CONTEXT_PAINT.exec(value.trim())?.[1]?.toLowerCase();
+    if (which === undefined || context === undefined) return value;
+    const paint = which === 'fill' ? context.fill : context.stroke;
+    return paint !== undefined && URL_PAINT.test(paint.trim()) ? value : paint;
 }
 
 const INHERITABLE = [
@@ -60,10 +88,10 @@ export function resolveStyle(el: XastElement, parent: Inherited): Inherited {
         const v = get(prop);
         // `inherit` keeps the parent's computed value, which `next` already holds.
         if (v === undefined || v.trim() === 'inherit') continue;
-        if (prop === 'fill') next.fill = v;
+        if (prop === 'fill') next.fill = contextResolved(v, parent.context);
         else if (prop === 'fill-opacity') next.fillOpacity = parseOpacity(v);
         else if (prop === 'fill-rule') next.fillRule = v;
-        else if (prop === 'stroke') next.stroke = v;
+        else if (prop === 'stroke') next.stroke = contextResolved(v, parent.context);
         else if (prop === 'stroke-opacity') next.strokeOpacity = parseOpacity(v);
         else if (prop === 'stroke-width') next.strokeWidth = v;
         else if (prop === 'stroke-linecap') next.strokeLinecap = v;
@@ -76,6 +104,8 @@ export function resolveStyle(el: XastElement, parent: Inherited): Inherited {
         else if (prop === 'color') next.color = v;
     }
     next.opacityMul = parent.opacityMul * parseOpacity(get('opacity'));
+    // The use's own paints (attributes, else inherited) are its content's context paints.
+    if (attrs[USE_INSTANCE_ATTR] !== undefined) next.context = { fill: next.fill, stroke: next.stroke };
     return next;
 }
 
