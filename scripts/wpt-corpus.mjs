@@ -57,7 +57,9 @@ const RESVG_CSS_TRANSFORM =
 const RESVG_TRANSFORM_ORIGIN_ATTR =
     'resvg ignores the transform-origin attribute; the converter applies it like the reference';
 const RESVG_SYMBOL_SIZE =
-    'resvg does not clip a <symbol> without viewBox to its width / height; the converter clips it like the reference (optimize: false)';
+    'resvg does not clip a <symbol> without viewBox to its width / height; the converter clips it like the reference';
+const RESVG_CONTEXT_PAINT =
+    'resvg does not resolve context-fill / context-stroke inside <use> content and falls back to the initial paint (black fill, no stroke); the converter resolves them from the <use> like the reference';
 /** `paint-fill-<color>.svg` (CSS) and `paint-fill-attr-<color>.svg` (attribute) for each color. */
 const paintFill = (colors, reason) =>
     colors
@@ -93,6 +95,7 @@ const KNOWN_ARTEFACTS = new Map([
     // Its `rel="match"` names transform-origin-not-explicit-style-ref.svg; the file is -visual-ref.svg.
     ['styling/render/transform-origin-not-explicit-style-visual.svg', RESVG_TRANSFORM_ORIGIN_ATTR],
     ['struct/reftests/use-symbol-inline-css-003.svg', RESVG_SYMBOL_SIZE],
+    ['painting/reftests/paint-context-003.svg', RESVG_CONTEXT_PAINT],
 ]);
 
 /**

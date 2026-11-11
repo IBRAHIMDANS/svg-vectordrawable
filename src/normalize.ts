@@ -102,6 +102,13 @@ const ZERO_SIZE_HIDDEN_ELEMS = {
 };
 
 /**
+ * svgo follows SVG 1.1, where `<symbol>` has no `x` / `y` / `width` / `height`:
+ * `removeUnknownsAndDefaults` strips them, so a symbol without viewBox loses the viewport it is
+ * clipped to (SVG 2). svgo cannot keep attributes per element, so keep the unknown ones throughout.
+ */
+const MAY_HAVE_SYMBOL_GEOMETRY = /<symbol\b[^>]*?\s(?:x|y|width|height)\s*=/;
+
+/**
  * svgo moves `transform` between groups and their children (`moveElemsAttrsToGroup`,
  * `moveGroupAttrsToElems`, `collapseGroups`) and bakes it into path data (`convertPathData`)
  * without reading the CSS `transform` property nor `transform-origin`, which the converter folds
@@ -144,6 +151,12 @@ function defaultConfigFor(svg: string, floatPrecision: number, fillBlackForUnfil
     if (MAY_HAVE_ZERO_SIZE.test(svg)) {
         overrides.convertShapeToPath = false;
         overrides.removeHiddenElems = ZERO_SIZE_HIDDEN_ELEMS;
+    }
+    if (MAY_HAVE_SYMBOL_GEOMETRY.test(svg)) {
+        overrides.removeUnknownsAndDefaults = {
+            ...(overrides.removeUnknownsAndDefaults as object | undefined),
+            unknownAttrs: false,
+        };
     }
     if (!fillBlackForUnfilled) {
         // `removeUnknownsAndDefaults` drops `fill="#000"` (black, #000000, rgb(0,0,0) once

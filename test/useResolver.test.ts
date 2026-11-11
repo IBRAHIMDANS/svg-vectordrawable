@@ -509,12 +509,128 @@ describe('resolveUses — context-fill / context-stroke', () => {
         expect(passed.xml).toContain('android:fillColor="#FF0000FF"');
     });
 
-    it('keeps the warning for a gradient context paint (laid out over the use, not the shape)', () => {
-        const grad =
-            '<linearGradient id="lg"><stop offset="0" stop-color="#f00"/><stop offset="1" stop-color="#00f"/></linearGradient>';
-        const { xml, codes } = run(doc(`${grad}${rect('fill="context-fill"')}`, '<use href="#r" fill="url(#lg)"/>'));
-        expect(codes).toEqual(['unsupported-paint']);
-        expect(xml).not.toContain('<gradient');
+    describe('a gradient context paint is laid out over the <use> (SVG 2 §13.3)', () => {
+        const stops = '<stop offset="0" stop-color="#f00"/><stop offset="1" stop-color="#00f"/>';
+        const obb = `<linearGradient id="lg">${stops}</linearGradient>`;
+        const user = `<linearGradient id="lu" gradientUnits="userSpaceOnUse" x1="2" y1="0" x2="22" y2="6">${stops}</linearGradient>`;
+        const radial = `<radialGradient id="rg">${stops}</radialGradient>`;
+        /** Two rects, the second transformed: the box is the use's, not either shape's. */
+        const shapes = (paint: string, id = ' id="t"'): string =>
+            `<g${id}><rect x="2" y="2" width="8" height="8" ${paint}/>` +
+            `<rect x="4" y="4" width="6" height="6" transform="rotate(30 8 8)" ${paint}/></g>`;
+        /** Converts in both optimize modes (strict; the size of the wpt canvas aside): renders like `reference`. */
+        const expectRendersLike = (svg: string, reference: string): void => {
+            for (const optimize of [false, true]) {
+                const { xml, warnings } = convert(svg, { optimize, strict: true });
+                expect(warnings.filter((w) => w.code !== 'large-vector')).toEqual([]);
+                expect(xml).toContain('<gradient');
+                const result = compareSvgs(reference, vdToSvg(xml));
+                expect(result.sizeMismatch).toBeNull();
+                expect(result.inked).toBeGreaterThan(0);
+                expect(result.mismatch, `optimize: ${optimize}`).toBeLessThan(DEFAULT_MAX_MISMATCH);
+            }
+        };
+
+        it('wpt paint-context-007: objectBoundingBox fill over the use box, shapes transformed', () => {
+            // resvg 2.6 paints context-fill black: compare with the wpt reference (rel="match").
+            const svg =
+                '<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="100%" height="100%" viewBox="0 0 400 300">' +
+                '<defs><linearGradient id="lg"><stop offset="0" stop-color="red"/><stop offset="1" stop-color="blue"/></linearGradient>' +
+                '<g id="shapes"><rect x="50" y="90" width="240" height="120" fill="context-fill"/>' +
+                '<path d="M 170 -30 l -120 240 l 240 0 Z" fill="context-fill" transform-origin="170 150" transform="rotate(90)"/></g></defs>' +
+                '<g><use x="0" y="0" fill="url(#lg)" xlink:href="#shapes"/></g></svg>';
+            const reference =
+                '<svg xmlns="http://www.w3.org/2000/svg" width="100%" height="100%" viewBox="0 0 400 300"><defs>' +
+                '<linearGradient id="lg1" x2="125%"><stop offset="0" stop-color="red"/><stop offset="1" stop-color="blue"/></linearGradient>' +
+                '<linearGradient id="lg2" x1="-25%"><stop offset="0" stop-color="red"/><stop offset="1" stop-color="blue"/></linearGradient></defs>' +
+                '<rect x="50" y="90" width="240" height="120" fill="url(#lg1)"/>' +
+                '<path d="M 110 30 l 240 120 l -240 120 Z" fill="url(#lg2)"/></svg>';
+            expectRendersLike(svg, reference);
+        });
+
+        it('objectBoundingBox fill, with the use x / y offset', () => {
+            const svg = doc(`${obb}${shapes('fill="context-fill"')}`, '<use href="#t" x="1" y="3" fill="url(#lg)"/>');
+            // The rotated rect's corners around (8, 8): its far right corner sets the box's right edge.
+            const a = Math.PI / 6;
+            const xs = [
+                [4, 4],
+                [10, 4],
+                [4, 10],
+                [10, 10],
+            ].map(([x, y]) => 8 + (x! - 8) * Math.cos(a) - (y! - 8) * Math.sin(a));
+            const left = Math.min(2, ...xs);
+            const right = Math.max(10, ...xs);
+            const byHand = `<linearGradient id="h" gradientUnits="userSpaceOnUse" x1="${left}" x2="${right}">${stops}</linearGradient>`;
+            expectRendersLike(svg, doc(byHand, `<g transform="translate(1 3)">${shapes('fill="url(#h)"', '')}</g>`));
+        });
+
+        it('objectBoundingBox stroke (the geometry box, not the stroke extent)', () => {
+            const ring = (paint: string): string =>
+                `<rect x="2" y="2" width="8" height="8" fill="none" stroke="${paint}" stroke-width="2"/>` +
+                `<rect x="12" y="12" width="8" height="8" fill="none" stroke="${paint}" stroke-width="2"/>`;
+            const svg = doc(`${obb}<g id="t">${ring('context-stroke')}</g>`, '<use href="#t" stroke="url(#lg)"/>');
+            const byHand = `<linearGradient id="h" gradientUnits="userSpaceOnUse" x1="2" x2="20">${stops}</linearGradient>`;
+            expectRendersLike(svg, doc(byHand, ring('url(#h)')));
+        });
+
+        it('objectBoundingBox radial fill', () => {
+            const two = (paint: string): string =>
+                `<rect x="2" y="2" width="8" height="20" fill="${paint}"/><rect x="12" y="2" width="8" height="20" fill="${paint}"/>`;
+            const svg = doc(`${radial}<g id="t">${two('context-fill')}</g>`, '<use href="#t" fill="url(#rg)"/>');
+            // Box (2, 2) 18×20: the gradient's ellipse, by hand.
+            const byHand = `<radialGradient id="h" gradientUnits="userSpaceOnUse" cx="0.5" cy="0.5" r="0.5" gradientTransform="matrix(18 0 0 20 2 2)">${stops}</radialGradient>`;
+            expectRendersLike(svg, doc(byHand, two('url(#h)')));
+        });
+
+        it('userSpaceOnUse fill and stroke, in the use space through the shapes transforms', () => {
+            const paint = 'stroke-width="1.5"';
+            const svg = doc(
+                `${user}${shapes(`fill="context-fill" stroke="context-stroke" ${paint}`)}`,
+                '<use href="#t" fill="url(#lu)" stroke="url(#lu)"/>',
+            );
+            expectRendersLike(svg, doc(user, shapes(`fill="url(#lu)" stroke="url(#lu)" ${paint}`, '')));
+        });
+
+        it('keeps the warning for userSpaceOnUse on a transformed use (its x / y offset is not told apart)', () => {
+            for (const use of [
+                '<use href="#t" x="1" fill="url(#lu)"/>',
+                '<use href="#t" transform="scale(0.5)" fill="url(#lu)"/>',
+            ]) {
+                const { xml, codes } = run(doc(`${user}${shapes('fill="context-fill"')}`, use));
+                expect(codes).toEqual(['unsupported-paint', 'unsupported-paint']);
+                expect(xml).not.toContain('<gradient');
+            }
+        });
+
+        it('keeps the warning for a pattern (wpt paint-context-008), a nested context server, an unmeasurable box', () => {
+            const pattern =
+                '<pattern id="p" width="4" height="4" patternUnits="userSpaceOnUse"><rect width="2" height="2" fill="#f00"/></pattern>';
+            for (const optimize of [false, true]) {
+                const codes = (svg: string): string[] => convert(svg, { optimize }).warnings.map((w) => w.code);
+                expect(
+                    codes(doc(`${pattern}${rect('fill="context-fill"')}`, '<use href="#r" fill="url(#p)"/>')),
+                ).toEqual(['unsupported-paint']);
+                // The inner use passes on the outer use's gradient: whose box lays it out is ambiguous.
+                const nested = `${obb}${rect('fill="context-fill"')}<g id="mid"><use href="#r" fill="context-fill"/></g>`;
+                expect(codes(doc(nested, '<use href="#mid" fill="url(#lg)"/>'))).toEqual(['unsupported-paint']);
+                // A nested <svg> in the content: its box is not measured.
+                const inner = '<svg x="12" width="10" height="10"><rect width="5" height="5"/></svg>';
+                expect(
+                    codes(
+                        doc(
+                            `${obb}<g id="t">${rect('fill="context-fill"')}${inner}</g>`,
+                            '<use href="#t" fill="url(#lg)"/>',
+                        ),
+                    ),
+                ).toEqual(['unsupported-paint']);
+            }
+        });
+
+        it('falls back like a direct paint for an unknown gradient (fallback color)', () => {
+            const { xml, codes } = run(doc(rect('fill="context-fill"'), '<use href="#r" fill="url(#nope) #0f0"/>'));
+            expect(codes).toEqual([]);
+            expect(xml).toContain('android:fillColor="#FF00FF00"');
+        });
     });
 
     it('keeps the warning outside a <use> instance', () => {

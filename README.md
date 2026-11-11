@@ -202,6 +202,25 @@ the directory of the XML, or beside it when that directory is named `drawable`. 
 even with warnings, never gets a PNG; an invalid SVG still fails. The renderer is an optional
 dependency, loaded only when a fallback is needed: `npm install @resvg/resvg-js`.
 
+The same renderer is exported by the Node API (ESM and CommonJS, not the browser builds):
+
+```ts
+import { convert, ConversionError, renderFallbackPng, DENSITIES, type Density } from 'svg-vectordrawable';
+
+try {
+    writeFileSync('res/drawable/blur.xml', convert(svg, { strict: true }).xml);
+} catch (err) {
+    if (!(err instanceof ConversionError)) throw err;
+    for (const density of Object.keys(DENSITIES) as Density[])
+        writeFileSync(`res/drawable-${density}/blur.png`, renderFallbackPng(svg, { density }));
+}
+```
+
+`renderFallbackPng(svg, { density, width, height })` returns a PNG `Buffer`: `density` is one of the
+`DENSITIES` keys (default `'mdpi'`), `width` / `height` are in dp as for `convert`. It throws on an
+invalid SVG or option, and with a one-line `npm install @resvg/resvg-js` message when the renderer is
+not installed.
+
 ### Browser
 
 A browser build (svgo's browser bundle, no Node built-ins) is published under the `./browser`

@@ -6,7 +6,7 @@ import { existsSync, readFileSync } from 'node:fs';
 import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 import { Worker } from 'node:worker_threads';
-import { buildOptions, createConverter, describeError, svgDataUrl } from './core.js';
+import { buildOptions, createConverter, describeError, describeUnresolvedColors, svgDataUrl } from './core.js';
 
 const here = (path) => fileURLToPath(new URL(path, import.meta.url));
 const BUNDLE = here('../dist/browser-lite.global.js');
@@ -107,6 +107,26 @@ test('an SVG with <text> reports unsupported-element with its category', async (
     assert.equal(strict.status, 'error');
     assert.equal(strict.code, 'unsupported-element');
     assert.match(describeError(strict), /^\[unsupported-element\] .*\(lossy, rejected by strict mode\)$/);
+});
+
+test('a color reference without a preview value is reported as drawn in gray', async (t) => {
+    const { converter } = trackedConverter([spawnPlaygroundWorker]);
+    t.after(converter.dispose);
+    const svg =
+        '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path fill="currentColor" d="M0 0h24v24z"/></svg>';
+    const outcome = await converter.convert(svg, buildOptions({ currentColor: '?attr/colorPrimary' }));
+    assert.equal(outcome.status, 'ok', outcome.message);
+    assert.match(outcome.xml, /android:fillColor="\?attr\/colorPrimary"/);
+    assert.match(outcome.preview, /^<svg[^>]*>/);
+    assert.deepEqual(outcome.unresolvedColors, ['?attr/colorPrimary']);
+    assert.equal(
+        describeUnresolvedColors(outcome.unresolvedColors),
+        'Drawn in gray (no preview value): ?attr/colorPrimary',
+    );
+
+    const literal = await converter.convert(svg, buildOptions({ currentColor: '#FF0000' }));
+    assert.deepEqual(literal.unresolvedColors, []);
+    assert.equal(describeUnresolvedColors(literal.unresolvedColors), '');
 });
 
 test('an invalid SVG reports the error and the worker keeps working', async (t) => {

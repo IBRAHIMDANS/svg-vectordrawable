@@ -35,10 +35,9 @@ jobs:
               run: pnpm exec tsc -p integrations/figma-plugin/tsconfig.json
             - name: Figma plugin build and tests
               working-directory: integrations/figma-plugin
-              # --test-force-exit: worker.terminate() re-refs the test's worker thread, which then sometimes
-              # keeps ui-test.ts alive after every test has passed. timeout-minutes bounds any other hang.
+              # Same command as the plugin's `pnpm test`. timeout-minutes bounds any hang.
               timeout-minutes: 5
-              run: node scripts/build.ts && node --test --test-force-exit "test/*-test.ts"
+              run: node scripts/build.ts && node --test "test/*-test.ts"
             - name: Playground smoke test
               # Real worker.js against the fresh browser-lite bundle; pages.yml only runs it after merge.
               if: matrix.node-version == 22

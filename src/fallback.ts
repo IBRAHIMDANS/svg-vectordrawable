@@ -1,5 +1,6 @@
 import { createRequire } from 'node:module';
 import type { XastElement, XastRoot } from './ast.js';
+import { vectorSize } from './convert.js';
 import { optimize } from './svgo.js';
 import { rootLayout } from './viewport.js';
 
@@ -62,18 +63,16 @@ function checkDp(name: string, value: number | undefined): void {
  * Sets the root `<svg>` to `scale` px per dp of the drawable's size, its viewBox to the viewport the
  * `<vector>` would have (rootLayout: grown or shrunk for preserveAspectRatio, aligned) stretched
  * onto it with `preserveAspectRatio="none"`, as Android stretches a vector's viewport. The size is
- * the drawable's, `width` / `height` overrides included (as `convert`'s `vectorSize`).
+ * the drawable's, `width` / `height` overrides included (`convert`'s `vectorSize`).
  */
 function sizeRoot(root: XastRoot, scale: number, width?: number, height?: number): void {
     const svg = root.children.find((c): c is XastElement => c.type === 'element' && c.name === 'svg');
     if (!svg) throw new Error('No <svg> root element found');
     const attrs = (svg.attributes ??= {});
     const layout = rootLayout(attrs);
-    const ratio = layout.width / layout.height;
-    const dpWidth = width ?? (height === undefined ? layout.width : height * ratio);
-    const dpHeight = height ?? (width === undefined ? layout.height : width / ratio);
-    attrs.width = String(Math.max(1, Math.round(dpWidth * scale)));
-    attrs.height = String(Math.max(1, Math.round(dpHeight * scale)));
+    const size = vectorSize(layout, width, height);
+    attrs.width = String(Math.max(1, Math.round(size.width * scale)));
+    attrs.height = String(Math.max(1, Math.round(size.height * scale)));
     attrs.viewBox = `${-layout.offsetX} ${-layout.offsetY} ${layout.viewportWidth} ${layout.viewportHeight}`;
     attrs.preserveAspectRatio = 'none';
 }

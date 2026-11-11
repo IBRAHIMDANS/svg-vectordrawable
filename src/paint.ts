@@ -364,28 +364,179 @@ function decimalsOf(literal: string): number {
     return (dot < 0 ? 0 : mantissa!.length - dot - 1) - (exponent ? parseInt(exponent, 10) : 0);
 }
 
+/** A path command letter, or a number in pathData (numbers first, so an exponent's `e` stays in its number). */
+const PATH_TOKEN_RE = /([+-]?(?:\d+\.?\d*|\.\d+)(?:[eE][+-]?\d+)?)|([A-Za-z])/g;
+
+/** Axis (0 = x, 1 = y) each argument of a command moves along; null for arc radii, rotation and flags. */
+const ARG_AXES: Record<string, readonly (0 | 1 | null)[]> = {
+    M: [0, 1],
+    L: [0, 1],
+    H: [0],
+    V: [1],
+    C: [0, 1, 0, 1, 0, 1],
+    S: [0, 1, 0, 1],
+    Q: [0, 1, 0, 1],
+    T: [0, 1],
+    A: [null, null, null, null, null, 0, 1],
+    Z: [],
+};
+
+/**
+ * Arc radii scale `λ` (SVG 2 implementation notes, B.2.5 step 3): a renderer scales the radii up by
+ * `√λ` when λ > 1, i.e. when they are too small to join the end points. λ = 1 is a half-ellipse.
+ */
+function arcLambda(rx: number, ry: number, degrees: number, dx: number, dy: number): number {
+    const phi = (degrees * Math.PI) / 180;
+    const x = (Math.cos(phi) * dx + Math.sin(phi) * dy) / 2;
+    const y = (-Math.sin(phi) * dx + Math.cos(phi) * dy) / 2;
+    return (x * x) / (rx * rx) + (y * y) / (ry * ry);
+}
+
+/**
+ * Distance from an arc's center to its chord midpoint, in half chords of the arc mapped to a unit
+ * circle: 0 for a half-ellipse (λ ≥ 1). Near λ = 1 it is √(1/λ − 1), so a tiny change of the chord
+ * moves the center a lot: that is what rounding a half-ellipse's end point does.
+ */
+function arcCenterOffset(lambda: number): number {
+    return Math.sqrt(Math.max(0, 1 / lambda - 1));
+}
+
+/** A number of `d`: its source span `[begin, end)` and its new text (null: kept as written). */
+interface NumberEdit {
+    begin: number;
+    end: number;
+    text: string | null;
+}
+
 /**
  * Rounds the numbers of `d` that carry more than `precision` decimals, leaving everything else
  * (commands, separators, shorter numbers) byte-identical. A rounded number that lost its sign or
  * its dot is separated from a neighbour it would otherwise merge with (`1-0.00001` → `1 0`,
  * `1.00001.5` → `1 .5`). Arc flags must already be separated (see `normalizeArcFlags`).
+ *
+ * Coordinates are rounded in absolute space: a rounded relative coordinate is the rounded absolute
+ * point minus the current point as written, so rounding errors do not add up along a run of
+ * relative commands; a number kept as written leaves the gap unchanged. Every point thus stays
+ * within half a unit of `precision` of the source. Rotation and flags are rounded on their own, and
+ * so is every number past malformed data.
+ *
+ * Arc radii are rounded on their own too, except near a half-ellipse (as a `<circle>` gives): its
+ * center moves by about √(2r·δ) when rounding shortens the chord by δ. When the source center is
+ * nearer the chord midpoint than the rounded arc's center, the radii are rounded down to fit the
+ * rounded chord, which renderers scale back up to an exact half-ellipse.
  */
 export function roundPathNumbers(d: string, precision: number): string {
+    if (!(d.match(PATH_NUMBER_RE) ?? []).some((literal) => decimalsOf(literal) > precision)) return d;
+    const unit = 10 ** -precision;
+    // Current point and subpath start, exact (source) and as written out (rounded).
+    let pen: [number, number] = [0, 0];
+    let start: [number, number] = [0, 0];
+    let outPen: [number, number] = [0, 0];
+    let outStart: [number, number] = [0, 0];
+    // The argument group being read: source values (coordinates made absolute), written values, edits.
+    let args: number[] = [];
+    let outArgs: number[] = [];
+    let groupEdits: NumberEdit[] = [];
+    let cmd: string | null = null;
+    let tracking = true;
+    const edits: NumberEdit[] = [];
+
+    for (const m of d.matchAll(PATH_TOKEN_RE)) {
+        const letter = m[2];
+        if (letter !== undefined) {
+            if (!(letter.toUpperCase() in ARG_AXES)) tracking = false;
+            cmd = letter;
+            [args, outArgs, groupEdits] = [[], [], []];
+            if (letter === 'Z' || letter === 'z') {
+                pen = [...start];
+                outPen = [...outStart];
+            }
+            continue;
+        }
+        const literal = m[1]!;
+        const value = parseFloat(literal);
+        const fits = decimalsOf(literal) <= precision;
+        const edit: NumberEdit = {
+            begin: m.index,
+            end: m.index + literal.length,
+            text: fits ? null : formatNumber(value, precision),
+        };
+        edits.push(edit);
+        const upper = cmd?.toUpperCase();
+        const axes = upper === undefined ? undefined : ARG_AXES[upper];
+        // A number before any command or after a closepath is malformed data.
+        if (!axes?.length) tracking = false;
+        if (!tracking || !cmd || !upper || !axes) continue;
+
+        const axis = axes[args.length];
+        const relative = cmd !== upper;
+        let source = value;
+        let written = fits ? value : parseFloat(edit.text!);
+        if (axis !== null && axis !== undefined) {
+            if (relative) source += pen[axis];
+            if (fits) {
+                // Kept as written: the gap to the source point stays what it was.
+                if (relative) written = outPen[axis] + value;
+            } else {
+                written = parseFloat(formatNumber(source, precision));
+                if (relative) edit.text = formatNumber(written - outPen[axis], precision);
+            }
+        }
+        args.push(source);
+        outArgs.push(written);
+        groupEdits.push(edit);
+        if (args.length < axes.length) continue;
+
+        // Group complete: its last x and y are the new current point (H and V move one axis).
+        const next: [number, number] = [...pen];
+        const outNext: [number, number] = [...outPen];
+        axes.forEach((a, i) => {
+            if (a === null) return;
+            next[a] = args[i]!;
+            outNext[a] = outArgs[i]!;
+        });
+        if (upper === 'A') {
+            // Negative radii are taken as their absolute value (SVG 2 implementation notes, B.2.5 step 1).
+            const [rx, ry, outRx, outRy] = [args[0]!, args[1]!, outArgs[0]!, outArgs[1]!].map(Math.abs) as [
+                number,
+                number,
+                number,
+                number,
+            ];
+            const lambda = arcLambda(rx, ry, args[2]!, next[0] - pen[0], next[1] - pen[1]);
+            const outLambda = arcLambda(outRx, outRy, outArgs[2]!, outNext[0] - outPen[0], outNext[1] - outPen[1]);
+            const offset = arcCenterOffset(lambda);
+            // The source center is nearer the chord midpoint than the rounded arc's: fit the radii.
+            if (outLambda > 0 && outLambda < 1 && offset < arcCenterOffset(outLambda) - offset) {
+                const scale = Math.sqrt(outLambda);
+                [outRx, outRy].forEach((r, i) => {
+                    groupEdits[i]!.text = formatNumber(Math.floor((r * scale) / unit) * unit, precision);
+                });
+            }
+        }
+        pen = next;
+        outPen = outNext;
+        if (upper === 'M') {
+            start = [...pen];
+            outStart = [...outPen];
+            // Further pairs after a moveto are implicit linetos.
+            cmd = relative ? 'l' : 'L';
+        }
+        [args, outArgs, groupEdits] = [[], [], []];
+    }
+
     let out = '';
     let last = 0;
-    for (const m of d.matchAll(PATH_NUMBER_RE)) {
-        const literal = m[0];
-        if (decimalsOf(literal) <= precision) continue;
-        const start = m.index;
-        const end = start + literal.length;
-        let rounded = formatNumber(parseFloat(literal), precision);
-        out += d.slice(last, start);
+    for (const { begin, end, text } of edits) {
+        if (text === null) continue;
+        let rounded = text;
+        out += d.slice(last, begin);
         if (/^\d/.test(rounded) && /[\d.]$/.test(out)) rounded = ` ${rounded}`;
         if (d[end] === '.' && !rounded.includes('.')) rounded += ' ';
         out += rounded;
         last = end;
     }
-    return last === 0 ? d : out + d.slice(last);
+    return out + d.slice(last);
 }
 
 /**
