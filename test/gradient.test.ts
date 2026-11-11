@@ -505,3 +505,148 @@ describe('wpt reproductions render like their wpt reference', () => {
         }
     }
 });
+
+describe('collectGradients — empty or invalid attributes do not block href inheritance', () => {
+    const svg = (defs: string, shape = '<rect width="100" height="100" fill="url(#g)"/>'): string =>
+        `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><defs>${defs}</defs>${shape}</svg>`;
+    const coords = (xml: string): string => xml.match(/<gradient\s[^>]*>/)![0].replace(/\s+/g, ' ');
+    const both = (input: string): string[] => [true, false].map((optimize) => coords(convert(input, { optimize }).xml));
+    const stops = '<stop offset="0" stop-color="green"/><stop offset="1" stop-color="red"/>';
+
+    // wpt pservers/reftests/{linear,radial}-gradient-transform-empty-attr.svg
+    it('inherits the template gradientTransform under gradientTransform="" (linear), in both modes', () => {
+        const input = svg(
+            `<linearGradient id="t" gradientTransform="translate(1,0)">${stops}</linearGradient>` +
+                '<linearGradient id="g" href="#t" gradientTransform=""/>',
+        );
+        for (const g of both(input)) expect(g).toContain('android:startX="100" android:startY="0" android:endX="200"');
+    });
+
+    it('inherits the template gradientTransform under gradientTransform="" (radial), in both modes', () => {
+        const input = svg(
+            `<radialGradient id="t" gradientTransform="translate(0,-2)">${stops}</radialGradient>` +
+                '<radialGradient id="g" xlink:href="#t" gradientTransform="" xmlns:xlink="http://www.w3.org/1999/xlink"/>',
+        );
+        for (const g of both(input)) expect(g).toContain('android:centerX="50" android:centerY="-150"');
+    });
+
+    it('treats an invalid value like an empty one, for every inherited attribute', () => {
+        const cases: [template: string, own: string, expected: string][] = [
+            ['gradientTransform="translate(1,0)"', 'gradientTransform="foo"', 'android:startX="100"'],
+            ['x2="0.5"', 'x2=""', 'android:endX="50"'],
+            ['x2="0.5"', 'x2="abc"', 'android:endX="50"'],
+            ['gradientUnits="userSpaceOnUse" x2="50"', 'gradientUnits=""', 'android:endX="50"'],
+            ['gradientUnits="userSpaceOnUse" x2="50"', 'gradientUnits="bogus"', 'android:endX="50"'],
+            ['spreadMethod="reflect" x2="0.5"', 'spreadMethod=""', 'android:tileMode="mirror"'],
+            ['spreadMethod="reflect" x2="0.5"', 'spreadMethod="Reflect"', 'android:tileMode="mirror"'],
+        ];
+        for (const [template, own, expected] of cases) {
+            const input = svg(
+                `<linearGradient id="t" ${template}>${stops}</linearGradient><linearGradient id="g" href="#t" ${own}/>`,
+            );
+            for (const g of both(input)) expect(g, own).toContain(expected);
+        }
+    });
+
+    it('still lets a valid value override the template', () => {
+        const input = (own: string): string =>
+            svg(
+                `<linearGradient id="t" gradientTransform="translate(1,0)" x2="0.5">${stops}</linearGradient>` +
+                    `<linearGradient id="g" href="#t" ${own}/>`,
+            );
+        for (const g of both(input('gradientTransform="scale(2)"'))) expect(g).toContain('android:startX="0"');
+        for (const g of both(input('x2="1"')))
+            expect(g).toContain('android:startX="100" android:startY="0" android:endX="200"');
+    });
+
+    it('keeps the initial value for an invalid attribute without a template', () => {
+        const input = svg(
+            `<linearGradient id="g" x2="abc" gradientUnits="bogus" gradientTransform="foo">${stops}</linearGradient>`,
+        );
+        for (const g of both(input))
+            expect(g).toContain('android:startX="0" android:startY="0" android:endX="100" android:endY="0"');
+    });
+});
+
+describe('gradient features VectorDrawable cannot express are reported on use', () => {
+    const svg = (defs: string, shapes = '<rect width="100" height="100" fill="url(#g)"/>'): string =>
+        `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><defs>${defs}</defs>${shapes}</svg>`;
+    const codes = (input: string, optimize: boolean): string[] =>
+        convert(input, { optimize }).warnings.map((w) => w.code);
+
+    it('replaces an unparseable stop-color with black and reports unsupported-paint', () => {
+        const input = svg(
+            '<linearGradient id="g"><stop offset="0" stop-color="nonsense"/><stop offset="1" stop-color="red"/></linearGradient>',
+        );
+        for (const optimize of [true, false]) {
+            const { xml, warnings } = convert(input, { optimize });
+            expect(xml).toContain('<item android:offset="0" android:color="#FF000000" />');
+            expect(xml).toContain('<item android:offset="1" android:color="#FFFF0000" />');
+            expect(warnings).toEqual([
+                expect.objectContaining({
+                    code: 'unsupported-paint',
+                    node: 'stop',
+                    message: expect.stringContaining('"nonsense"'),
+                }),
+            ]);
+        }
+    });
+
+    it('keeps the stop-opacity on the black replacement', () => {
+        const stops = collectGradients(
+            [linear('g', [stop({ offset: '0', 'stop-color': 'nonsense', 'stop-opacity': '0.5' })])],
+            '#000',
+            noWarn,
+        ).get('g')?.stops;
+        expect(stops?.[0]?.color).toBe('#80000000');
+    });
+
+    // wpt pservers/reftests/gradient-color-interpolation.svg
+    it('reports color-interpolation="linearRGB" as gradient-approximated (sRGB interpolation)', () => {
+        const input = svg(
+            '<linearGradient id="g" color-interpolation="linearRGB"><stop offset="0" stop-color="white"/><stop offset="1" stop-color="blue"/></linearGradient>',
+        );
+        for (const optimize of [true, false]) expect(codes(input, optimize)).toEqual(['gradient-approximated']);
+        const srgb = input.replace('linearRGB', 'sRGB');
+        for (const optimize of [true, false]) expect(codes(srgb, optimize)).toEqual([]);
+    });
+
+    it('reports SMIL animations in a gradient, its stops or its template as unsupported-element', () => {
+        const input = svg(
+            '<linearGradient id="t"><animate attributeName="x2" to="0.5" dur="1s"/></linearGradient>' +
+                '<linearGradient id="g" href="#t"><set attributeName="y2" to="1"/>' +
+                '<stop offset="0" stop-color="green"><animate attributeName="stop-color" to="blue" dur="1s"/></stop>' +
+                '<stop offset="1" stop-color="red"/></linearGradient>',
+        );
+        for (const optimize of [true, false]) {
+            const { warnings } = convert(input, { optimize });
+            expect(warnings.map((w) => [w.code, w.node])).toEqual([
+                ['unsupported-element', 'set'],
+                ['unsupported-element', 'animate'],
+                ['unsupported-element', 'animate'],
+            ]);
+        }
+    });
+
+    it('reports once per gradient, however many shapes use it, and not at all when it is unused', () => {
+        const defs =
+            '<linearGradient id="g" color-interpolation="linearRGB"><stop offset="0" stop-color="nonsense"/><stop offset="1" stop-color="red"/></linearGradient>';
+        const twice =
+            '<rect width="40" height="40" fill="url(#g)"/><rect x="50" width="40" height="40" fill="none" stroke="url(#g)"/>';
+        for (const optimize of [true, false]) {
+            expect(codes(svg(defs, twice), optimize)).toEqual(['unsupported-paint', 'gradient-approximated']);
+            expect(codes(svg(defs, '<rect width="10" height="10"/>'), optimize)).toEqual([]);
+        }
+    });
+
+    it('reports for an elliptical radial drawn exactly in a group too', () => {
+        const input = svg(
+            '<radialGradient id="g" gradientTransform="scale(1 0.5)" color-interpolation="linearRGB"><stop offset="0" stop-color="red"/><stop offset="1" stop-color="blue"/></radialGradient>',
+        );
+        for (const optimize of [true, false]) {
+            const { xml, warnings } = convert(input, { optimize });
+            expect(xml).toContain('android:scaleY="0.5"');
+            expect(warnings.map((w) => w.code)).toEqual(['gradient-approximated']);
+        }
+    });
+});

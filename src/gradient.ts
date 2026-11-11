@@ -1,6 +1,7 @@
 import type { BBox, Viewport, XastElement } from './ast.js';
 import { toAndroidColor } from './color.js';
 import type { ColorRefs } from './colorRef.js';
+import { ANIMATIONS } from './elements.js';
 import { presentation } from './style.js';
 import { applyPoint, IDENTITY, multiply, parseTransform, scaleFactor, type Matrix } from './transform.js';
 import type { Warning } from './types.js';
@@ -24,6 +25,12 @@ export interface RawGradient {
     matrix: Matrix | null;
     stops: GradientStop[];
     tileMode?: TileMode;
+    /**
+     * Reports, on the first call only, what the gradient loses in a VectorDrawable (an unparseable
+     * stop color, `linearRGB` interpolation, SMIL animations). Called on each use, so a gradient
+     * that is never painted reports nothing, in both `optimize` modes.
+     */
+    report?: () => void;
 }
 
 /** A gradient with Android coordinates computed, ready to render. */
@@ -127,18 +134,50 @@ function normalizeStops(stops: GradientStop[]): GradientStop[] {
     return out;
 }
 
+/** true for a coordinate {@link coord} reads (a length, a percentage, or a leading number). */
+const isCoordinate = (v: string): boolean => !Number.isNaN(parseLength(v, 1)) || !Number.isNaN(parseFloat(v));
+
+/** Valid values of the attributes a gradient inherits through `href`. */
+const VALID: Record<string, (v: string) => boolean> = {
+    ...Object.fromEntries(['x1', 'y1', 'x2', 'y2', 'cx', 'cy', 'r', 'fx', 'fy', 'fr'].map((k) => [k, isCoordinate])),
+    gradientUnits: (v) => v === 'userSpaceOnUse' || v === 'objectBoundingBox',
+    spreadMethod: (v) => Object.hasOwn(SPREAD, v),
+    // `none` is left out as well, like svgo does, so both `optimize` modes inherit the same transform.
+    gradientTransform: (v) => parseTransform(v) !== null,
+};
+
+/**
+ * The attributes of `el` that count as specified: an empty or invalid value of an inherited
+ * gradient attribute is left out, so the template's value (or the initial one) applies — wpt
+ * `pservers/reftests/{linear,radial}-gradient-transform-empty-attr.svg`. Without a template this is
+ * SVG 2's rule for an invalid value (types §4.2: the initial value), so nothing changes there.
+ */
+function specifiedAttrs(el: XastElement): Record<string, string> {
+    return Object.fromEntries(Object.entries(el.attributes ?? {}).filter(([k, v]) => VALID[k]?.(v) ?? true));
+}
+
+/** Calls `fn` on the first call only. */
+function once(fn: () => void): () => void {
+    let done = false;
+    return () => {
+        if (done) return;
+        done = true;
+        fn();
+    };
+}
+
 /**
  * Builds the gradient lookup, resolving `href`/`xlink:href` inheritance (shared stops/attributes).
  * Coordinates are kept raw; placement happens in {@link resolveGradient} so objectBoundingBox
  * gradients can use the filled path's bounding box. Gradients without stops are left out, and
  * so are those with a non-invertible gradientTransform (an invalid paint server: the paint's
- * fallback color applies).
+ * fallback color applies). What a gradient loses goes to `warn` when it is first used (see
+ * {@link RawGradient.report}).
  */
 export function collectGradients(
     gradientEls: XastElement[],
     currentColor: string,
-    // Kept for call-site symmetry with resolveGradient; collection itself never warns.
-    _warn: (w: Warning) => void,
+    warn: (w: Warning) => void,
     /** Android references for stop colors (`currentColor` / `colorMap` options); literals without it. */
     colors?: ColorRefs,
 ): Map<string, RawGradient> {
@@ -147,38 +186,63 @@ export function collectGradients(
         const id = el.attributes?.id;
         if (id) byId.set(id, el);
     }
-    const attrsOf = (el: XastElement, seen = 0): Record<string, string> => {
-        const href = el.attributes?.href ?? el.attributes?.['xlink:href'];
-        const parent = seen < 10 && href?.startsWith('#') ? byId.get(href.slice(1)) : undefined;
-        return { ...(parent ? attrsOf(parent, seen + 1) : {}), ...el.attributes };
-    };
-    const stopsOf = (el: XastElement, seen = 0): XastElement[] => {
-        const own = (el.children ?? []).filter((c) => c.name === 'stop');
-        if (own.length) return own;
-        const href = el.attributes?.href ?? el.attributes?.['xlink:href'];
-        const parent = seen < 10 && href?.startsWith('#') ? byId.get(href.slice(1)) : undefined;
-        return parent ? stopsOf(parent, seen + 1) : [];
+    /** `el` then its templates, nearest first (at most 10 `href` hops, cycles cut). */
+    const chainOf = (el: XastElement): XastElement[] => {
+        const chain = [el];
+        for (let i = 0; i < 10; i++) {
+            const href = chain[i]!.attributes?.href ?? chain[i]!.attributes?.['xlink:href'];
+            const next = href?.startsWith('#') ? byId.get(href.slice(1)) : undefined;
+            if (!next || chain.includes(next)) break;
+            chain.push(next);
+        }
+        return chain;
     };
 
     const out = new Map<string, RawGradient>();
     for (const el of gradientEls) {
         const id = el.attributes?.id;
         if (!id) continue;
-        const a = attrsOf(el);
+        const chain = chainOf(el);
+        const a = Object.assign({}, ...chain.map(specifiedAttrs).reverse()) as Record<string, string>;
+        // The nearest element of the chain with stops supplies them all (SVG 2 §14.1.1).
+        const stopEls =
+            chain.map((g) => (g.children ?? []).filter((c) => c.name === 'stop')).find((s) => s.length) ?? [];
+        const notes: Warning[] = [];
+        const stopColor = (s: XastElement, opacity: number | undefined): string => {
+            const value = presentation(s, 'stop-color') ?? '#000';
+            const color = colors ? colors.stop(value, opacity, id) : toAndroidColor(value, opacity, currentColor);
+            if (color) return color;
+            // An invalid value means the initial black (SVG 2 types §4.2); a valid one the parser
+            // does not know is lost.
+            notes.push({
+                code: 'unsupported-paint',
+                message: `Gradient "${id}" has stop-color="${value.trim()}", not a color the converter can parse; using black.`,
+                node: 'stop',
+            });
+            return colors ? colors.stop('#000000', opacity, id)! : toAndroidColor('#000000', opacity, currentColor)!;
+        };
         const stops = normalizeStops(
-            stopsOf(el)
-                .map((s) => {
-                    const opacity = presentation(s, 'stop-opacity');
-                    const stopColor = presentation(s, 'stop-color') ?? '#000';
-                    const stopOpacity = opacity !== undefined ? parseFloat(opacity) : undefined;
-                    const color = colors
-                        ? colors.stop(stopColor, stopOpacity, id)
-                        : toAndroidColor(stopColor, stopOpacity, currentColor);
-                    return color ? { offset: parseOffset(presentation(s, 'offset')), color } : null;
-                })
-                .filter((s): s is NonNullable<typeof s> => s !== null),
+            stopEls.map((s) => {
+                const opacity = presentation(s, 'stop-opacity');
+                const color = stopColor(s, opacity !== undefined ? parseFloat(opacity) : undefined);
+                return { offset: parseOffset(presentation(s, 'offset')), color };
+            }),
         );
         if (stops.length === 0) continue;
+        if (presentation(el, 'color-interpolation')?.trim().toLowerCase() === 'linearrgb')
+            notes.push({
+                code: 'gradient-approximated',
+                message: `Gradient "${id}" has color-interpolation="linearRGB": VectorDrawable interpolates in sRGB, so the mid-tones differ.`,
+                node: el.name!,
+            });
+        for (const owner of [...chain, ...stopEls])
+            for (const child of owner.children ?? [])
+                if (child.type === 'element' && ANIMATIONS.has(child.name ?? ''))
+                    notes.push({
+                        code: 'unsupported-element',
+                        message: `<${child.name}> in gradient "${id}" cannot be represented in a VectorDrawable; the static value is used.`,
+                        node: child.name!,
+                    });
         const matrix = parseTransform(a.gradientTransform);
         // A non-invertible gradientTransform makes the paint server invalid (CSS Transforms 1 §8):
         // like browsers (wpt gradient-transform-01/02), the paint then uses its fallback color.
@@ -192,6 +256,7 @@ export function collectGradients(
             matrix,
             stops,
             ...(tileMode ? { tileMode } : {}),
+            ...(notes.length ? { report: once(() => notes.forEach(warn)) } : {}),
         });
     }
     return out;
@@ -261,6 +326,7 @@ export function resolveGradient(
     precision: number,
     warn: (w: Warning) => void,
 ): ResolvedGradient {
+    g.report?.();
     if (g.objectBox && !bbox)
         warn({
             code: 'gradient-bbox-unavailable',
@@ -367,6 +433,7 @@ export function resolveEllipticalRadial(
     precision: number,
     outer: Matrix = IDENTITY,
 ): EllipticalRadial | null {
+    g.report?.(); // the caller paints `g` either way: exactly here, or through resolveGradient
     if (g.type !== 'radial' || (g.objectBox && !bbox)) return null;
     const frame = gradientFrame(g, bbox ?? { x: 0, y: 0, width: 0, height: 0 }, viewport);
     const m = multiply(outer, frame.base);

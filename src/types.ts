@@ -6,7 +6,7 @@ export const WARNING_CODES = [
     'unsupported-element',
     /** A non-clip `mask`, `filter`, `marker*`, `vector-effect`, `paint-order` or unsupported join; ignored. */
     'unsupported-attribute',
-    /** A dash pattern that cannot be resolved (e.g. `em` units); the stroke is drawn solid. */
+    /** A dash pattern that cannot be resolved (e.g. `ex` units); the stroke is drawn solid. */
     'unsupported-stroke-dasharray',
     /** No longer emitted (gradient strokes are converted); kept for compatibility. */
     'unsupported-stroke-gradient',
@@ -53,6 +53,11 @@ export const WARNING_CODES = [
      * memory (Android recommends at most 200×200dp; use a bitmap for big artwork).
      */
     'large-vector',
+    /**
+     * A `<mask>` converted to a clip-path by ignoring the stroke of its content (a clip-path has no
+     * stroke outline): the masked area differs along the stroked outlines. Reported once per mask.
+     */
+    'mask-approximated',
 ] as const;
 
 /** Stable machine-readable warning codes. */
@@ -83,6 +88,7 @@ export const WARNING_CATEGORIES: Readonly<Record<WarningCode, WarningCategory>> 
     'group-skew': 'approximation',
     'opacity-approximated': 'approximation',
     'gradient-approximated': 'approximation',
+    'mask-approximated': 'approximation',
     'min-sdk-exceeded': 'info',
     'long-path-data': 'info',
     'large-vector': 'info',

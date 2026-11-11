@@ -44,7 +44,7 @@
     ],
     "sideEffects": false,
     "scripts": {
-        "build": "tsup",
+        "build": "tsup && node scripts/fix-dts-svgo.mjs",
         "test": "vitest run",
         "test:watch": "vitest",
         "test:coverage": "vitest run --coverage",

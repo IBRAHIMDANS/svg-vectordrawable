@@ -1,5 +1,5 @@
 import type { ConvertContext } from './context.js';
-import { foreignElements, GROUPS, isNotRendered, pathDataOf, UNSUPPORTED } from './elements.js';
+import { foreignElements, GROUPS, isNotRendered, pathDataOf, switchChild, UNSUPPORTED } from './elements.js';
 import type { BBox, XastElement } from './ast.js';
 import { fillOf, isHidden, resolveStyle, strokeWidthOf, type Inherited } from './inherited.js';
 import { pathBBox, transformPathData } from './pathData.js';
@@ -40,6 +40,11 @@ function drawableBoxes(
         const mm = own ? multiply(m, own) : m;
         if (GROUPS.has(c.name)) {
             drawableBoxes(ctx, c, st, mm, foreign, out);
+            continue;
+        }
+        if (c.name === 'switch') {
+            const { child } = switchChild(c, foreign);
+            if (child) drawableBoxes(ctx, { ...c, children: [child] }, st, mm, foreign, out);
             continue;
         }
         if (c.name === 'svg') {
