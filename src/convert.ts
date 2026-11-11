@@ -173,18 +173,15 @@ export function convert(svg: string, options: ConvertOptions = {}): ConvertResul
     const step = ' '.repeat(indent);
     const r = (v: number): string => formatNumber(v, floatPrecision);
 
+    const gradientEls = elementsNamed(svgEl, 'linearGradient', 'radialGradient');
     const ctx: ConvertContext = {
         warn,
         precision: floatPrecision,
         step,
         fillBlackForUnfilled,
         colors,
-        gradients: collectGradients(
-            elementsNamed(svgEl, 'linearGradient', 'radialGradient'),
-            currentColor,
-            warn,
-            colors,
-        ),
+        gradients: collectGradients(gradientEls, currentColor, warn, colors),
+        gradientIds: new Set(gradientEls.map((g) => g.attributes?.id)),
         patternIds: new Set(
             elementsNamed(svgEl, 'pattern')
                 .map((p) => p.attributes?.id)

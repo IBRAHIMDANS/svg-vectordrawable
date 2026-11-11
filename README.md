@@ -117,26 +117,26 @@ try {
 }
 ```
 
-| Code                           | Meaning                                                                                      |
-| ------------------------------ | -------------------------------------------------------------------------------------------- |
-| `unsupported-element`          | `<text>`, `<image>`, `<foreignObject>`, `<switch>` — skipped                                 |
-| `unsupported-attribute`        | non-clip `mask`, `filter`, `marker*`, `vector-effect`, `paint-order`, `arcs` joins — ignored |
-| `unsupported-stroke-dasharray` | dash pattern that cannot be resolved (`em`/`ex` units) — drawn solid                         |
-| `unsupported-stroke-gradient`  | no longer emitted (gradient strokes are supported); kept for compatibility                   |
-| `unsupported-paint`            | `<pattern>` paint (fallback color or black); translucent stop mapped to a reference          |
-| `unsupported-style`            | CSS left in a `<style>` that could not be applied to elements — ignored                      |
-| `unsupported-clip-path`        | `objectBoundingBox` clip, evenodd clip with crossing contours, unconvertible content         |
-| `gradient-approximated`        | radial focal point; elliptical radial on a path that also has a solid stroke                 |
-| `opacity-approximated`         | opacity folded onto overlapping children / fill+stroke — overlaps look darker                |
-| `missing-gradient`             | `url(#id)` paint pointing at nothing, no fallback — black                                    |
-| `missing-clip-path`            | `clip-path` pointing at nothing — ignored                                                    |
-| `group-skew`                   | skewed `<g>` baked into path geometry                                                        |
-| `gradient-under-skew`          | gradient placement under a baked skew is approximate                                         |
-| `gradient-bbox-unavailable`    | `objectBoundingBox` gradient without a measurable path box                                   |
-| `empty-path`                   | shape without geometry — skipped                                                             |
-| `min-sdk-exceeded` (info)      | the output needs a higher API level than the `minSdk` option                                 |
-| `large-vector` (info)          | `android:width`/`height` above 200 dp (Android lint `VectorRaster`)                          |
-| `long-path-data` (info, off)   | a `pathData` longer than 800 characters (lint `VectorPath`); enable it with `rules`          |
+| Code                           | Meaning                                                                                                 |
+| ------------------------------ | ------------------------------------------------------------------------------------------------------- |
+| `unsupported-element`          | `<text>`, `<image>`, `<foreignObject>`, `<switch>` — skipped                                            |
+| `unsupported-attribute`        | non-clip `mask`, `filter`, `marker*`, `vector-effect`, `paint-order`, `arcs` joins — ignored            |
+| `unsupported-stroke-dasharray` | dash pattern that cannot be resolved (`em`/`ex` units) — drawn solid                                    |
+| `unsupported-stroke-gradient`  | no longer emitted (gradient strokes are supported); kept for compatibility                              |
+| `unsupported-paint`            | `<pattern>` paint (fallback color or black); translucent stop mapped to a reference                     |
+| `unsupported-style`            | CSS left in a `<style>` that could not be applied to elements — ignored                                 |
+| `unsupported-clip-path`        | `objectBoundingBox` clip, evenodd clip with crossing contours, unconvertible content                    |
+| `gradient-approximated`        | radial focal point; elliptical radial on a path that also has a solid stroke                            |
+| `opacity-approximated`         | opacity folded onto overlapping children / fill+stroke — overlaps look darker                           |
+| `missing-gradient`             | `url(#id)` paint, no fallback: pointing at nothing (black fill) or at an invalid gradient (not painted) |
+| `missing-clip-path`            | `clip-path` pointing at nothing — ignored                                                               |
+| `group-skew`                   | skewed `<g>` baked into path geometry                                                                   |
+| `gradient-under-skew`          | gradient placement under a baked skew is approximate                                                    |
+| `gradient-bbox-unavailable`    | `objectBoundingBox` gradient without a measurable path box                                              |
+| `empty-path`                   | shape without geometry — skipped                                                                        |
+| `min-sdk-exceeded` (info)      | the output needs a higher API level than the `minSdk` option                                            |
+| `large-vector` (info)          | `android:width`/`height` above 200 dp (Android lint `VectorRaster`)                                     |
+| `long-path-data` (info, off)   | a `pathData` longer than 800 characters (lint `VectorPath`); enable it with `rules`                     |
 
 Node file helpers:
 

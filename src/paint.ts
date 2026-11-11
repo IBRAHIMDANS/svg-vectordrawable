@@ -208,6 +208,17 @@ function solidPaint(
     return fallback ? { color: fallback, alpha: 1 } : null;
 }
 
+/**
+ * Why a `url(#id)` paint without fallback color draws nothing, null when `id` names no gradient.
+ * A gradient element `collectGradients` left out is an invalid paint server (no usable stop, or a
+ * non-invertible gradientTransform): SVG 2 §13.2 paints nothing for it (SVG 1.1 §13.2.4 likewise
+ * for a gradient without stops).
+ */
+function invalidGradient(ctx: ConvertContext, ref: string, property: 'fill' | 'stroke'): string | null {
+    if (!ctx.gradientIds.has(ref)) return null;
+    return `${property}="url(#${ref})" points at a gradient that is not a valid paint server (no usable stop, or a non-invertible gradientTransform) and has no fallback color; the ${property} is not painted.`;
+}
+
 /** Emits the fill attributes; true when the fill is painted. */
 function emitFill(ctx: ConvertContext, path: PathBuilder, style: Inherited): boolean {
     const fill = parsePaint(fillOf(style, ctx.fillBlackForUnfilled));
@@ -224,12 +235,14 @@ function emitFill(ctx: ConvertContext, path: PathBuilder, style: Inherited): boo
         });
         fillColor ??= '#000000';
     } else if (fill.ref !== undefined && fillColor === undefined) {
+        // An unknown reference keeps the documented black fill (SVG 2 would paint nothing here too).
+        const invalid = invalidGradient(ctx, fill.ref, 'fill');
         ctx.warn({
             code: 'missing-gradient',
-            message: `Path references unknown gradient "${fill.ref}"; using black.`,
+            message: invalid ?? `Path references unknown gradient "${fill.ref}"; using black.`,
             node: 'path',
         });
-        fillColor = '#000000';
+        if (!invalid) fillColor = '#000000';
     }
     // A missing reference with a fallback color is valid SVG: the fallback is the rendering.
     const color = solidPaint(ctx, fillColor, style, 'fill');
@@ -260,7 +273,9 @@ function resolveStroke(ctx: ConvertContext, style: Inherited): StrokePaint | nul
         else if (strokeColor === undefined)
             ctx.warn({
                 code: 'missing-gradient',
-                message: `Stroke references unknown paint "${stroke.ref}"; stroke dropped.`,
+                message:
+                    invalidGradient(ctx, stroke.ref, 'stroke') ??
+                    `Stroke references unknown paint "${stroke.ref}"; stroke dropped.`,
                 node: 'path',
             });
     }
