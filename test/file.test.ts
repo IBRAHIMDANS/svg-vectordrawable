@@ -1,8 +1,8 @@
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { convertDir, convertFile } from '../src/file.js';
+import { batchOutputPath, convertDir, convertFile, findOutputCollisions, listSvgFiles } from '../src/file.js';
 
 const ICON = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M0 0h24v24H0z" fill="#f00"/></svg>';
 const DASHED =
@@ -118,5 +118,65 @@ describe('Android resource names', () => {
             /arrow_left.*Arrow-Left\.svg.*arrow_left\.svg/s,
         );
         expect(existsSync(out)).toBe(false);
+    });
+});
+
+describe('listSvgFiles', () => {
+    it('lists only the top level by default, sorted by name', () => {
+        mkdirSync(join(dir, 'sub'));
+        for (const name of ['b.svg', 'a.SVG', 'c.txt', join('sub', 'd.svg')]) writeFileSync(join(dir, name), ICON);
+        mkdirSync(join(dir, 'folder.svg'));
+        expect(listSvgFiles(dir)).toEqual([join(dir, 'a.SVG'), join(dir, 'b.svg')]);
+    });
+
+    it('walks subdirectories depth first with recursive, without following directory links', () => {
+        mkdirSync(join(dir, 'sub', 'deep'), { recursive: true });
+        for (const name of ['z.svg', join('sub', 'b.svg'), join('sub', 'deep', 'c.svg')])
+            writeFileSync(join(dir, name), ICON);
+        symlinkSync(dir, join(dir, 'sub', 'loop'), 'dir');
+        expect(listSvgFiles(dir, true)).toEqual([
+            join(dir, 'sub', 'b.svg'),
+            join(dir, 'sub', 'deep', 'c.svg'),
+            join(dir, 'z.svg'),
+        ]);
+    });
+});
+
+describe('batchOutputPath', () => {
+    const root = join('icons');
+    const input = join('icons', 'outline', 'Arrow-Left.svg');
+
+    it('keeps the path relative to the input directory under the output directory', () => {
+        expect(batchOutputPath(input, root, 'out')).toBe(join('out', 'outline', 'Arrow-Left.xml'));
+        expect(batchOutputPath(join(root, 'a.svg'), root, 'out')).toBe(join('out', 'a.xml'));
+    });
+
+    it('is flat with androidNames', () => {
+        expect(batchOutputPath(input, root, 'out', { androidNames: true })).toBe(join('out', 'arrow_left.xml'));
+    });
+
+    it('writes next to the input without an output directory', () => {
+        expect(batchOutputPath(input, root)).toBe(join('icons', 'outline', 'Arrow-Left.xml'));
+        expect(batchOutputPath(input, root, undefined, { androidNames: true })).toBe(
+            join('icons', 'outline', 'arrow_left.xml'),
+        );
+    });
+});
+
+describe('findOutputCollisions', () => {
+    const entries = [
+        { input: 'a/x.svg', output: 'out/x.xml' },
+        { input: 'b/x.svg', output: 'out/x.xml' },
+        { input: 'c.svg', output: 'out/c.xml' },
+    ];
+
+    it('groups the inputs sharing an output with androidNames', () => {
+        expect(findOutputCollisions(entries, { androidNames: true })).toEqual([
+            { name: 'out/x.xml', inputs: ['a/x.svg', 'b/x.svg'] },
+        ]);
+    });
+
+    it('is not checked without androidNames', () => {
+        expect(findOutputCollisions(entries)).toEqual([]);
     });
 });

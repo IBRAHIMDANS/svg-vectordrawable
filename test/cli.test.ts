@@ -1,8 +1,8 @@
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { run } from '../src/cli.js';
+import { run, type CliIo, type ReportEntry } from '../src/cli.js';
 
 const ICON = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M0 0h24v24H0z" fill="#f00"/></svg>';
 const DASHED =
@@ -15,14 +15,40 @@ interface CliResult {
 }
 
 // Runs the CLI in-process with captured output (tsx is not a local dependency, so no spawn).
-function svgvd(...args: string[]): CliResult {
+function runWith(stdin: CliIo['stdin'], args: string[]): CliResult {
     let stdout = '';
     let stderr = '';
     const status = run(args, {
         stdout: (text) => (stdout += text),
         stderr: (text) => (stderr += text),
+        stdin,
     });
     return { status, stdout, stderr };
+}
+
+/** Without stdin, as when none can be read. */
+function svgvd(...args: string[]): CliResult {
+    return runWith(undefined, args);
+}
+
+/** With `text` piped on stdin (`isTTY` false), or typed in a terminal. */
+function svgvdStdin(text: string, args: string[], isTTY = false): CliResult & { reads: number } {
+    let reads = 0;
+    const res = runWith(
+        {
+            read: () => {
+                reads++;
+                return text;
+            },
+            isTTY,
+        },
+        args,
+    );
+    return { ...res, reads };
+}
+
+function parseReport(stdout: string): ReportEntry[] {
+    return JSON.parse(stdout) as ReportEntry[];
 }
 
 let dir: string;
@@ -226,10 +252,10 @@ describe('svgvd CLI', () => {
             expect(res.stderr).toMatch(/^✗ Invalid SVG/);
         });
 
-        it('rejects "-" (stdin is not read)', () => {
+        it('rejects "-" when no stdin can be read', () => {
             const res = svgvd('-');
             expect(res.status).toBe(1);
-            expect(res.stderr).toContain('stdin is not supported');
+            expect(res.stderr).toContain('stdin is not available');
         });
     });
 
@@ -369,6 +395,313 @@ describe('svgvd CLI', () => {
             expect(help).toContain('--auto-mirrored');
             expect(help).toContain('--width <dp>');
             expect(help).toContain('--height <dp>');
+        });
+    });
+
+    describe('stdin', () => {
+        it('converts "-" to stdout', () => {
+            const res = svgvdStdin(ICON, ['-']);
+            expect(res.status).toBe(0);
+            expect(res.stdout).toContain('android:fillColor="#FFFF0000"');
+            expect(res.stderr).toBe('');
+        });
+
+        it('reads "-" even from a terminal', () => {
+            const res = svgvdStdin(ICON, ['-'], true);
+            expect(res.status).toBe(0);
+            expect(res.stdout).toContain('<vector');
+        });
+
+        it('reads a pipe without input argument', () => {
+            const res = svgvdStdin(ICON, ['--tint', '#FFFFFFFF']);
+            expect(res.status).toBe(0);
+            expect(res.stdout).toContain('android:tint="#FFFFFFFF"');
+        });
+
+        it('does not read a terminal without input argument, and prints the help', () => {
+            const res = svgvdStdin(ICON, [], true);
+            expect(res.status).toBe(1);
+            expect(res.reads).toBe(0);
+            expect(res.stderr).toContain('Usage:');
+        });
+
+        it('prints the help when nothing is piped', () => {
+            const res = svgvdStdin('  \n', []);
+            expect(res.status).toBe(1);
+            expect(res.stderr).toContain('Usage:');
+        });
+
+        it('writes to -o file.xml, creating missing parent directories', () => {
+            const target = join(dir, 'nested', 'stdin.xml');
+            const res = svgvdStdin(ICON, ['-', '-o', target]);
+            expect(res.status).toBe(0);
+            expect(res.stdout).toBe('');
+            expect(readFileSync(target, 'utf8')).toContain('<vector');
+        });
+
+        it('reports warnings and errors on one line, without the file name', () => {
+            const warn = svgvdStdin(DASHED, ['-']);
+            expect(warn.status).toBe(0);
+            expect(warn.stderr).toMatch(/^ {2}⚠ \[unsupported-stroke-dasharray\] [^\n]*\n$/);
+            const strict = svgvdStdin(DASHED, ['-', '--strict']);
+            expect(strict.status).toBe(1);
+            expect(strict.stderr).toMatch(/^✗ \[unsupported-stroke-dasharray\] [^\n]*\n$/);
+            expect(strict.stdout).toBe('');
+            const invalid = svgvdStdin('not svg', ['-']);
+            expect(invalid.status).toBe(1);
+            expect(invalid.stderr).toMatch(/^✗ Invalid SVG[^\n]*\n$/);
+        });
+
+        it('reports a stdin read error on one line', () => {
+            const res = runWith(
+                {
+                    read: () => {
+                        throw new Error('EAGAIN: resource temporarily unavailable, read');
+                    },
+                    isTTY: false,
+                },
+                ['-'],
+            );
+            expect(res.status).toBe(1);
+            expect(res.stderr).toBe('✗ EAGAIN: resource temporarily unavailable, read\n');
+        });
+
+        it('rejects "-" with other inputs', () => {
+            const input = join(dir, 'icon.svg');
+            writeFileSync(input, ICON);
+            const res = svgvdStdin(ICON, ['-', input]);
+            expect(res.status).toBe(1);
+            expect(res.reads).toBe(0);
+            expect(res.stderr).toBe('- (stdin) cannot be combined with other inputs\n');
+            expect(existsSync(join(dir, 'icon.xml'))).toBe(false);
+        });
+
+        it('ignores a piped stdin when inputs are given', () => {
+            const input = join(dir, 'icon.svg');
+            writeFileSync(input, ICON);
+            const res = svgvdStdin(DASHED, [input]);
+            expect(res.status).toBe(0);
+            expect(res.reads).toBe(0);
+            expect(existsSync(join(dir, 'icon.xml'))).toBe(true);
+        });
+    });
+
+    describe('--recursive', () => {
+        /** src/{a.svg, sub/b.svg, sub/deep/c.SVG, sub/notes.txt} */
+        function tree(): string {
+            const src = join(dir, 'src');
+            mkdirSync(join(src, 'sub', 'deep'), { recursive: true });
+            writeFileSync(join(src, 'a.svg'), ICON);
+            writeFileSync(join(src, 'sub', 'b.svg'), ICON);
+            writeFileSync(join(src, 'sub', 'deep', 'c.SVG'), ICON);
+            writeFileSync(join(src, 'sub', 'notes.txt'), 'not an svg');
+            return src;
+        }
+
+        it('converts subdirectories only with --recursive', () => {
+            const src = tree();
+            const out = join(dir, 'out');
+            expect(svgvd(src, '-o', out).status).toBe(0);
+            expect(existsSync(join(out, 'a.xml'))).toBe(true);
+            expect(existsSync(join(out, 'b.xml'))).toBe(false);
+            expect(existsSync(join(out, 'sub'))).toBe(false);
+        });
+
+        it('reproduces the tree under -o', () => {
+            const src = tree();
+            const out = join(dir, 'out');
+            const res = svgvd(src, '-r', '-o', out);
+            expect(res.status).toBe(0);
+            expect(existsSync(join(out, 'a.xml'))).toBe(true);
+            expect(existsSync(join(out, 'sub', 'b.xml'))).toBe(true);
+            expect(existsSync(join(out, 'sub', 'deep', 'c.xml'))).toBe(true);
+            expect(existsSync(join(out, 'sub', 'notes.xml'))).toBe(false);
+            expect(res.stderr).toContain(
+                `✓ ${join(src, 'sub', 'deep', 'c.SVG')} → ${join(out, 'sub', 'deep', 'c.xml')}`,
+            );
+        });
+
+        it('writes next to each input without -o', () => {
+            const src = tree();
+            expect(svgvd(src, '--recursive').status).toBe(0);
+            expect(existsSync(join(src, 'sub', 'b.xml'))).toBe(true);
+            expect(existsSync(join(src, 'sub', 'deep', 'c.xml'))).toBe(true);
+        });
+
+        it('flattens the outputs with --android-names (a resource directory has no subdirectories)', () => {
+            const src = tree();
+            writeFileSync(join(src, 'sub', 'Arrow-Left.svg'), ICON);
+            const out = join(dir, 'out');
+            const res = svgvd(src, '-r', '-o', out, '--android-names');
+            expect(res.status).toBe(0);
+            for (const name of ['a', 'b', 'c', 'arrow_left']) expect(existsSync(join(out, `${name}.xml`))).toBe(true);
+            expect(existsSync(join(out, 'sub'))).toBe(false);
+        });
+
+        it('detects a resource name collision across subdirectories before writing anything', () => {
+            const src = tree();
+            mkdirSync(join(src, 'other'));
+            writeFileSync(join(src, 'other', 'B.svg'), ICON);
+            const out = join(dir, 'out');
+            const res = svgvd(src, '-r', '-o', out, '--android-names');
+            expect(res.status).toBe(1);
+            expect(res.stderr).toContain(`b.xml: ${join(src, 'other', 'B.svg')}, ${join(src, 'sub', 'b.svg')}`);
+            expect(existsSync(out)).toBe(false);
+        });
+
+        it('does not follow a symbolic link to a directory', () => {
+            const src = tree();
+            symlinkSync(src, join(src, 'sub', 'loop'), 'dir');
+            const res = svgvd(src, '-r', '--dry-run', '--json');
+            expect(res.status).toBe(0);
+            expect(parseReport(res.stdout)).toHaveLength(3);
+        });
+    });
+
+    describe('--json', () => {
+        it('reports every file and exits 1 when one fails', () => {
+            const src = join(dir, 'src');
+            mkdirSync(src);
+            writeFileSync(join(src, 'dashed.svg'), DASHED);
+            writeFileSync(join(src, 'icon.svg'), ICON);
+            writeFileSync(join(src, 'invalid.svg'), 'not svg');
+            const out = join(dir, 'out');
+            const res = svgvd(src, join(dir, 'nope.svg'), '-o', out, '--json', '--rule', 'min-sdk-exceeded=warn');
+            expect(res.status).toBe(1);
+            expect(parseReport(res.stdout)).toEqual([
+                {
+                    input: join(dir, 'nope.svg'),
+                    output: null,
+                    warnings: [],
+                    minSdk: null,
+                    error: { message: 'no such file or directory' },
+                },
+                {
+                    input: join(src, 'dashed.svg'),
+                    output: join(out, 'dashed.xml'),
+                    warnings: [expect.objectContaining({ code: 'unsupported-stroke-dasharray', category: 'lossy' })],
+                    minSdk: 21,
+                    error: null,
+                },
+                { input: join(src, 'icon.svg'), output: join(out, 'icon.xml'), warnings: [], minSdk: 21, error: null },
+                {
+                    input: join(src, 'invalid.svg'),
+                    output: null,
+                    warnings: [],
+                    minSdk: null,
+                    error: { message: expect.stringMatching(/^Invalid SVG/) },
+                },
+            ]);
+            expect(existsSync(join(out, 'icon.xml'))).toBe(true);
+            // Human-readable lines stay on stderr.
+            expect(res.stderr).toContain('✓');
+        });
+
+        it('exits 0 when every file converts', () => {
+            const input = join(dir, 'icon.svg');
+            writeFileSync(input, ICON);
+            const res = svgvd(input, '--json');
+            expect(res.status).toBe(0);
+            expect(parseReport(res.stdout)).toEqual([
+                { input, output: join(dir, 'icon.xml'), warnings: [], minSdk: 21, error: null },
+            ]);
+        });
+
+        it('carries the code and category of an escalated warning', () => {
+            const input = join(dir, 'dashed.svg');
+            writeFileSync(input, DASHED);
+            const res = svgvd(input, '--strict', '--json');
+            expect(res.status).toBe(1);
+            expect(parseReport(res.stdout)[0]!.error).toEqual({
+                message: expect.stringMatching(/^\[unsupported-stroke-dasharray\] /),
+                code: 'unsupported-stroke-dasharray',
+                category: 'lossy',
+            });
+        });
+
+        it('reports stdin as "-" and -s as null', () => {
+            const target = join(dir, 'out.xml');
+            const stdin = svgvdStdin(ICON, ['-', '-o', target, '--json']);
+            expect(stdin.status).toBe(0);
+            expect(parseReport(stdin.stdout)).toEqual([
+                { input: '-', output: target, warnings: [], minSdk: 21, error: null },
+            ]);
+            const inline = svgvd('-s', ICON, '--json', '--dry-run');
+            expect(inline.status).toBe(0);
+            expect(parseReport(inline.stdout)).toEqual([
+                { input: null, output: null, warnings: [], minSdk: 21, error: null },
+            ]);
+        });
+
+        it('reports a resource name collision as JSON', () => {
+            const src = join(dir, 'src');
+            mkdirSync(src);
+            writeFileSync(join(src, 'Arrow-Left.svg'), ICON);
+            writeFileSync(join(src, 'arrow_left.svg'), ICON);
+            writeFileSync(join(src, 'other.svg'), ICON);
+            const out = join(dir, 'out');
+            const res = svgvd(src, '-o', out, '--android-names', '--json');
+            expect(res.status).toBe(1);
+            const report = parseReport(res.stdout);
+            expect(report.map((e) => e.input)).toEqual([
+                join(src, 'Arrow-Left.svg'),
+                join(src, 'arrow_left.svg'),
+                join(src, 'other.svg'),
+            ]);
+            expect(report.every((e) => e.error !== null && e.output === null)).toBe(true);
+            expect(report[0]!.error!.message).toContain('collision');
+            expect(existsSync(out)).toBe(false);
+        });
+
+        it.each([[['-s', ICON]], [['-', '-o', 'out/']], [['FILE', '--stdout']]])(
+            'refuses to mix the report with XML on stdout (%j)',
+            (args) => {
+                const input = join(dir, 'icon.svg');
+                writeFileSync(input, ICON);
+                const res = svgvdStdin(ICON, [...args.map((a) => (a === 'FILE' ? input : a)), '--json']);
+                expect(res.status).toBe(1);
+                expect(res.stdout).toBe('');
+                expect(res.stderr).toContain('--json prints the report on stdout');
+                expect(res.reads).toBe(0);
+            },
+        );
+    });
+
+    describe('--dry-run', () => {
+        it('converts and reports without writing', () => {
+            const src = join(dir, 'src');
+            mkdirSync(join(src, 'sub'), { recursive: true });
+            writeFileSync(join(src, 'a.svg'), ICON);
+            writeFileSync(join(src, 'sub', 'b.svg'), ICON);
+            const out = join(dir, 'out');
+            const res = svgvd(src, '-r', '-o', out, '--dry-run', '--json');
+            expect(res.status).toBe(0);
+            expect(parseReport(res.stdout).map((e) => e.output)).toEqual([
+                join(out, 'a.xml'),
+                join(out, 'sub', 'b.xml'),
+            ]);
+            expect(res.stderr).toContain(`✓ ${join(src, 'a.svg')} → ${join(out, 'a.xml')} (dry run)`);
+            expect(existsSync(out)).toBe(false);
+        });
+
+        it('still fails on a conversion error', () => {
+            const input = join(dir, 'dashed.svg');
+            writeFileSync(input, DASHED);
+            expect(svgvd(input, '--strict', '--dry-run').status).toBe(1);
+        });
+
+        it('prints no XML for stdout targets', () => {
+            const input = join(dir, 'icon.svg');
+            writeFileSync(input, ICON);
+            expect(svgvd(input, '--stdout', '--dry-run').stdout).toBe('');
+            expect(svgvd('-s', ICON, '--dry-run').stdout).toBe('');
+            expect(svgvdStdin(ICON, ['-', '--dry-run']).stdout).toBe('');
+            expect(existsSync(join(dir, 'icon.xml'))).toBe(false);
+        });
+
+        it('documents the options in the help', () => {
+            const help = svgvd('--help').stdout;
+            for (const flag of ['--recursive', '--json', '--dry-run', 'svgvd -']) expect(help).toContain(flag);
         });
     });
 });

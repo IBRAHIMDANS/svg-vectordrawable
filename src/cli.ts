@@ -1,21 +1,46 @@
 #!/usr/bin/env node
 import { readFileSync, statSync, realpathSync } from 'node:fs';
 import { extname, basename } from 'node:path';
+import { isatty } from 'node:tty';
 import { fileURLToPath } from 'node:url';
 import { colorRefs } from './colorRef.js';
 import { convert } from './convert.js';
-import { assertDistinctOutputs, defaultOutputPath, listSvgFiles, writeOutput, type FileNamingOptions } from './file.js';
-import { WARNING_CODES, type ConvertOptions, type Severity, type WarningCode } from './types.js';
+import { ConversionError } from './errors.js';
+import {
+    assertDistinctOutputs,
+    batchOutputPath,
+    defaultOutputPath,
+    findOutputCollisions,
+    listSvgFiles,
+    writeOutput,
+    type FileNamingOptions,
+} from './file.js';
+import {
+    WARNING_CATEGORIES,
+    WARNING_CODES,
+    type ConvertOptions,
+    type Severity,
+    type Warning,
+    type WarningCategory,
+    type WarningCode,
+} from './types.js';
 
 const HELP = `svgvd — convert SVG to Android VectorDrawable
 
 Usage:
-  svgvd <input.svg|dir> [options]
+  svgvd <input.svg|dir…> [options]
+  svgvd - [options]          Read the SVG from stdin (also without input when
+                             stdin is not a terminal); prints to stdout
 
 Options:
   -s, --string <svg>   Convert an inline SVG string (prints to stdout)
-  -o, --out <path>     Output file (single input) or directory (batch)
+  -o, --out <path>     Output file (single input, stdin, -s) or directory (batch)
   --stdout             Print result to stdout instead of writing a file
+  -r, --recursive      Also convert the subdirectories of an input directory,
+                       reproducing the tree under -o (flat with --android-names)
+  --json               Print a JSON report on stdout (input, output, warnings,
+                       minSdk, error per file); XML must go to files (-o)
+  --dry-run            Convert and report, but write nothing
   --no-optimize        Skip svgo normalization (not recommended)
   --strict             Fail on the first lossy or approximated construct
   --strict=lossy       Fail only when content is lost (approximations stay warnings)
@@ -42,16 +67,54 @@ Options:
 
 const SEVERITIES = new Set(['off', 'warn', 'error']);
 
-/** Output sinks, injectable so the CLI can be exercised in-process. */
+/** Input and output streams, injectable so the CLI can be exercised in-process. */
 export interface CliIo {
     stdout: (text: string) => void;
     stderr: (text: string) => void;
+    /** Standard input; absent when there is none to read (`-` is then rejected). */
+    stdin?: {
+        /** Reads stdin to the end, as UTF-8. */
+        read: () => string;
+        /** True when stdin is a terminal: it is then only read for an explicit `-`. */
+        readonly isTTY: boolean;
+    };
 }
 
 const processIo: CliIo = {
     stdout: (text) => process.stdout.write(text),
     stderr: (text) => process.stderr.write(text),
+    stdin: {
+        read: () => readFileSync(0, 'utf8'),
+        get isTTY() {
+            return isatty(0);
+        },
+    },
 };
+
+/** One entry of the `--json` report. */
+export interface ReportEntry {
+    /** The SVG file, `-` for stdin, `null` for `-s`. */
+    input: string | null;
+    /** The file written (or that `--dry-run` would write); `null` for stdout or on error. */
+    output: string | null;
+    warnings: (Warning & { category: WarningCategory })[];
+    /** `ConvertResult.minSdk`; `null` on error. */
+    minSdk: number | null;
+    /** Why nothing was produced; `code` / `category` when a warning was escalated to an error. */
+    error: { message: string; code?: WarningCode; category?: WarningCategory } | null;
+}
+
+/** One conversion: a file, stdin or the `-s` string. */
+interface Job {
+    /** As in {@link ReportEntry.input}. */
+    input: string | null;
+    read: () => string;
+    /** Target file; `undefined` prints the XML to stdout. */
+    output?: string;
+}
+
+/** A job reading a file into a file. */
+type FileJob = Job & { input: string; output: string };
 
 /** Thrown during argument parsing to stop early with an exit code. */
 class CliExit {
@@ -66,6 +129,9 @@ function parseArgs(
     inline?: string;
     out?: string;
     stdout: boolean;
+    recursive: boolean;
+    json: boolean;
+    dryRun: boolean;
     opts: ConvertOptions;
     naming: FileNamingOptions;
 } {
@@ -75,6 +141,9 @@ function parseArgs(
     let out: string | undefined;
     let inline: string | undefined;
     let stdout = false;
+    let recursive = false;
+    let json = false;
+    let dryRun = false;
     const fail = (message: string): never => {
         io.stderr(`${message}\n`);
         throw new CliExit(1);
@@ -89,6 +158,9 @@ function parseArgs(
         } else if (arg === '-s' || arg === '--string') inline = value();
         else if (arg === '-o' || arg === '--out') out = value();
         else if (arg === '--stdout') stdout = true;
+        else if (arg === '-r' || arg === '--recursive') recursive = true;
+        else if (arg === '--json') json = true;
+        else if (arg === '--dry-run') dryRun = true;
         else if (arg === '--no-optimize') opts.optimize = false;
         else if (arg === '--strict') opts.strict = true;
         else if (arg === '--strict=lossy') opts.strict = 'lossy';
@@ -123,22 +195,139 @@ function parseArgs(
             const precision = value();
             if (!/^\d+$/.test(precision)) fail(`Invalid --precision (expected a non-negative integer): ${precision}`);
             opts.floatPrecision = Number(precision);
-        } else if (arg === '-') fail('Reading from stdin is not supported; pass a file or use -s <svg>');
-        else if (arg.startsWith('-')) fail(`Unknown option: ${arg}`);
+        } else if (arg.startsWith('-') && arg !== '-') fail(`Unknown option: ${arg}`);
         else inputs.push(arg);
     }
+    if (inputs.includes('-') && inputs.length > 1) fail('- (stdin) cannot be combined with other inputs');
     // Reported once here rather than as a conversion failure of every input.
     try {
         colorRefs(opts.currentColor ?? '#000000', opts.colorMap);
     } catch (err) {
         fail((err as Error).message);
     }
-    return { inputs, inline, out, stdout, opts, naming };
+    return { inputs, inline, out, stdout, recursive, json, dryRun, opts, naming };
 }
 
-/** The files an input argument stands for: itself, or the `*.svg` of a directory. */
-function listSvgs(path: string): string[] {
-    return statSync(path).isDirectory() ? listSvgFiles(path) : [path];
+/** The error of a failed job, for the report. */
+function reportError(err: unknown): NonNullable<ReportEntry['error']> {
+    const message = (err as Error).message;
+    if (!(err instanceof ConversionError)) return { message };
+    return { message, code: err.warning.code, category: WARNING_CATEGORIES[err.warning.code] };
+}
+
+/**
+ * Converts one job, writes or prints its XML (unless `dryRun`) and logs to stderr. Never throws:
+ * a failure is returned in the entry's `error`.
+ */
+function runJob(job: Job, opts: ConvertOptions, dryRun: boolean, io: CliIo): ReportEntry {
+    const file = job.input !== null && job.input !== '-' ? job.input : undefined;
+    const label = file === undefined ? '' : `${basename(file)}: `;
+    try {
+        const { xml, warnings, minSdk } = convert(job.read(), opts);
+        for (const w of warnings) io.stderr(`  ⚠ ${label}[${w.code}] ${w.message}\n`);
+        if (job.output === undefined) {
+            if (!dryRun) io.stdout(xml);
+        } else {
+            if (!dryRun) writeOutput(job.output, xml);
+            if (file !== undefined) io.stderr(`✓ ${file} → ${job.output}${dryRun ? ' (dry run)' : ''}\n`);
+        }
+        return {
+            input: job.input,
+            output: job.output ?? null,
+            warnings: warnings.map((w) => ({ ...w, category: WARNING_CATEGORIES[w.code] })),
+            minSdk,
+            error: null,
+        };
+    } catch (err) {
+        io.stderr(`✗ ${file === undefined ? '' : `${file}: `}${(err as Error).message}\n`);
+        return { input: job.input, output: null, warnings: [], minSdk: null, error: reportError(err) };
+    }
+}
+
+/** A failed entry that produced nothing. */
+function failedEntry(input: string | null, message: string): ReportEntry {
+    return { input, output: null, warnings: [], minSdk: null, error: { message } };
+}
+
+/** The `--json` report. */
+function report(entries: readonly ReportEntry[]): string {
+    return `${JSON.stringify(entries, null, 2)}\n`;
+}
+
+/** Report entries when output names collide: nothing is converted, every file is reported failed. */
+function collisionEntries(jobs: readonly FileJob[], naming: FileNamingOptions): ReportEntry[] {
+    const colliding = new Map(
+        findOutputCollisions(jobs, naming).flatMap((c) => c.inputs.map((input) => [input, c] as const)),
+    );
+    return jobs.map(({ input }) => {
+        const c = colliding.get(input);
+        return failedEntry(
+            input,
+            c
+                ? `Android resource name collision (nothing written): ${c.name} ← ${c.inputs.join(', ')}`
+                : 'Not converted: Android resource name collision in this batch (nothing written)',
+        );
+    });
+}
+
+/** The job of the stdin or `-s` source, or an exit code when there is nothing to convert. */
+function sourceJob(inline: string | undefined, explicit: boolean, output: string | undefined, io: CliIo): Job | number {
+    if (inline !== undefined) return { input: null, read: () => inline, output };
+    if (io.stdin === undefined) {
+        io.stderr('Reading from stdin is not available here; pass a file or use -s <svg>\n');
+        return 1;
+    }
+    let text: string | Error;
+    try {
+        text = io.stdin.read();
+    } catch (err) {
+        text = err as Error;
+    }
+    // `svgvd < /dev/null` and the like: nothing piped, so behave as without input.
+    if (!explicit && typeof text === 'string' && text.trim() === '') {
+        io.stderr(HELP);
+        return 1;
+    }
+    const read = (): string => {
+        if (text instanceof Error) throw text;
+        return text;
+    };
+    return { input: '-', read, output };
+}
+
+/**
+ * The file jobs of the input arguments (a file, or the `*.svg` of a directory), plus a failed entry
+ * for each argument that cannot be listed.
+ */
+function fileJobs(
+    inputs: readonly string[],
+    out: string | undefined,
+    recursive: boolean,
+    naming: FileNamingOptions,
+    io: CliIo,
+): { jobs: FileJob[]; unreadable: ReportEntry[] } {
+    const unreadable: ReportEntry[] = [];
+    const found = inputs.flatMap((input): { file: string; root?: string }[] => {
+        try {
+            if (!statSync(input).isDirectory()) return [{ file: input }];
+            return listSvgFiles(input, recursive).map((file) => ({ file, root: input }));
+        } catch (err) {
+            const missing = (err as NodeJS.ErrnoException).code === 'ENOENT';
+            const message = missing ? 'no such file or directory' : (err as Error).message;
+            io.stderr(`✗ ${input}: ${message}\n`);
+            unreadable.push(failedEntry(input, message));
+            return [];
+        }
+    });
+    const explicitTarget = out && found.length === 1 && extname(out) === '.xml' ? out : undefined;
+    const jobs = found.map(({ file, root }) => ({
+        input: file,
+        read: () => readFileSync(file, 'utf8'),
+        output:
+            explicitTarget ??
+            (root === undefined ? defaultOutputPath(file, out, naming) : batchOutputPath(file, root, out, naming)),
+    }));
+    return { jobs, unreadable };
 }
 
 /** Runs the CLI against `argv` (without the node/script prefix) and returns the exit code. */
@@ -150,63 +339,43 @@ export function run(argv: string[], io: CliIo = processIo): number {
         if (err instanceof CliExit) return err.code;
         throw err;
     }
-    const { inputs, inline, out, stdout, opts, naming } = args;
+    const { inputs, inline, out, stdout, recursive, json, dryRun, opts, naming } = args;
 
-    if (inline !== undefined) {
-        try {
-            const { xml, warnings } = convert(inline, opts);
-            for (const w of warnings) io.stderr(`  ⚠ [${w.code}] ${w.message}\n`);
-            if (out && extname(out) === '.xml') writeOutput(out, xml);
-            else io.stdout(xml);
-            return 0;
-        } catch (err) {
-            io.stderr(`✗ ${(err as Error).message}\n`);
-            return 1;
-        }
-    }
-
-    if (inputs.length === 0) {
+    const explicitStdin = inline === undefined && inputs[0] === '-';
+    const implicitStdin = inline === undefined && inputs.length === 0 && io.stdin !== undefined && !io.stdin.isTTY;
+    const single = inline !== undefined || explicitStdin || implicitStdin;
+    if (!single && inputs.length === 0) {
         io.stderr(HELP);
         return 1;
     }
+    // An -o that is not a .xml file is ignored for a single source, which then prints to stdout.
+    const singleTarget = out !== undefined && extname(out) === '.xml' ? out : undefined;
+    if (json && !dryRun && (single ? singleTarget === undefined : stdout)) {
+        io.stderr('--json prints the report on stdout: write the XML with -o <file.xml>, or add --dry-run\n');
+        return 1;
+    }
 
-    let failures = 0;
-    const files = inputs.flatMap((input) => {
+    const entries: ReportEntry[] = [];
+    let jobs: Job[];
+    if (single) {
+        const job = sourceJob(inline, explicitStdin, singleTarget, io);
+        if (typeof job === 'number') return job;
+        jobs = [job];
+    } else {
+        const listed = fileJobs(inputs, out, recursive, naming, io);
+        entries.push(...listed.unreadable);
+        jobs = stdout ? listed.jobs.map((job) => ({ ...job, output: undefined })) : listed.jobs;
         try {
-            return listSvgs(input);
-        } catch (err) {
-            failures++;
-            const missing = (err as NodeJS.ErrnoException).code === 'ENOENT';
-            io.stderr(`✗ ${input}: ${missing ? 'no such file or directory' : (err as Error).message}\n`);
-            return [];
-        }
-    });
-    const explicitTarget = out && files.length === 1 && extname(out) === '.xml' ? out : undefined;
-    const jobs = files.map((input) => ({ input, output: explicitTarget ?? defaultOutputPath(input, out, naming) }));
-    if (!stdout) {
-        try {
-            assertDistinctOutputs(jobs, naming);
+            if (!stdout) assertDistinctOutputs(listed.jobs, naming);
         } catch (err) {
             io.stderr(`✗ ${(err as Error).message}\n`);
+            if (json) io.stdout(report([...entries, ...collisionEntries(listed.jobs, naming)]));
             return 1;
         }
     }
-    for (const { input: file, output: target } of jobs) {
-        try {
-            const { xml, warnings } = convert(readFileSync(file, 'utf8'), opts);
-            for (const w of warnings) io.stderr(`  ⚠ ${basename(file)}: [${w.code}] ${w.message}\n`);
-            if (stdout) {
-                io.stdout(xml);
-            } else {
-                writeOutput(target, xml);
-                io.stderr(`✓ ${file} → ${target}\n`);
-            }
-        } catch (err) {
-            failures++;
-            io.stderr(`✗ ${file}: ${(err as Error).message}\n`);
-        }
-    }
-    return failures ? 1 : 0;
+    for (const job of jobs) entries.push(runJob(job, opts, dryRun, io));
+    if (json) io.stdout(report(entries));
+    return entries.some((entry) => entry.error !== null) ? 1 : 0;
 }
 
 /** True when this module is the process entry point (also through an npm bin symlink). */
