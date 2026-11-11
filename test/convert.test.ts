@@ -1637,3 +1637,75 @@ describe('Android color references (currentColor / colorMap)', () => {
         expect(vectorDrawableToSvg(xml, { colors: { '?attr/colorPrimary': '#f00' } })).toContain('fill="#ff0000"');
     });
 });
+
+describe('custom svgoConfig with a CSS transform', () => {
+    // svgo's raw preset moves the group translation under the rect, where the CSS scale (folded in
+    // after svgo) applies to it too: the output is misplaced (wpt styling/render/transform-origin.svg).
+    const svg =
+        '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 150 100">' +
+        '<g transform="translate(70, 65)"><rect width="20" height="5" fill="cyan" style="transform: scale(2, 3)"/></g></svg>';
+    const reference = svg.replace('style="transform: scale(2, 3)"', 'transform="scale(2 3)"');
+    const asStyleRule = svg
+        .replace('style="transform: scale(2, 3)"', 'class="k"')
+        .replace('</svg>', '<style>.k { transform: scale(2, 3) }</style></svg>');
+    const preset = { plugins: ['preset-default' as const] };
+    const safe = {
+        plugins: [
+            {
+                name: 'preset-default' as const,
+                params: {
+                    overrides: {
+                        moveElemsAttrsToGroup: false as const,
+                        moveGroupAttrsToElems: false as const,
+                        collapseGroups: false as const,
+                        removeNonInheritableGroupAttrs: false as const,
+                        convertPathData: { applyTransforms: false },
+                    },
+                },
+            },
+        ],
+    };
+    const codes = (svgoConfig: object, source = svg, optimize = true): string[] =>
+        convert(source, { svgoConfig, optimize }).warnings.map((w) => w.code);
+
+    for (const [label, source] of [
+        ['style attribute', svg],
+        ['<style> rule', asStyleRule],
+    ] as const)
+        it(`warns (unsupported-style) when the raw preset-default runs on a CSS transform (${label})`, () => {
+            const { xml, warnings } = convert(source, { svgoConfig: preset });
+            expect(warnings.map((w) => w.code)).toEqual(['unsupported-style']);
+            expect(warnings[0]?.message).toContain("preset-default's");
+            expect(warnings[0]?.message).toContain('collapseGroups');
+            // The warning is warranted: the output is wrong.
+            expect(compareSvgs(reference, vdToSvg(xml)).mismatch).toBeGreaterThan(0.5);
+            expect(() => convert(source, { svgoConfig: preset, strict: true })).toThrow(ConversionError);
+        });
+
+    it('names a transform-moving plugin listed on its own', () => {
+        const { warnings } = convert(svg, { svgoConfig: { plugins: ['collapseGroups'] } });
+        expect(warnings.map((w) => w.message)).toEqual([expect.stringContaining('runs collapseGroups,')]);
+    });
+
+    it('warns for a config without plugins, which svgo runs with preset-default', () => {
+        expect(codes({})).toEqual(['unsupported-style']);
+        expect(codes({ plugins: [] })).toEqual([]);
+    });
+
+    it('does not warn once the advised plugins are disabled, and renders like the source', () => {
+        for (const source of [svg, asStyleRule]) {
+            const { xml, warnings } = convert(source, { svgoConfig: safe });
+            expect(warnings).toEqual([]);
+            expect(compareSvgs(reference, vdToSvg(xml)).mismatch).toBeLessThan(DEFAULT_MAX_MISMATCH);
+        }
+    });
+
+    it('does not warn without a CSS transform, with optimize: false, or with plugins that move nothing', () => {
+        expect(codes(preset, reference)).toEqual([]);
+        expect(codes(preset, svg, false)).toEqual([]);
+        const harmless = {
+            plugins: ['convertColors', { name: 'convertPathData', params: { applyTransforms: false } }],
+        };
+        expect(codes(harmless)).toEqual([]);
+    });
+});

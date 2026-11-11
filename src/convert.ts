@@ -74,6 +74,52 @@ export function vectorSize(svgSize: Size, width: number | undefined, height: num
     };
 }
 
+/**
+ * A CSS `transform` (style attribute or `<style>`), or a `transform-origin` / `transform-box`: the
+ * properties svgo does not read when it moves transforms (same test as normalize.ts's default config).
+ */
+const MAY_HAVE_CSS_TRANSFORM = /(?<![\w-])transform\s*:|transform-(?:origin|box)/;
+
+/** preset-default plugins that move transforms between elements or drop `transform-origin`. */
+const TRANSFORM_MOVERS = [
+    'moveElemsAttrsToGroup',
+    'moveGroupAttrsToElems',
+    'collapseGroups',
+    'removeNonInheritableGroupAttrs',
+] as const;
+
+type SvgoConfig = NonNullable<ConvertOptions['svgoConfig']>;
+
+/**
+ * The first plugin of a user svgo config that moves or bakes transforms (listed alone or enabled
+ * in `preset-default`; `convertPathData` unless `applyTransforms: false`), or undefined. Custom
+ * plugins (with `fn`) are not inspected.
+ */
+function transformMovingPlugin(config: SvgoConfig): string | undefined {
+    const moves = (name: string, params: unknown): boolean =>
+        name === 'convertPathData'
+            ? (params as { applyTransforms?: unknown } | undefined)?.applyTransforms !== false
+            : (TRANSFORM_MOVERS as readonly string[]).includes(name);
+    // svgo runs preset-default when `plugins` is unset.
+    if (config.plugins === undefined) return "preset-default's collapseGroups (svgo's default plugins)";
+    for (const plugin of config.plugins) {
+        const { name, params } = typeof plugin === 'string' ? { name: plugin, params: undefined } : plugin;
+        if (name !== 'preset-default') {
+            if (moves(name, params)) return name;
+            continue;
+        }
+        const overrides = ((params as { overrides?: Record<string, unknown> } | undefined)?.overrides ?? {}) as Record<
+            string,
+            unknown
+        >;
+        const found = ['convertPathData', ...TRANSFORM_MOVERS].find(
+            (n) => overrides[n] !== false && moves(n, overrides[n]),
+        );
+        if (found !== undefined) return `preset-default's ${found}`;
+    }
+    return undefined;
+}
+
 /** Text content of an element (`<style>` CSS), comments stripped. */
 const cssText = (el: XastElement): string =>
     (el.children ?? [])
@@ -144,7 +190,10 @@ export function convert(svg: string, options: ConvertOptions = {}): ConvertResul
     const root = parseSvg(svg, optimize, svgoConfig, floatPrecision, fillBlackForUnfilled);
     // Fold CSS transforms into attributes before <use> expansion, so that clones inherit them.
     applyCssProperties(root, warn);
-    resolveUses(root); // inline <use> references so the walker sees concrete geometry
+    // Inline <use> references so the walker sees concrete geometry. Its warnings are reported once
+    // the root is known to be converted here (not by the optimize: false retry below).
+    const useWarnings: Warning[] = [];
+    resolveUses(root, (w) => useWarnings.push(w));
     // svgo's removeHiddenElems deletes a root it deems hidden. When the source root itself says
     // display: none, its attributes (size, viewport) come from the unoptimized parse and its content
     // is not rendered. Otherwise svgo may be wrong (a `style="visibility:visible"` descendant, a
@@ -158,6 +207,14 @@ export function convert(svg: string, options: ConvertOptions = {}): ConvertResul
     }
     const found = kept ?? (removed && { ...removed, children: [] });
     if (!found) throw new Error('No <svg> root element found');
+    const mover = optimize && svgoConfig !== undefined ? transformMovingPlugin(svgoConfig) : undefined;
+    if (mover !== undefined && MAY_HAVE_CSS_TRANSFORM.test(svg))
+        warn({
+            code: 'unsupported-style',
+            message: `The custom svgoConfig runs ${mover}, which moves or bakes transforms without reading the CSS transform / transform-origin / transform-box set here: the output may be misplaced. Disable ${TRANSFORM_MOVERS.join(', ')} and convertPathData's applyTransforms (e.g. preset-default overrides), or omit svgoConfig.`,
+            node: 'style',
+        });
+    for (const w of useWarnings) warn(w);
     // A root with display: none renders nothing, whatever its conditions: an empty <vector>, faithful.
     const hidden = removed !== undefined || isDisplayNone(found);
     // Conditional processing (SVG 2 §5.8) applies to the root too: when it fails, browsers render

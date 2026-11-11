@@ -292,11 +292,9 @@ Limits of the converter itself, some of them **not warned**:
 
 - A `transform` on the root `<svg>` is applied, but the content stays clipped to the untransformed
   viewport (a browser moves the whole box).
-- A `<use>` of a `<symbol>` whose `width` / `height` are percentages or absent is neither clipped nor
-  scaled to the symbol's `viewBox` (no warning).
 - A custom `svgoConfig` is used as is: the raw `preset-default` moves or bakes transforms without reading
-  a CSS `transform` / `transform-origin`, so such groups can render wrong (no warning). The default config
-  and `optimize: false` handle them.
+  a CSS `transform` / `transform-origin`, so such groups can render wrong (`unsupported-style`, naming the
+  plugins to disable). The default config and `optimize: false` handle them.
 - CLI without an input argument: stdin is read whenever it is not a TTY, so a pipe that is never closed
   (`docker run -i`) waits instead of printing the help.
 - `--fallback-png` writes the PNGs but does not delete an XML of the same name left by a previous run.
