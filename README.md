@@ -12,6 +12,9 @@ Built on [svgo](https://github.com/svg/svgo) (v4) for parsing and normalization,
 walker that emits the VectorDrawable. Notably handles **gradients including `gradientTransform`**
 (linear & radial), which the popular but unmaintained `svg2vectordrawable` gets wrong.
 
+**[Try it online](https://ibrahimdans.github.io/svg-vectordrawable/)**: paste or drop an SVG, get the
+XML, the warnings and a side-by-side preview, nothing to install.
+
 ```
 npm i svg-vectordrawable
 ```
@@ -137,7 +140,8 @@ const { xml } = convert(svgString);
 
 `svg-vectordrawable/browser-lite` is the same API without svgo (68 KB instead of 625 KB for the minified
 IIFE build): conversion always runs with `optimize: false`, so `<style>` CSS is not inlined and
-shapes are converted as authored.
+shapes are converted as authored. The [online playground](https://ibrahimdans.github.io/svg-vectordrawable/)
+runs on this build, so its output can differ from the CLI on SVGs that rely on `<style>`.
 
 ## What it handles
 
