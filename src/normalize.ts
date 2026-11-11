@@ -12,7 +12,11 @@ const DEFAULT_OVERRIDES = {
     convertShapeToPath: { convertArcs: true },
     // svgo 4.1 mis-reflects a smooth `s` that follows a cubic rewritten to `q`
     // (`c3-2 6-2 9 0s6 2 9 0` → wrong first control point). Keep cubics as cubics.
-    convertPathData: { convertToQ: false },
+    // `makeArcs` rewrites curves that fit a circle as arcs, then rounds the radius and the end
+    // point separately: on a (near) half circle, `a6.999 6.999 0 1 0 0 13.996` puts the centre
+    // ~0.12 unit off the chord, since the offset grows as sqrt(r × rounding error). Its
+    // threshold / tolerance only bound the fit, not that rounding, so it is turned off.
+    convertPathData: { convertToQ: false, makeArcs: false },
     // Keep ids: gradients / clip-paths are referenced by url(#id).
     cleanupIds: { remove: false },
 };
