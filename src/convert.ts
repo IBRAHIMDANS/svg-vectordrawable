@@ -14,7 +14,7 @@ import { applyCssProperties, parseStyle, presentation } from './style.js';
 import { parseOpacity } from './units.js';
 import { resolveUses } from './useResolver.js';
 import { formatMatrix } from './transform.js';
-import { rootLayout, rootTransform } from './viewport.js';
+import { layoutWarnings, rootLayout, rootTransform } from './viewport.js';
 import {
     WARNING_CATEGORIES,
     WARNING_CODES,
@@ -170,6 +170,8 @@ export function convert(svg: string, options: ConvertOptions = {}): ConvertResul
             message: 'CSS transform / transform-origin on the root <svg> is not supported; ignored.',
             node: 'svg',
         });
+    // Viewport-relative units on an <svg>, a root transform-origin that cannot be resolved.
+    for (const w of layoutWarnings(svgEl)) warn(w);
     const step = ' '.repeat(indent);
     const r = (v: number): string => formatNumber(v, floatPrecision);
 
