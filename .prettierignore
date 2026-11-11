@@ -18,3 +18,9 @@ playground/browser-lite.global.js
 # Local backlog files (not versioned).
 TODO.md
 TODO-DONE.md
+# Vite and Gradle plugins: build outputs and the example app's generated files.
+integrations/vite-plugin/dist
+integrations/vite-plugin/example/android
+integrations/vite-plugin/example/dist
+integrations/gradle-plugin/**/build
+integrations/gradle-plugin/**/.gradle
