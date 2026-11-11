@@ -28,11 +28,14 @@ test('ui.html is self-contained: no external script, stylesheet, font, image or 
     assert.doesNotMatch(html, /<link\b/i);
     assert.doesNotMatch(html, /<(?:iframe|img|object|embed|video|audio|source)\b/i, 'no static media element');
     assert.doesNotMatch(html, /@import|url\(\s*['"]?(?:https?:)?\/\//i);
-    // The only URLs are XML namespace names (strings, never fetched).
+    // The only URLs are XML namespace names (strings, never fetched); XHTML and MathML are the
+    // `requiredExtensions` the library recognizes (src/elements.ts).
     const urls = new Set(html.match(/https?:\/\/[^\s"'`<>)\\]+/g));
     assert.deepEqual([...urls].sort(), [
         'http://schemas.android.com/aapt',
         'http://schemas.android.com/apk/res/android',
+        'http://www.w3.org/1998/Math/MathML',
+        'http://www.w3.org/1999/xhtml',
         'http://www.w3.org/2000/svg',
     ]);
     // Both scripts are inlined: the lite bundle (global svgvd) and the UI.

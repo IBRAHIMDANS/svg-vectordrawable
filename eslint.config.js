@@ -18,14 +18,18 @@ export default tseslint.config(
             'playground/browser-lite.global.js',
         ],
     },
-    // Vite and Gradle plugins (integrations/vite-plugin, integrations/gradle-plugin): build outputs.
+    // Integrations (integrations/*): build outputs and generated files. `dist` above is the root one only.
     {
         ignores: [
-            'integrations/vite-plugin/dist',
+            // Figma plugin bundles, MCP server tsc output, Vite plugin build.
+            'integrations/*/dist',
+            // Written by the Vite plugin example build.
             'integrations/vite-plugin/example/android',
             'integrations/vite-plugin/example/dist',
+            // Gradle / Kotlin state and outputs of the Gradle plugin and its example app.
             'integrations/gradle-plugin/**/build',
             'integrations/gradle-plugin/**/.gradle',
+            'integrations/gradle-plugin/**/.kotlin',
         ],
     },
     js.configs.recommended,
@@ -84,8 +88,7 @@ export default tseslint.config(
             globals: { ...globals.node },
         },
     },
-    // MCP server (standalone package built on the published library): Node code, tsc output ignored.
-    { ignores: ['integrations/mcp-server/dist'] },
+    // MCP server (standalone package built on the published library): Node code.
     {
         files: ['integrations/mcp-server/**/*.{ts,mjs}'],
         languageOptions: {
