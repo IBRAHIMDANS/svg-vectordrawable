@@ -10,10 +10,11 @@ import { checkGroupOpacity } from './groupOpacity.js';
 import { initialStyle, resolveStyle } from './inherited.js';
 import { parseSvg } from './normalize.js';
 import { walk } from './render.js';
-import { presentation } from './style.js';
+import { parseStyle, presentation } from './style.js';
 import { parseOpacity } from './units.js';
 import { resolveUses } from './useResolver.js';
-import { rootLayout } from './viewport.js';
+import { formatMatrix } from './transform.js';
+import { rootLayout, rootTransform } from './viewport.js';
 import {
     WARNING_CATEGORIES,
     WARNING_CODES,
@@ -153,6 +154,21 @@ export function convert(svg: string, options: ConvertOptions = {}): ConvertResul
         });
 
     const layout = rootLayout(svgEl.attributes ?? {});
+    // No size and no viewBox: the size is undefined (browsers use 300×150, resvg the content bounds).
+    // Guessing from the content would not match any renderer either; report the crop instead.
+    if (layout.assumed.length)
+        warn({
+            code: 'unsupported-attribute',
+            message: `The root <svg> has no viewBox and no usable ${layout.assumed.join(' / ')}: its size is undefined; assumed 24, content beyond it is cropped. Add a viewBox.`,
+            node: 'svg',
+        });
+    // Only the transform attribute is read: a CSS one on the root would be silently dropped.
+    if (['transform', 'transform-origin'].some((p) => parseStyle(svgEl.attributes?.style)[p] !== undefined))
+        warn({
+            code: 'unsupported-style',
+            message: 'CSS transform / transform-origin on the root <svg> is not supported; ignored.',
+            node: 'svg',
+        });
     const step = ' '.repeat(indent);
     const r = (v: number): string => formatNumber(v, floatPrecision);
 
@@ -182,9 +198,25 @@ export function convert(svg: string, options: ConvertOptions = {}): ConvertResul
 
     // A viewBox origin other than (0,0) (or an aspect-ratio alignment) shifts the whole drawing;
     // VectorDrawable viewports always start at (0,0), so translate the content into place.
-    const { offsetX: tx, offsetY: ty } = layout;
+    // A root transform (SVG 2) wraps the content in a <g> that also carries that offset.
+    const rootMatrix = rootTransform(svgEl.attributes ?? {}, layout);
+    const tx = rootMatrix ? 0 : layout.offsetX;
+    const ty = rootMatrix ? 0 : layout.offsetY;
     const offset = Math.abs(tx) > 1e-9 || Math.abs(ty) > 1e-9;
-    const content = walk(ctx, svgEl, baseStyle, offset ? step + step : step);
+    const rendered: XastElement = rootMatrix
+        ? {
+              ...svgEl,
+              children: [
+                  {
+                      type: 'element',
+                      name: 'g',
+                      attributes: { transform: formatMatrix(rootMatrix) },
+                      children: svgEl.children ?? [],
+                  },
+              ],
+          }
+        : svgEl;
+    const content = walk(ctx, rendered, baseStyle, offset ? step + step : step);
     const offsetAttrs = [
         Math.abs(tx) > 1e-9 ? `${step}${step}android:translateX="${r(tx)}"` : null,
         Math.abs(ty) > 1e-9 ? `${step}${step}android:translateY="${r(ty)}"` : null,
