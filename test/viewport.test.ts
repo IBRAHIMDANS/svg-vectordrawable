@@ -3,10 +3,10 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { convert, ConversionError } from '../src/index.js';
-import { applyPoint } from '../src/transform.js';
+import { applyPoint, parseTransformOrigin } from '../src/transform.js';
 import type { XastElement } from '../src/ast.js';
 import { parseSvg } from '../src/normalize.js';
-import { boxOrigin, layoutWarnings, rootLayout, rootTransform } from '../src/viewport.js';
+import { layoutWarnings, nestedLayout, rootLayout, rootTransform } from '../src/viewport.js';
 import { vdToSvg } from './visual/vdToSvg.js';
 import { compareSvgs, DEFAULT_MAX_MISMATCH } from './visual/compare.js';
 
@@ -357,7 +357,7 @@ describe('viewport-relative units on an <svg>', () => {
 
 describe('transform-origin on the root <svg>', () => {
     const at = (value: string): [number, number] | null => {
-        const o = boxOrigin(value, 200, 100);
+        const o = parseTransformOrigin(value, { width: 200, height: 100 });
         return o && [o.x, o.y];
     };
 
@@ -439,6 +439,32 @@ describe('transform-origin on the root <svg>', () => {
             expect(
                 layoutWarnings(rootSvg(svg(`width="20" height="20" ${transform} transform-origin="1ex"`, '<rect/>'))),
             ).toEqual([]);
+    });
+});
+
+describe('nested <svg> sized in CSS', () => {
+    it('reads x / y / width / height from style, which overrides the attribute', () => {
+        const el = rootSvg(
+            svg('width="100" height="100"', '<svg x="1" width="80" style="width: 50px; height: 25%; y: 10"/>'),
+        ).children!.find((c): c is XastElement => c.type === 'element' && c.name === 'svg')!;
+        const layout = nestedLayout(el, { width: 100, height: 100 })!;
+        expect([layout.x, layout.y, layout.width, layout.height]).toEqual([1, 10, 50, 25]);
+    });
+
+    it('does not report a viewport-relative attribute the style overrides', () => {
+        const source = svg('width="100" height="100"', '<svg width="5vw" style="width: 50px"><rect/></svg>');
+        for (const optimize of [true, false]) expect(layoutWarnings(rootSvg(source, optimize))).toEqual([]);
+    });
+
+    it('<svg style="width:50px"> renders like its attribute counterpart', () => {
+        const content = '<rect width="100" height="100" fill="green"/>';
+        expectRendersLike(
+            svg(
+                'width="100" height="100"',
+                `<svg width="100" height="100" viewBox="0 0 100 100" style="width:50px;height:50px">${content}</svg>`,
+            ),
+            svg('width="100" height="100"', `<svg width="50" height="50" viewBox="0 0 100 100">${content}</svg>`),
+        );
     });
 });
 

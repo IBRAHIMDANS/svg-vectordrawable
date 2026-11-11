@@ -1,7 +1,7 @@
 import type { Viewport, XastElement } from './ast.js';
 import { collectByName } from './elements.js';
 import { parseStyle, presentation } from './style.js';
-import { IDENTITY, isIdentity, multiply, parseTransform, type Matrix } from './transform.js';
+import { IDENTITY, isIdentity, multiply, parseTransform, parseTransformOrigin, type Matrix } from './transform.js';
 import type { Warning } from './types.js';
 import { parseLength } from './units.js';
 
@@ -139,50 +139,13 @@ export function rootLayout(attrs: Record<string, string>): RootLayout {
 
 const translation = (e: number, f: number): Matrix => ({ ...IDENTITY, e, f });
 
-/** `transform-origin` keywords: share of the reference box. */
-const ORIGIN_KEYWORDS = new Map([
-    ['left', 0],
-    ['top', 0],
-    ['center', 0.5],
-    ['right', 1],
-    ['bottom', 1],
-]);
-const VERTICAL = new Set(['top', 'bottom']);
-const HORIZONTAL = new Set(['left', 'right']);
-
-/** One `transform-origin` component in px of a box side `ref`: NaN for a keyword of the other axis. */
-function originComponent(v: string, ref: number, wrongAxis: ReadonlySet<string>): number {
-    if (wrongAxis.has(v)) return NaN;
-    const share = ORIGIN_KEYWORDS.get(v);
-    return share === undefined ? parseLength(v, ref) : share * ref;
-}
-
-/**
- * Resolves a CSS `transform-origin` (`<x> [<y> [<z>]]`, CSS Transforms 1 §6) on a width×height box:
- * keywords and percentages against the box, lengths through `parseLength`. `z` only moves 3D
- * transforms: checked, then ignored. Null when invalid or not resolvable (`ex`, `vw`, `calc()`…).
- */
-export function boxOrigin(value: string, width: number, height: number): { x: number; y: number } | null {
-    const parts = value.trim().toLowerCase().split(/\s+/);
-    if (parts.length > 3 || (parts[2] !== undefined && !Number.isFinite(parseLength(parts[2])))) return null;
-    let x = parts[0]!;
-    let y = parts[1] ?? 'center';
-    // A lone vertical keyword sets y; two keywords may come in either order.
-    if (parts.length === 1 && VERTICAL.has(x)) [x, y] = ['center', x];
-    else if (ORIGIN_KEYWORDS.has(x) && ORIGIN_KEYWORDS.has(y) && (VERTICAL.has(x) || HORIZONTAL.has(y)))
-        [x, y] = [y, x];
-    const ox = originComponent(x, width, VERTICAL);
-    const oy = originComponent(y, height, HORIZONTAL);
-    return Number.isFinite(ox) && Number.isFinite(oy) ? { x: ox, y: oy } : null;
-}
-
 /**
  * The `transform-origin` of the root `<svg>`, in px of its width×height box: the attribute when
  * resolvable, else the initial `50% 50%` (an element with a CSS layout box).
  */
 function rootOrigin(attrs: Record<string, string>, { width, height }: RootLayout): { x: number; y: number } {
     const raw = attrs['transform-origin'];
-    return (raw === undefined ? null : boxOrigin(raw, width, height)) ?? { x: width / 2, y: height / 2 };
+    return (raw === undefined ? null : parseTransformOrigin(raw, { width, height })) ?? { x: width / 2, y: height / 2 };
 }
 
 /**
@@ -215,7 +178,8 @@ const VIEWPORT_UNIT_RE = /\d(?:[sld]?v|cq)(?:w|h|i|b|min|max)\b/i;
  * Warnings for what the layout of the `<svg>` elements reads but cannot honour: viewport-relative
  * units on the root (`width` / `height`) or a nested `<svg>` (`x` / `y` / `width` / `height`),
  * attribute or style declaration, whose size depends on the browser window (undefined for a
- * drawable, read as if absent), and a root `transform-origin` attribute that cannot be resolved
+ * drawable: ignored on the root, read as `0` / `100%` on a nested one, whose style declaration
+ * overrides the attribute), and a root `transform-origin` attribute that cannot be resolved
  * (the transform then turns around the centre). One warning per distinct message.
  */
 export function layoutWarnings(root: XastElement): Warning[] {
@@ -229,14 +193,14 @@ export function layoutWarnings(root: XastElement): Warning[] {
         const style = parseStyle(attrs.style);
         for (const p of props) {
             for (const [value, source] of [
-                [attrs[p], `${p}="${attrs[p]}"`],
+                // A nested layout reads the style declaration over the attribute: then the attribute is moot.
+                [el !== root && style[p] !== undefined ? undefined : attrs[p], `${p}="${attrs[p]}"`],
                 [style[p], `style "${p}: ${style[p]}"`],
             ] as const) {
                 if (value === undefined || !VIEWPORT_UNIT_RE.test(value)) continue;
                 const isStyle = source.startsWith('style');
-                // The nested layout reads the attributes only, the root one ignores what it cannot parse.
-                const fallback =
-                    el === root || isStyle ? 'ignored' : `read as ${p === 'x' || p === 'y' ? '0' : '100%'}`;
+                // The nested layout reads an unresolvable length as 0 / 100%, the root one ignores it.
+                const fallback = el === root ? 'ignored' : `read as ${p === 'x' || p === 'y' ? '0' : '100%'}`;
                 add({
                     code: isStyle ? 'unsupported-style' : 'unsupported-attribute',
                     message: `${source} on ${el === root ? 'the root' : 'a nested'} <svg> uses a viewport-relative unit: it depends on the browser window, undefined for a drawable; ${fallback}.`,
@@ -248,7 +212,7 @@ export function layoutWarnings(root: XastElement): Warning[] {
     const { transform, 'transform-origin': origin } = root.attributes ?? {};
     const t = parseTransform(transform);
     // Whether it resolves does not depend on the box size: any box tells.
-    if (origin !== undefined && t && !isIdentity(t) && boxOrigin(origin, 1, 1) === null)
+    if (origin !== undefined && t && !isIdentity(t) && parseTransformOrigin(origin, { width: 1, height: 1 }) === null)
         add({
             code: 'unsupported-attribute',
             message: `transform-origin="${origin}" on the root <svg> cannot be resolved; the transform turns around the centre.`,
@@ -273,17 +237,20 @@ export interface NestedLayout {
 /**
  * Viewport rectangle of a nested `<svg>` (in its parent's user space), the matrix mapping its
  * content into that space, and whether it clips. Null for an empty viewport (not rendered).
+ * `x` / `y` / `width` / `height` are geometry properties (SVG 2 §8.8): a `style` declaration
+ * overrides the attribute, as in browsers. An unresolvable value (`auto`, `5vw`…) reads as
+ * `0` / `100%`.
  */
 export function nestedLayout(el: XastElement, parentVp: Viewport): NestedLayout | null {
-    const { x: xs, y: ys, width: ws, height: hs, viewBox, preserveAspectRatio } = el.attributes ?? {};
-    const len = (v: string | undefined, ref: number, fallback: number): number => {
-        const parsed = parseLength(v, ref);
+    const { viewBox, preserveAspectRatio } = el.attributes ?? {};
+    const len = (name: string, ref: number, fallback: number): number => {
+        const parsed = parseLength(presentation(el, name), ref);
         return Number.isNaN(parsed) ? fallback : parsed;
     };
-    const x = len(xs, parentVp.width, 0);
-    const y = len(ys, parentVp.height, 0);
-    const width = len(ws ?? '100%', parentVp.width, parentVp.width);
-    const height = len(hs ?? '100%', parentVp.height, parentVp.height);
+    const x = len('x', parentVp.width, 0);
+    const y = len('y', parentVp.height, 0);
+    const width = len('width', parentVp.width, parentVp.width);
+    const height = len('height', parentVp.height, parentVp.height);
     if (!(width > 0 && height > 0)) return null;
 
     const vb = parseViewBox(viewBox);
