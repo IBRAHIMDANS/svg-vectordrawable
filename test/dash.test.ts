@@ -141,6 +141,20 @@ describe('dashPathData', () => {
         expect(dashPathData('M0 0h10', [0.4, 0.2], 0, TOL, { pathLength: 1 })).toBe('M0 0L4 0M6 0L10 0');
     });
 
+    it('draws pathLength="0" solid, whatever the pattern and offset (infinite scale, as browsers)', () => {
+        // wpt path/distance/pathlength-path-zero: the closed square keeps its closing join.
+        const square = 'M10 10L110 10L110 110L10 110Z';
+        expect(dashPathData(square, [1, 1], 1, TOL, { pathLength: 0 })).toBe(square);
+        expect(dashPathData('M0 0h10', [0, 3], 0, TOL, { pathLength: 0 })).toBe('M0 0L10 0');
+    });
+
+    it('ignores a negative or NaN pathLength (an error per SVG 2)', () => {
+        const plain = dashPathData('M0 0h10', [4, 2], 0, TOL);
+        expect(plain).toBe('M0 0L4 0M6 0L10 0');
+        for (const pathLength of [-4, Number.NaN])
+            expect(dashPathData('M0 0h10', [4, 2], 0, TOL, { pathLength })).toBe(plain);
+    });
+
     it('returns null past MAX_DASHES (tiny dash on a huge path)', () => {
         expect(dashPathData(`M0 0h${MAX_DASHES * 10}`, [1, 1], 0, TOL)).toBeNull();
         expect(dashPathData(`M0 0h${MAX_DASHES}`, [1e-9, 1e-9], 0, TOL)).toBeNull();
@@ -231,5 +245,45 @@ describe('dash properties inheritance', () => {
         ).xml;
         expect(pathData(inherited)).toBe(pathData(own));
         expect(pathData(own)).toMatch(/^M0 0L3 0/); // the first dash is shortened by the offset
+    });
+});
+
+describe('pathLength="0" through convert', () => {
+    const svg = (el: string): string => `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 120 120">${el}</svg>`;
+    const pathData = (xml: string): string[] => [...xml.matchAll(/android:pathData="([^"]*)"/g)].map((m) => m[1]!);
+    const dash =
+        'pathLength="0" stroke-dasharray="1 1" stroke-dashoffset="1" fill="none" stroke="#000" stroke-width="10"';
+
+    it('draws a <path> solid in both modes (wpt pathlength-path-zero)', () => {
+        for (const optimize of [true, false]) {
+            const { xml, warnings } = convert(svg(`<path d="M10,10L110,10L110,110L10,110Z" ${dash}/>`), {
+                optimize,
+                strict: true,
+            });
+            expect(warnings).toEqual([]);
+            const [d] = pathData(xml);
+            expect(d!.match(/M/gi)).toHaveLength(1);
+            expect(d).toMatch(/z$/i);
+        }
+    });
+
+    it('draws shapes solid (optimize: false)', () => {
+        for (const el of [
+            `<rect x="10" y="10" width="100" height="100" ${dash}/>`,
+            `<circle cx="60" cy="60" r="50" ${dash}/>`,
+            `<line x1="10" y1="10" x2="110" y2="10" ${dash}/>`,
+        ]) {
+            const { xml, warnings } = convert(svg(el), { optimize: false, strict: true });
+            expect(warnings).toEqual([]);
+            const [d] = pathData(xml);
+            expect(d!.match(/M/gi)).toHaveLength(1);
+        }
+    });
+
+    it('keeps negative pathLength ignored (wpt pathlength-path-negative)', () => {
+        const neg = convert(svg(`<path d="M10,10L110,10L110,110L10,110Z" ${dash.replace('"0"', '"-4"')}/>`), {
+            optimize: false,
+        }).xml;
+        expect(pathData(neg)[0]!.match(/M/g)!.length).toBeGreaterThan(100);
     });
 });
