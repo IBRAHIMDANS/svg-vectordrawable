@@ -7,6 +7,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- `floatPrecision` and `indent` are validated (`TypeError`): a non-numeric precision used to write `NaN` into every coordinate (`android:width="NaNdp"`), a negative one rounded to tens. `floatPrecision` must be an integer from 0 to 20, `indent` a non-negative integer.
+- An unparseable `currentColor` option throws a `TypeError` instead of silently dropping every shape painted with it.
+- A root `viewBox` with a zero or negative width / height throws instead of emitting `android:viewportWidth="0"`; a zero or negative `width` / `height` falls back to the viewBox, like a percentage (it used to be emitted as `android:width="-5dp"`).
+- `<use>` expansion is bounded (100,000 cloned nodes per document): nested references multiply instances, and a 700-byte SVG could exhaust the heap. Beyond the limit the conversion throws.
+- `vectorDrawableToSvg` validates `android:strokeLineCap` / `android:strokeLineJoin` against their keywords instead of copying them into the SVG (attribute injection from an untrusted VectorDrawable), rejects a non-numeric `android:width` / `android:height` (it produced `width="NaN"`) and reports a character reference outside Unicode as an `Error` (it was a raw `RangeError`).
+- `browser-lite`: custom entity expansion is capped at 512 per document, as in svgo's parser (it was bounded in depth only).
+- A document holding a `d` attribute longer than 50,000 characters skips svgo's `convertPathData`, which is quadratic in the number of relative commands: an 80,000-segment path went from 53 s to under 0.1 s. Such paths are emitted as authored, as with `optimize: false`.
+- CLI: a missing input file, a rejected (`--strict`) or invalid inline SVG (`-s`) print a one-line error and exit with 1 instead of a Node stack trace; the other inputs are still converted. An option given without its value, a non-integer `--precision` and `-` (stdin is not read) are rejected with a message.
+
+### Changed
+
+- The IIFE browser builds are minified: `browser-lite.global.js` 133 KB → 68 KB (26 KB gzipped), `browser.global.js` 1.13 MB → 625 KB (189 KB gzipped).
+- `dist/cli.js` shares the converter with `dist/index.js` through a common chunk instead of bundling a second copy (113 KB → 6 KB).
+- CLI: a directory named `*.svg` inside an input directory is no longer treated as a file.
+
+### Internal
+
+- Path-data code split into `pathParse`, `pathAbsolute`, `pathBBox` and `pathContours` (`pathData` re-exports them); AST types moved to `src/ast.ts`. Output identical on 18,522 conversions (icon corpus and fixtures, with and without svgo).
+- CI: toolchain jobs run on Node 22 and 24 (the versions tsup 9 and vitest 5 declare), `format:check` is enforced, coverage thresholds are set.
+
 ## [0.2.0] - 2026-10-06
 
 ### Added
