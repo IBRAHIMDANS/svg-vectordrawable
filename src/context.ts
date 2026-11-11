@@ -17,6 +17,8 @@ export interface ConvertContext {
     readonly colors: ColorRefs;
     /** Gradients by id. */
     readonly gradients: ReadonlyMap<string, RawGradient>;
+    /** Ids of every `<linearGradient>` / `<radialGradient>`, including the invalid ones `gradients` leaves out. */
+    readonly gradientIds: ReadonlySet<string | undefined>;
     /** Ids of `<pattern>` paint servers (not representable). */
     readonly patternIds: ReadonlySet<string | undefined>;
     readonly clips: ClipPaths;

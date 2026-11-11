@@ -240,7 +240,7 @@ no other rule (asset modules, `@svgr/webpack`, …) also matches `*.svg?vd`.
 ## CI
 
 Use the CLI as a gate. It converts every file, prints `✗ file: [code] message` for each failure and
-exits with 1 if any failed.
+exits with 1 if any failed. `-r` / `--recursive` also converts subdirectories.
 
 ```sh
 # Fail on anything lossy, tolerate approximated group opacity.
@@ -257,6 +257,30 @@ GitHub Actions step:
 
 ```yaml
 - run: npx svgvd design/icons -o build/drawable --strict --android-names
+```
+
+For a machine-readable result, `--json` prints a report on stdout (human-readable lines stay on
+stderr) and keeps the exit code; `--dry-run` converts without writing, to lint a design folder:
+
+```sh
+npx svgvd design/icons -r --strict=lossy --dry-run --json > svgvd-report.json
+# Files that failed, with the escalated warning code when there is one:
+jq -r '.[] | select(.error) | "\(.input): \(.error.code // "-") \(.error.message)"' svgvd-report.json
+# Warning counts by code:
+jq -r '[.[].warnings[].code] | group_by(.) | map("\(.[0]): \(length)") | .[]' svgvd-report.json
+```
+
+Each entry is `{ input, output, warnings, minSdk, error }`: `warnings` hold `code`, `category`
+(`lossy`, `approximation`, `info`), `message` and `node`; `error` is `null` or
+`{ message, code?, category? }`; `output` is the file written (or that `--dry-run` would write),
+`null` on error. With `--android-names`, a resource name collision reports every file as failed and
+writes nothing.
+
+The CLI also reads stdin (`svgvd -`, or no input when stdin is not a terminal) and writes to stdout,
+or to `-o file.xml`:
+
+```sh
+curl -s https://example.com/icon.svg | npx svgvd - --strict -o app/src/main/res/drawable/icon.xml
 ```
 
 To also check that the generated XML compiles, run `aapt2 compile` / `aapt2 link` on the output, as

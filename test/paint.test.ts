@@ -230,3 +230,68 @@ describe('currentColor option', () => {
         },
     );
 });
+
+describe.each([true, false])('invalid gradient paint servers (optimize: %s)', (optimize) => {
+    const stops = '<stop offset="0" stop-color="#f00"/><stop offset="1" stop-color="#00f"/>';
+    const singular = `<linearGradient id="g" gradientTransform="scale(0)">${stops}</linearGradient>`;
+    const run = (body: string): { xml: string; warnings: [string, string][] } => {
+        const { xml, warnings } = convert(svg(`<defs>${singular}</defs>${body}`), { optimize });
+        return { xml, warnings: warnings.map((w) => [w.code, w.message]) };
+    };
+    const notPainted = (property: string): [string, string] => [
+        'missing-gradient',
+        expect.stringMatching(
+            // svgo (optimize: true) may rename the id.
+            new RegExp(
+                `^${property}="url\\(#\\w+\\)" points at a gradient that is not a valid paint server .* the ${property} is not painted\\.$`,
+            ),
+        ) as string,
+    ];
+
+    it('a fill on a singular gradientTransform without fallback paints nothing (SVG 2 §13.2)', () => {
+        const { xml, warnings } = run('<rect width="10" height="10" fill="url(#g)"/>');
+        expect(warnings).toEqual([notPainted('fill')]);
+        expect(xml).not.toContain('<path');
+        expect(xml).not.toContain('aapt');
+    });
+
+    it('keeps the stroke of a path whose invalid fill is not painted', () => {
+        const { xml, warnings } = run('<rect width="10" height="10" fill="url(#g)" stroke="#0f0"/>');
+        expect(warnings).toEqual([notPainted('fill')]);
+        expect(xml).not.toContain('fillColor');
+        expect(xml).toContain('android:strokeColor="#FF00FF00"');
+    });
+
+    it('a stroke on a singular gradientTransform without fallback is dropped, with an accurate message', () => {
+        const { xml, warnings } = run('<rect width="10" height="10" fill="#0f0" stroke="url(#g)"/>');
+        expect(warnings).toEqual([notPainted('stroke')]);
+        expect(xml).toContain('android:fillColor="#FF00FF00"');
+        expect(xml).not.toContain('strokeColor');
+    });
+
+    it('a gradient without stops is not painted either (SVG 1.1 §13.2.4)', () => {
+        const { xml, warnings } = convert(
+            svg('<defs><linearGradient id="g"/></defs><rect width="10" height="10" fill="url(#g)"/>'),
+            { optimize },
+        );
+        expect(warnings.map((w) => [w.code, w.message])).toEqual([notPainted('fill')]);
+        expect(xml).not.toContain('<path');
+    });
+
+    it('uses the fallback color of an invalid gradient, without warning', () => {
+        const { xml, warnings } = run('<rect width="10" height="10" fill="url(#g) #00f" stroke="url(#g) #0f0"/>');
+        expect(warnings).toEqual([]);
+        expect(xml).toContain('android:fillColor="#FF0000FF"');
+        expect(xml).toContain('android:strokeColor="#FF00FF00"');
+    });
+
+    it('keeps the black fill and its message for an unknown reference', () => {
+        const { xml, warnings } = run('<rect width="10" height="10" fill="url(#nope)" stroke="url(#nope)"/>');
+        expect(warnings).toEqual([
+            ['missing-gradient', 'Path references unknown gradient "nope"; using black.'],
+            ['missing-gradient', 'Stroke references unknown paint "nope"; stroke dropped.'],
+        ]);
+        expect(xml).toContain('android:fillColor="#FF000000"');
+        expect(xml).not.toContain('strokeColor');
+    });
+});

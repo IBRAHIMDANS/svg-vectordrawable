@@ -48,7 +48,7 @@ describe('parseCssTransform', () => {
     it('returns null for what no 2D matrix with absolute units expresses', () => {
         for (const v of [
             'translate(50%)', // percentage of the reference box
-            'translate(1em)',
+            'translate(1ex)',
             'rotateX(10deg)',
             'translate3d(1px, 2px, 0)',
             'scale(calc(1 + 1))',
@@ -73,7 +73,7 @@ describe('parseTransformOrigin', () => {
     });
 
     it('returns null for components that depend on the reference box', () => {
-        for (const v of ['50% 50%', 'center', 'left', '0', 'right 0', '10px bottom', '1em 0', 'top top', '1 2 3 4'])
+        for (const v of ['50% 50%', 'center', 'left', '0', 'right 0', '10px bottom', '1ex 0', 'top top', '1 2 3 4'])
             expect(parseTransformOrigin(v), v).toBeNull();
     });
 });
