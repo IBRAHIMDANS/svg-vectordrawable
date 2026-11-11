@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-11-11
+
 ### Breaking / stricter
 
 - **TypeScript ≥ 5.3 is required to read the type declarations**: the svgo types are now imported with `resolution-mode: 'import'`, which fixes `TS1479` for `moduleResolution: node16` CommonJS consumers with `skipLibCheck: false`; TypeScript 5.2 and older fail with `TS1005` on `dist/index.d.cts`, even with `skipLibCheck: true`. (#64)
