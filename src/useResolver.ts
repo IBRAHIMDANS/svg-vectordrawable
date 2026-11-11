@@ -71,14 +71,18 @@ function cloneElement(node: XastElement, spend: CloneBudget): XastElement {
     return clone;
 }
 
+/** The `<use>` width/height that override its target's, or undefined when absent / `auto`. */
+function useLength(value: string | undefined): string | undefined {
+    return value !== undefined && value.trim() !== 'auto' ? value : undefined;
+}
+
 /**
  * Viewport size of a `<use>` instancing a `<symbol>`: the use's width/height win, then the
  * symbol's. A percentage (or a missing value) resolves against the parent viewport, which is not
  * known here: NaN, and the caller keeps the unscaled behaviour.
  */
 function viewportLength(use: string | undefined, symbol: string | undefined): number {
-    const raw = use !== undefined && use.trim() !== 'auto' ? use : symbol;
-    return parseLength(raw);
+    return parseLength(useLength(use) ?? symbol);
 }
 
 /** Allocates clip ids that collide neither with the document's ids nor with each other. */
@@ -95,11 +99,12 @@ function idAllocator(taken: ReadonlySet<string>): IdAllocator {
 }
 
 /**
- * Wraps an inlined `<symbol viewBox>` so it renders like SVG instancing: the viewBox is mapped
- * onto the viewport (width×height at the use origin) and, unless the symbol's `overflow` is
- * `visible`/`auto`, clipped to it. Returns the children of the replacement group, or undefined
- * when no absolute viewport size is known (the caller then keeps the plain translate).
- * Layout: `[<g clip-path>[<clipPath>, <g transform=viewBox>[symbol]]]`, mirroring nested `<svg>`.
+ * Wraps an inlined `<symbol>` so it renders like SVG instancing: a viewBox, if any, is mapped onto
+ * the viewport (width×height at the use origin) and, unless the symbol's `overflow` is
+ * `visible`/`auto`, the content is clipped to that viewport. Returns the children of the
+ * replacement group, or undefined when no absolute viewport size is known (the caller then keeps
+ * the plain translate). Layout: `[<g clip-path>[<clipPath>, <g transform=viewBox>[symbol]]]`,
+ * mirroring nested `<svg>`; without a viewBox the scale group is omitted (`[symbol]`).
  */
 function symbolViewport(
     use: XastElement,
@@ -109,7 +114,6 @@ function symbolViewport(
 ): XastElement[] | undefined {
     const symbolAttrs = symbol.attributes ?? {};
     const vb = parseViewBox(symbolAttrs.viewBox);
-    if (vb === undefined) return undefined;
     const width = viewportLength(use.attributes?.width, symbolAttrs.width);
     const height = viewportLength(use.attributes?.height, symbolAttrs.height);
     if (Number.isNaN(width) || Number.isNaN(height)) return undefined;
@@ -117,12 +121,17 @@ function symbolViewport(
     if (!(width > 0 && height > 0)) return [];
 
     for (const attr of SYMBOL_VIEWPORT_ATTRS) delete clone.attributes?.[attr];
-    const content: XastElement = {
-        type: 'element',
-        name: 'g',
-        attributes: { transform: formatMatrix(viewBoxMatrix(vb, width, height, symbolAttrs.preserveAspectRatio)) },
-        children: [clone],
-    };
+    const content: XastElement =
+        vb === undefined
+            ? clone
+            : {
+                  type: 'element',
+                  name: 'g',
+                  attributes: {
+                      transform: formatMatrix(viewBoxMatrix(vb, width, height, symbolAttrs.preserveAspectRatio)),
+                  },
+                  children: [clone],
+              };
 
     const overflow = presentation(symbol, 'overflow')?.trim();
     if (overflow === 'visible' || overflow === 'auto') return [content];
@@ -143,8 +152,9 @@ function symbolViewport(
 /**
  * Builds the inlined replacement for a `<use>`: a deep clone of the target wrapped in a `<g>` that
  * carries the use's `x`/`y` translation (composed after any `transform` on the use) and its
- * presentation attributes. A `<symbol>` target is treated as a group (cloned, then renamed to `g`);
- * one with a `viewBox` is also scaled into, and clipped to, its viewport (see `symbolViewport`).
+ * presentation attributes. A `<symbol>` target is treated as a group (cloned, then renamed to `g`),
+ * clipped to its viewport and, with a `viewBox`, scaled into it (see `symbolViewport`). On an
+ * `<svg>` target, the use's width/height override the svg's own (the nested-svg walker does the rest).
  */
 function buildReplacement(use: XastElement, target: XastElement, nextId: IdAllocator, spend: CloneBudget): XastElement {
     const clone = cloneElement(target, spend);
@@ -152,6 +162,11 @@ function buildReplacement(use: XastElement, target: XastElement, nextId: IdAlloc
     if (clone.name === 'symbol') {
         clone.name = 'g';
         children = symbolViewport(use, target, clone, nextId) ?? children;
+    } else if (clone.name === 'svg' && clone.attributes !== undefined) {
+        for (const attr of ['width', 'height'] as const) {
+            const value = useLength(use.attributes?.[attr]);
+            if (value !== undefined) clone.attributes[attr] = value;
+        }
     }
 
     const attributes: Record<string, string> = {};
