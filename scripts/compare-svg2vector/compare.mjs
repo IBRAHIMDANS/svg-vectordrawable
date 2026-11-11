@@ -15,7 +15,6 @@ import { basename, dirname, join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { performance } from 'node:perf_hooks';
 
-
 const here = dirname(fileURLToPath(import.meta.url));
 const root = join(here, '..', '..');
 const outDir = join(here, 'out');
@@ -48,7 +47,8 @@ function parseArgs(argv) {
             process.exit(0);
         } else throw new Error(`Unknown argument ${a}`);
     }
-    for (const s of opts.sets) if (!SETS[s]) throw new Error(`Unknown set "${s}" (known: ${Object.keys(SETS).join(', ')})`);
+    for (const s of opts.sets)
+        if (!SETS[s]) throw new Error(`Unknown set "${s}" (known: ${Object.keys(SETS).join(', ')})`);
     return opts;
 }
 
@@ -170,7 +170,9 @@ async function main() {
             console.warn(`[skip] ${set}: ${dir} not found (run scripts/corpus.mjs once to fetch the corpus)`);
             continue;
         }
-        const files = readdirSync(dir).filter((f) => f.endsWith('.svg')).sort();
+        const files = readdirSync(dir)
+            .filter((f) => f.endsWith('.svg'))
+            .sort();
         for (const file of sampled ? sample(files, opts.limit) : files) {
             const stem = basename(file, '.svg');
             jobs.push({
@@ -182,20 +184,29 @@ async function main() {
             });
         }
     }
-    console.log(`[inputs] ${jobs.length} SVGs from ${opts.sets.join(', ')} (limit ${opts.limit || 'none'} per corpus set)`);
+    console.log(
+        `[inputs] ${jobs.length} SVGs from ${opts.sets.join(', ')} (limit ${opts.limit || 'none'} per corpus set)`,
+    );
 
     // 2. Svg2Vector, one JVM for every file.
     const s2v = runSvg2Vector(jobs);
 
     // 3. This library, in-process (warm-up call first so the first file does not pay module init).
-    convert('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1 1"><path d="M0 0h1v1z"/></svg>', { optimize: true });
+    convert('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1 1"><path d="M0 0h1v1z"/></svg>', {
+        optimize: true,
+    });
     const libStarted = performance.now();
     for (const job of jobs) {
         const svg = readFileSync(job.src, 'utf8');
         const t0 = performance.now();
         try {
             const { xml, warnings } = convert(svg, { optimize: true });
-            job.lib = { ok: true, ms: performance.now() - t0, xml, warnings: [...new Set(warnings.map((w) => w.code))] };
+            job.lib = {
+                ok: true,
+                ms: performance.now() - t0,
+                xml,
+                warnings: [...new Set(warnings.map((w) => w.code))],
+            };
             mkdirSync(dirname(job.libXml), { recursive: true });
             writeFileSync(job.libXml, xml);
         } catch (err) {
@@ -230,7 +241,9 @@ async function main() {
         const output = join(outDir, 'render-chunk.out.json');
         writeFileSync(
             input,
-            JSON.stringify(chunk.map((j) => ({ src: j.src, lib: j.lib.ok ? j.libXml : null, s2v: j.s2v.ok ? j.s2vXml : null }))),
+            JSON.stringify(
+                chunk.map((j) => ({ src: j.src, lib: j.lib.ok ? j.libXml : null, s2v: j.s2v.ok ? j.s2vXml : null })),
+            ),
         );
         execFileSync(process.execPath, [fileURLToPath(import.meta.url), '--render-worker', input, output], {
             stdio: 'inherit',
@@ -259,14 +272,20 @@ async function main() {
 
     log(`# Svg2Vector vs svg-vectordrawable`);
     log();
-    log(`Generated ${new Date().toISOString()} — threshold ${pct(threshold)} of inked pixels, render width 256 px (test/visual/compare.ts).`);
+    log(
+        `Generated ${new Date().toISOString()} — threshold ${pct(threshold)} of inked pixels, render width 256 px (test/visual/compare.ts).`,
+    );
     log(`A failed conversion or an output the harness cannot render counts as 100 % in the statistics.`);
     log(`"s2v currentColor": Svg2Vector output containing the literal \`currentColor\` (invalid Android color); it is`);
-    log(`measured after substituting #FF000000 (marked * per file), so the comparison is about geometry/paint, not validity.`);
+    log(
+        `measured after substituting #FF000000 (marked * per file), so the comparison is about geometry/paint, not validity.`,
+    );
     log();
     log('## Summary per set');
     log();
-    log('| set | n | lib < 1 % | s2v < 1 % | lib fail | s2v fail | s2v msgs | s2v currentColor | harness err (lib/s2v) | median lib / s2v | p95 lib / s2v | lib ok, s2v bad | s2v ok, lib bad | bytes lib / s2v (compact) | time lib / s2v |');
+    log(
+        '| set | n | lib < 1 % | s2v < 1 % | lib fail | s2v fail | s2v msgs | s2v currentColor | harness err (lib/s2v) | median lib / s2v | p95 lib / s2v | lib ok, s2v bad | s2v ok, lib bad | bytes lib / s2v (compact) | time lib / s2v |',
+    );
     log('|---|--:|--:|--:|--:|--:|--:|--:|--:|--:|--:|--:|--:|--:|--:|');
     const setsWithJobs = [...new Set(jobs.map((j) => j.set))];
     const summaryRow = (name, js) => {
@@ -283,20 +302,47 @@ async function main() {
                 ` | ${valid.filter((j) => !j.lib.ok).length} | ${valid.filter((j) => !j.s2v.ok).length}` +
                 ` | ${valid.filter((j) => j.s2v.messages).length} | ${valid.filter((j) => j.s2v.currentColor).length}` +
                 ` | ${valid.filter((j) => j.lib.harnessError).length} / ${valid.filter((j) => j.s2v.harnessError).length}` +
-                ` | ${pct(quantile(valid.map((j) => score(j.lib)), 0.5))} / ${pct(quantile(valid.map((j) => score(j.s2v)), 0.5))}` +
-                ` | ${pct(quantile(valid.map((j) => score(j.lib)), 0.95))} / ${pct(quantile(valid.map((j) => score(j.s2v)), 0.95))}` +
+                ` | ${pct(
+                    quantile(
+                        valid.map((j) => score(j.lib)),
+                        0.5,
+                    ),
+                )} / ${pct(
+                    quantile(
+                        valid.map((j) => score(j.s2v)),
+                        0.5,
+                    ),
+                )}` +
+                ` | ${pct(
+                    quantile(
+                        valid.map((j) => score(j.lib)),
+                        0.95,
+                    ),
+                )} / ${pct(
+                    quantile(
+                        valid.map((j) => score(j.s2v)),
+                        0.95,
+                    ),
+                )}` +
                 ` | ${valid.filter((j) => good(j.lib) && !good(j.s2v)).length} | ${valid.filter((j) => good(j.s2v) && !good(j.lib)).length}` +
                 ` | ${(libBytes / 1024).toFixed(0)} / ${(s2vBytes / 1024).toFixed(0)} KiB (${(libCompact / 1024).toFixed(0)} / ${(s2vCompact / 1024).toFixed(0)})` +
                 ` | ${libMs.toFixed(0)} / ${s2vMs.toFixed(0)} ms |`,
         );
     };
-    for (const set of setsWithJobs) summaryRow(set, jobs.filter((j) => j.set === set));
+    for (const set of setsWithJobs)
+        summaryRow(
+            set,
+            jobs.filter((j) => j.set === set),
+        );
     const corpusJobs = jobs.filter((j) => SETS[j.set].sample);
     if (corpusJobs.length) summaryRow('**corpus total**', corpusJobs);
     log();
-    log(`Svg2Vector JVM wall time (incl. JVM start, class loading): ${(s2v.wall / 1000).toFixed(1)} s; library loop wall time: ${(libWall / 1000).toFixed(1)} s.`);
+    log(
+        `Svg2Vector JVM wall time (incl. JVM start, class loading): ${(s2v.wall / 1000).toFixed(1)} s; library loop wall time: ${(libWall / 1000).toFixed(1)} s.`,
+    );
     const sourceErrors = jobs.filter((j) => j.sourceError);
-    if (sourceErrors.length) log(`Source SVGs resvg cannot render (excluded): ${sourceErrors.map((j) => `${j.set}/${j.file}`).join(', ')}`);
+    if (sourceErrors.length)
+        log(`Source SVGs resvg cannot render (excluded): ${sourceErrors.map((j) => `${j.set}/${j.file}`).join(', ')}`);
     log();
 
     const cell = (side) => {
@@ -330,14 +376,18 @@ async function main() {
         log('| set/file | lib | s2v | lib warnings | s2v messages |');
         log('|---|--:|--:|---|---|');
         for (const j of rows.slice(0, opts.top)) {
-            log(`| ${j.set}/${j.file} | ${cell(j.lib)} | ${cell(j.s2v)} | ${j.lib.warnings.join(', ')} | ${fmtMessages(j.s2v.messages)} |`);
+            log(
+                `| ${j.set}/${j.file} | ${cell(j.lib)} | ${cell(j.s2v)} | ${j.lib.warnings.join(', ')} | ${fmtMessages(j.s2v.messages)} |`,
+            );
         }
         log();
     };
     if (corpusJobs.length) {
         topTable('Corpus: library good, Svg2Vector bad', libBetter);
         topTable('Corpus: Svg2Vector good, library bad', s2vBetter);
-        const bothBad = corpusValid.filter((j) => !good(j.lib) && !good(j.s2v)).sort((a, b) => score(b.lib) - score(a.lib));
+        const bothBad = corpusValid
+            .filter((j) => !good(j.lib) && !good(j.s2v))
+            .sort((a, b) => score(b.lib) - score(a.lib));
         topTable('Corpus: both bad', bothBad);
 
         // Distinct Svg2Vector messages / harness errors, so nothing is hidden behind a count.
@@ -347,9 +397,22 @@ async function main() {
             return [...m].sort((a, b) => b[1] - a[1]);
         };
         const msgTally = tally(
-            corpusValid.flatMap((j) => (j.s2v.messages ? [...new Set(j.s2v.messages.split('\n').map((l) => l.trim().replace(/line \d+/g, 'line N')).filter(Boolean))] : [])),
+            corpusValid.flatMap((j) =>
+                j.s2v.messages
+                    ? [
+                          ...new Set(
+                              j.s2v.messages
+                                  .split('\n')
+                                  .map((l) => l.trim().replace(/line \d+/g, 'line N'))
+                                  .filter(Boolean),
+                          ),
+                      ]
+                    : [],
+            ),
         );
-        const harnessTally = tally(corpusValid.flatMap((j) => [j.lib.harnessError, j.s2v.harnessError].filter(Boolean)));
+        const harnessTally = tally(
+            corpusValid.flatMap((j) => [j.lib.harnessError, j.s2v.harnessError].filter(Boolean)),
+        );
         const warnTally = tally(corpusValid.flatMap((j) => j.lib.warnings));
         if (msgTally.length) {
             log('## Svg2Vector messages (corpus, per distinct line)');
@@ -372,20 +435,15 @@ async function main() {
 
         // Size: per-file ratio of compact sizes, where both converted.
         const ratios = corpusValid.filter((j) => j.lib.ok && j.s2v.ok).map((j) => j.lib.compact / j.s2v.compact);
-        log(`Compact size ratio lib / s2v per file: median ${quantile(ratios, 0.5).toFixed(2)}, p5 ${quantile(ratios, 0.05).toFixed(2)}, p95 ${quantile(ratios, 0.95).toFixed(2)}.`);
+        log(
+            `Compact size ratio lib / s2v per file: median ${quantile(ratios, 0.5).toFixed(2)}, p5 ${quantile(ratios, 0.05).toFixed(2)}, p95 ${quantile(ratios, 0.95).toFixed(2)}.`,
+        );
         log();
     }
 
     const report = lines.join('\n');
     writeFileSync(join(outDir, 'report.md'), report + '\n');
-    writeFileSync(
-        join(outDir, 'results.json'),
-        JSON.stringify(
-            jobs,
-            null,
-            1,
-        ),
-    );
+    writeFileSync(join(outDir, 'results.json'), JSON.stringify(jobs, null, 1));
     console.log(report);
     console.log(`\n[out] ${join(outDir, 'report.md')}, results.json, lib/, svg2vector/`);
 
@@ -415,8 +473,7 @@ async function main() {
     }
 }
 
-const entry =
-    process.argv[2] === '--render-worker' ? renderWorker(process.argv[3], process.argv[4]) : main();
+const entry = process.argv[2] === '--render-worker' ? renderWorker(process.argv[3], process.argv[4]) : main();
 entry.catch((err) => {
     console.error(err);
     process.exit(1);

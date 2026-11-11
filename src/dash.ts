@@ -224,7 +224,13 @@ class Writer {
                 if (move) this.parts.push(`M${this.pt(piece[0]!)}`);
                 move = false;
                 const cmd = piece.length === 2 ? 'L' : piece.length === 3 ? 'Q' : 'C';
-                this.parts.push(cmd + piece.slice(1).map((p) => this.pt(p)).join(' '));
+                this.parts.push(
+                    cmd +
+                        piece
+                            .slice(1)
+                            .map((p) => this.pt(p))
+                            .join(' '),
+                );
                 if (s1 >= b) return;
             }
             s0 = s1;
@@ -300,8 +306,7 @@ export function dashPathData(
             continue;
         }
         // On a closed subpath, a dash ending at the end continues into one starting at 0.
-        const wrap =
-            sp.closed && L > 0 && intervals.length > 1 && intervals[0]![0] <= 0 && intervals.at(-1)![1] >= L;
+        const wrap = sp.closed && L > 0 && intervals.length > 1 && intervals[0]![0] <= 0 && intervals.at(-1)![1] >= L;
         const body = wrap ? intervals.slice(1, -1) : intervals;
         for (const [a, b] of body) out.span(sp, a, b, true);
         if (wrap) {
@@ -348,7 +353,5 @@ export function ellipseDashPath(d: string): string {
     const cy = Number(m[2]);
     if (![rx, ry, cx, cy].every(Number.isFinite)) return d;
     const a = `A${rx},${ry} 0 0 1 `;
-    return (
-        `M${cx + rx},${cy}${a}${cx},${cy + ry}${a}${cx - rx},${cy}` + `${a}${cx},${cy - ry}${a}${cx + rx},${cy}Z`
-    );
+    return `M${cx + rx},${cy}${a}${cx},${cy + ry}${a}${cx - rx},${cy}` + `${a}${cx},${cy - ry}${a}${cx + rx},${cy}Z`;
 }

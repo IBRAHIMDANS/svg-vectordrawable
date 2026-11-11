@@ -3,3 +3,16 @@ node_modules
 coverage
 test/__snapshots__
 *.svg
+# Managed by pnpm.
+pnpm-lock.yaml
+pnpm-workspace.yaml
+# Gradle outputs of the Android checks.
+android-render/build
+android-render/render/build
+android-render/.gradle
+scripts/compare-svg2vector/build
+scripts/compare-svg2vector/out
+scripts/compare-svg2vector/.gradle
+# Local backlog files (not versioned).
+TODO.md
+TODO-DONE.md

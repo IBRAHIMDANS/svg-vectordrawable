@@ -7,13 +7,13 @@ on:
 
 jobs:
     build-test:
-        # Full dev toolchain. Node 18 is not in the matrix: vitest 5 crashes on it (engines ^22.12) and
-        # eslint 10 requires >= 20.19. The library itself still supports 18 — see `node18-smoke`.
+        # Full dev toolchain, on the Node versions it declares (tsup 9: ^22.18 || ^24.11, vitest 5:
+        # ^22.12 || ^24). The library itself still supports 18 — see `node18-smoke`.
         runs-on: ubuntu-latest
         strategy:
             fail-fast: false
             matrix:
-                node-version: [20, 22]
+                node-version: [22, 24]
         steps:
             - uses: actions/checkout@v4
             - uses: pnpm/action-setup@v6
@@ -24,11 +24,12 @@ jobs:
             - run: pnpm install --frozen-lockfile
             - run: pnpm run typecheck
             - run: pnpm run lint
+            - run: pnpm run format:check
             - run: pnpm run test
             - run: pnpm run build
 
     node18-smoke:
-        # `engines` says >= 18: build with a supported toolchain (Node 20), then import the ESM and CJS
+        # `engines` says >= 18: build with a supported toolchain (Node 22), then import the ESM and CJS
         # builds under Node 18 and convert one gradient SVG.
         runs-on: ubuntu-latest
         steps:
@@ -36,7 +37,7 @@ jobs:
             - uses: pnpm/action-setup@v6
             - uses: actions/setup-node@v4
               with:
-                  node-version: 20
+                  node-version: 22
                   cache: pnpm
             - run: pnpm install --frozen-lockfile
             - run: pnpm run build
@@ -88,7 +89,7 @@ jobs:
             - uses: pnpm/action-setup@v6
             - uses: actions/setup-node@v4
               with:
-                  node-version: 20
+                  node-version: 22
                   cache: pnpm
             - uses: actions/setup-java@v4
               with:
