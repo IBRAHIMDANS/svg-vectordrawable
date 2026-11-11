@@ -1,6 +1,6 @@
 import { toAndroidColor } from './color.js';
-import { collectByName, GROUPS, isDisplayNone, pathDataOf, SKIP } from './elements.js';
-import { escapeXml } from './format.js';
+import { collectByName, foreignElements, GROUPS, isNotRendered, pathDataOf } from './elements.js';
+import { escapeXml, formatNumber } from './format.js';
 import type { XastElement } from './ast.js';
 import { initialStyle, isHidden, resolveStyle, strokeWidthOf, type Inherited } from './inherited.js';
 import {
@@ -11,7 +11,7 @@ import {
     transformPathData,
     windingSign,
 } from './pathData.js';
-import { SHAPE_NAMES } from './shapes.js';
+import { shapeToPathData, SHAPE_NAMES } from './shapes.js';
 import { isNone, presentation } from './style.js';
 import { IDENTITY, multiply, parseTransform, type Matrix } from './transform.js';
 import type { Warning } from './types.js';
@@ -43,16 +43,198 @@ const URL_REF = /^url\(\s*['"]?#([^'")\s]+)['"]?\s*\)/;
 /** `clip-path` values that clip nothing: `none` and the CSS-wide keywords resolving to it (not inherited). */
 const NO_CLIP = new Set(['none', 'initial', 'unset', 'revert', 'revert-layer']);
 
-/**
- * Why a `clip-path` value other than `none` / `url(#id)` is not converted. CSS basic shapes are
- * positioned in a reference box (`fill-box`, i.e. the object bounding box, by default on SVG
- * elements) that `resolve` cannot measure: it only sees the element's attributes.
- */
+/** Why a `clip-path` value other than `none`, `url(#id)` or a basic shape is not converted. */
 function unsupportedClipReason(value: string): string {
     if (/^url\(/i.test(value)) return 'references an external resource, which is not resolved';
-    if (/^(?:[a-z-]+\(|(?:content|padding|border|margin|fill|stroke|view)-box\b)/i.test(value))
-        return 'is a CSS basic shape or reference box, which is not converted';
-    return 'is not a url(#id) reference';
+    if (GEOMETRY_BOX.test(value)) return 'is a reference box without a basic shape, which is not converted';
+    return 'is not a url(#id) reference nor a basic shape';
+}
+
+/** A `<geometry-box>` keyword on its own. */
+const GEOMETRY_BOX = /^(?:content|padding|border|margin|fill|stroke|view)-box$/i;
+
+/** `[<geometry-box>] <basic-shape>() [<geometry-box>]`: the box on either side, at most once. */
+const BASIC_SHAPE = /^(?:([a-z-]+)\s+)?([a-z-]+)\(([^()]*)\)(?:\s+([a-z-]+))?$/i;
+
+/**
+ * Reference box of a basic shape on an SVG element (CSS Masking 1 §5.1, `clip-path`): "If no
+ * reference box is specified, the border-box will be used as reference box", and "For SVG elements
+ * without associated CSS layout box, the used value for content-box and padding-box is fill-box and
+ * for border-box and margin-box is stroke-box" (asserted by wpt
+ * css/css-masking/clip-path-svg-content/clip-path-inset-stroke-001.svg / -002.svg).
+ */
+const REFERENCE_BOX: Record<string, 'fill-box' | 'stroke-box' | 'view-box'> = {
+    'content-box': 'fill-box',
+    'padding-box': 'fill-box',
+    'fill-box': 'fill-box',
+    'border-box': 'stroke-box',
+    'margin-box': 'stroke-box',
+    'stroke-box': 'stroke-box',
+    'view-box': 'view-box',
+};
+
+/** A basic shape resolved in its reference box: pathData under `rule`, or why it is not converted. */
+type ShapeGeometry = { d: string; rule: ClipRule } | { reason: string };
+
+/** Fractions of the box of the `<position>` keywords, per axis. */
+const POSITION_X: Record<string, number> = { left: 0, center: 0.5, right: 1 };
+const POSITION_Y: Record<string, number> = { top: 0, center: 0.5, bottom: 1 };
+
+const isVertical = (t: string): boolean => t === 'top' || t === 'bottom';
+const isHorizontal = (t: string): boolean => t === 'left' || t === 'right';
+
+/**
+ * A `<position>` of one or two values (keywords or `<length-percentage>`) in `box`, `center` when
+ * absent; null for the 3- and 4-value forms (edge offsets) and anything invalid.
+ */
+function positionIn(tokens: readonly string[], box: Box): { x: number; y: number } | null {
+    let h = 'center';
+    let v = 'center';
+    if (tokens.length === 1) {
+        if (isVertical(tokens[0]!)) v = tokens[0]!;
+        else h = tokens[0]!;
+    } else if (tokens.length === 2) {
+        [h, v] = tokens as [string, string];
+        // A keyword pair may come vertical first (`top left`); a pair with a length may not.
+        if (isVertical(h) || isHorizontal(v)) {
+            if (!(Object.hasOwn(POSITION_Y, h) && Object.hasOwn(POSITION_X, v))) return null;
+            [h, v] = [v, h];
+        }
+        if (isVertical(h) || isHorizontal(v)) return null;
+    } else if (tokens.length) return null;
+    const coord = (t: string, keywords: Record<string, number>, origin: number, size: number): number =>
+        origin + (Object.hasOwn(keywords, t) ? keywords[t]! * size : parseLength(t, size));
+    const x = coord(h, POSITION_X, box.x, box.width);
+    const y = coord(v, POSITION_Y, box.y, box.height);
+    return Number.isFinite(x) && Number.isFinite(y) ? { x, y } : null;
+}
+
+/** Splits `[<radii>] [at <position>]`; null when `at` has no position. */
+function splitAt(tokens: readonly string[]): { radii: string[]; at: string[] } | null {
+    const i = tokens.indexOf('at');
+    if (i < 0) return { radii: [...tokens], at: [] };
+    const at = tokens.slice(i + 1);
+    return at.length ? { radii: tokens.slice(0, i), at } : null;
+}
+
+/**
+ * A `<shape-radius>`: `closest-side` (the default) / `farthest-side` pick among the distances from
+ * the center to the box sides; a `<length-percentage>` (`%` of `ref`) must not be negative.
+ */
+function radiusOf(token: string | undefined, distances: readonly number[], ref: number): number {
+    if (token === undefined || token === 'closest-side') return Math.min(...distances);
+    if (token === 'farthest-side') return Math.max(...distances);
+    const r = parseLength(token, ref);
+    return r >= 0 ? r : NaN;
+}
+
+/** One CSS token of a basic shape's arguments: a dimension / percentage / number, an identifier, a comma. */
+const CSS_TOKEN = /\s*([+-]?(?:\d+\.?\d*|\.\d+)(?:e[+-]?\d+)?(?:%|[a-z]+)?|[a-z-]+|,)\s*/y;
+
+/**
+ * The tokens of `args`, null when something else appears. Tokens need no whitespace between them
+ * when CSS does not (svgo's minifier writes `100%0` for `100% 0`).
+ */
+function cssTokens(args: string): string[] | null {
+    const out: string[] = [];
+    let pos = 0;
+    while (pos < args.length) {
+        CSS_TOKEN.lastIndex = pos;
+        const m = CSS_TOKEN.exec(args);
+        if (!m) return args.slice(pos).trim() ? null : out;
+        out.push(m[1]!);
+        pos = CSS_TOKEN.lastIndex;
+    }
+    return out;
+}
+
+const INVALID: ShapeGeometry = { reason: 'is not a valid basic shape (or uses a form that is not converted)' };
+const EMPTY: ShapeGeometry = { reason: 'is an empty shape' };
+
+/**
+ * Resolves a CSS basic shape (CSS Shapes 1 §3.1) in `box` (lower-case `fn` / `args`) into pathData
+ * in the box's user space:
+ * - `inset(<length-percentage>{1,4})`, percentages of the box height (top / bottom) or width
+ *   (left / right);
+ * - `circle([<shape-radius>] [at <position>])`, a percentage radius of √(w² + h²)/√2;
+ * - `ellipse([<shape-radius>{2}] [at <position>])`, percentages of the width / height;
+ * - `polygon([nonzero | evenodd,] [<length-percentage> <length-percentage>]#)`, relative to the
+ *   box origin.
+ * Not converted (reason returned): `inset(… round …)`, `path()`, `rect()`, `xywh()`, the 3- and
+ * 4-value `<position>`, `closest-corner` / `farthest-corner`, and an empty shape (it would clip
+ * everything; a VectorDrawable clip needs geometry).
+ */
+function basicShape(fn: string, args: string, box: Box, precision: number): ShapeGeometry {
+    const r = (v: number): string => formatNumber(v, precision);
+    const all = cssTokens(args);
+    if (!all) return INVALID;
+    const tokens = all.filter((t) => t !== ',');
+    if (fn !== 'polygon' && tokens.length !== all.length) return INVALID;
+    const { x, y, width: w, height: h } = box;
+    switch (fn) {
+        case 'inset': {
+            if (tokens.includes('round')) return { reason: 'uses rounded corners (round), which are not converted' };
+            if (tokens.length < 1 || tokens.length > 4) return INVALID;
+            const [t, rt = t, b = t, l = rt] = tokens as [string, ...string[]];
+            const [top, right, bottom, left] = [
+                parseLength(t, h),
+                parseLength(rt!, w),
+                parseLength(b!, h),
+                parseLength(l!, w),
+            ];
+            if (![top, right, bottom, left].every(Number.isFinite)) return INVALID;
+            // Insets adding up to more than a dimension are reduced proportionally (CSS Shapes 1): empty.
+            const width = w - left - right;
+            const height = h - top - bottom;
+            if (width <= 0 || height <= 0) return EMPTY;
+            return { d: `M${r(x + left)},${r(y + top)}h${r(width)}v${r(height)}h${r(-width)}z`, rule: 'nonzero' };
+        }
+        case 'circle':
+        case 'ellipse': {
+            const parts = splitAt(tokens);
+            const count = fn === 'circle' ? 1 : 2;
+            if (!parts || (parts.radii.length !== 0 && parts.radii.length !== count)) return INVALID;
+            const c = positionIn(parts.at, box);
+            if (!c) return INVALID;
+            const dx = [Math.abs(c.x - x), Math.abs(x + w - c.x)];
+            const dy = [Math.abs(c.y - y), Math.abs(y + h - c.y)];
+            const rx =
+                fn === 'circle'
+                    ? radiusOf(parts.radii[0], [...dx, ...dy], Math.sqrt((w * w + h * h) / 2))
+                    : radiusOf(parts.radii[0], dx, w);
+            const ry = fn === 'circle' ? rx : radiusOf(parts.radii[1], dy, h);
+            if (!Number.isFinite(rx) || !Number.isFinite(ry)) return INVALID;
+            const d =
+                rx > 0 && ry > 0
+                    ? shapeToPathData('ellipse', { cx: r(c.x), cy: r(c.y), rx: r(rx), ry: r(ry) }, { precision })
+                    : null;
+            return d ? { d, rule: 'nonzero' } : EMPTY;
+        }
+        case 'polygon': {
+            const items: string[][] = [[]];
+            for (const t of all) {
+                if (t === ',') items.push([]);
+                else items.at(-1)!.push(t);
+            }
+            let rule: ClipRule = 'nonzero';
+            const first = items[0]!;
+            if (first.length === 1 && (first[0] === 'nonzero' || first[0] === 'evenodd')) {
+                rule = first[0];
+                items.shift();
+            }
+            const points: string[] = [];
+            for (const xy of items) {
+                if (xy.length !== 2) return INVALID;
+                const px = x + parseLength(xy[0], w);
+                const py = y + parseLength(xy[1], h);
+                if (!Number.isFinite(px) || !Number.isFinite(py)) return INVALID;
+                points.push(`${r(px)},${r(py)}`);
+            }
+            return points.length < 3 ? EMPTY : { d: `M${points.join('L')}z`, rule };
+        }
+        default:
+            return { reason: 'is a basic shape that is not converted' };
+    }
 }
 
 /**
@@ -124,6 +306,8 @@ export class ClipPaths {
     /** Masks already reported as `mask-approximated` (once per mask, whatever the units). */
     private readonly approximatedMasks = new Set<string>();
     private syntheticCount = 0;
+    /** Elements outside the SVG namespace: skipped by every walk, like the renderer (`isNotRendered`). */
+    private readonly foreign: WeakSet<XastElement>;
 
     constructor(
         svgEl: XastElement,
@@ -132,6 +316,7 @@ export class ClipPaths {
         private readonly viewport: Viewport,
         private readonly precision: number,
     ) {
+        this.foreign = foreignElements(svgEl);
         const clipEls: XastElement[] = [];
         collectByName(svgEl, new Set(['clipPath']), clipEls);
         for (const clip of clipEls) {
@@ -142,21 +327,21 @@ export class ClipPaths {
     }
 
     /**
-     * Resolves an element's `clip-path: url(#id)` into pathData; null when absent or unusable. Read
+     * Resolves the `clip-path` of `el` (a group or drawable leaf whose computed style is `style`)
+     * into pathData in its user space (after its own transform); null when absent or unusable. Read
      * like any presentation property (inline `style` first, where svgo inlines `<style>` rules, then
-     * the attribute); never inherited, so only the element's own attributes count. Any other value
-     * (CSS basic shape, geometry box, external url…) is reported as `unsupported-clip-path`.
+     * the attribute); never inherited, so only the element's own attributes count. `url(#id)` and the
+     * CSS basic shapes (see `resolveShape`) are converted; anything else (a reference box alone, an
+     * external url…) is reported as `unsupported-clip-path`.
      */
-    resolve(attrs: Record<string, string>): string | null {
-        const value = (presentation({ type: 'element', attributes: attrs }, 'clip-path') ?? '').trim();
+    resolve(el: XastElement, style: Inherited): string | null {
+        const value = (presentation(el, 'clip-path') ?? '').trim();
         if (!value || NO_CLIP.has(value.toLowerCase())) return null;
+        const shape = BASIC_SHAPE.exec(value);
+        if (shape && shape[2]!.toLowerCase() !== 'url') return this.resolveShape(el, style, value, shape);
         const m = URL_REF.exec(value);
         if (!m) {
-            this.warn({
-                code: 'unsupported-clip-path',
-                message: `clip-path "${value}" ${unsupportedClipReason(value)}; ignored.`,
-                node: 'clip-path',
-            });
+            this.warnClip(value, unsupportedClipReason(value));
             return null;
         }
         const id = m[1]!;
@@ -167,6 +352,76 @@ export class ClipPaths {
         }
         if (!this.cache.has(id)) this.cache.set(id, this.geometryOf(id, clip));
         return this.cache.get(id)!;
+    }
+
+    /** Reports a `clip-path` value that is not converted. */
+    private warnClip(value: string, reason: string): void {
+        this.warn({
+            code: 'unsupported-clip-path',
+            message: `clip-path "${value}" ${reason}; ignored.`,
+            node: 'clip-path',
+        });
+    }
+
+    /**
+     * A CSS basic shape (`[<geometry-box>] <basic-shape> [<geometry-box>]`, see `basicShape`) laid
+     * out in the reference box of `el` (see `REFERENCE_BOX`): its fill-box is its geometric bounding
+     * box (`elementBBox`, like objectBoundingBox units). The stroke-box (the default) is the same box
+     * when no stroke is painted (on the element or, for a group, its content); a painted stroke, which
+     * makes the stroke bounding box larger (joins, caps), and the view-box are not converted.
+     */
+    private resolveShape(el: XastElement, style: Inherited, value: string, match: RegExpExecArray): string | null {
+        const shape = this.shapeGeometry(el, style, match);
+        if ('reason' in shape) {
+            this.warnClip(value, shape.reason);
+            return null;
+        }
+        return this.toNonZero(shape.d, shape.rule, 'clip-path', 'fill-rule="evenodd" in polygon()');
+    }
+
+    private shapeGeometry(el: XastElement, style: Inherited, match: RegExpExecArray): ShapeGeometry {
+        const [, before, fn, args, after] = match;
+        if (before && after) return INVALID;
+        const boxName = (before ?? after ?? 'border-box').toLowerCase();
+        const reference = Object.hasOwn(REFERENCE_BOX, boxName) ? REFERENCE_BOX[boxName] : undefined;
+        if (!reference) return INVALID;
+        if (reference === 'view-box') return { reason: 'uses the view-box reference box, which is not converted' };
+        if (reference === 'stroke-box' && this.paintsStroke(el, style)) {
+            const which = before || after ? boxName : 'border-box, the default';
+            return {
+                reason: `lays out in the stroke bounding box (${which}) of a stroked element, which is not converted`,
+            };
+        }
+        const box = this.elementBBox(el, style.viewport);
+        if (!box) return { reason: 'needs the bounding box of the element, which is unknown' };
+        return basicShape(fn!.toLowerCase(), args!.toLowerCase(), box, this.precision);
+    }
+
+    /** True when `el` (or, for a group, any of its rendered content) paints a stroke. */
+    private paintsStroke(el: XastElement, style: Inherited): boolean {
+        if (!GROUPS.has(el.name ?? '')) return !isNone(style.stroke) && strokeWidthOf(style) > 0;
+        return (el.children ?? []).some(
+            (c) =>
+                c.type === 'element' && !isNotRendered(c, this.foreign) && this.paintsStroke(c, resolveStyle(c, style)),
+        );
+    }
+
+    /**
+     * `d` under `rule` as a nonzero path (a VectorDrawable `<clip-path>` is always nonzero): an evenodd
+     * path is rewritten by orienting its contours by nesting depth, with the same outer orientation for
+     * every piece, so pieces add up (union) instead of cancelling. Contours that cross or touch have no
+     * such rewrite: reported, and nonzero is used.
+     */
+    private toNonZero(d: string, rule: ClipRule, node: string, what: string): string {
+        if (rule !== 'evenodd') return d;
+        const nonzero = evenOddToNonZero(d, 1);
+        if (nonzero === null)
+            this.warn({
+                code: 'unsupported-clip-path',
+                message: `${what} with crossing or touching contours has no nonzero equivalent in a VectorDrawable <clip-path>; nonzero is used.`,
+                node,
+            });
+        return nonzero ?? d;
     }
 
     /** Registers a rectangular clip (a nested `<svg>` viewport) and returns its unique id. */
@@ -313,7 +568,7 @@ export class ClipPaths {
         acc: MaskPieces,
     ): string | null {
         for (const c of node.children ?? []) {
-            if (c.type !== 'element' || !c.name || SKIP.has(c.name) || isDisplayNone(c)) continue;
+            if (c.type !== 'element' || !c.name || isNotRendered(c, this.foreign)) continue;
             for (const prop of ['filter', 'mask', 'clip-path'])
                 if (!isNone(presentation(c, prop))) return `${prop} inside the mask`;
             const s = resolveStyle(c, style);
@@ -384,7 +639,7 @@ export class ClipPaths {
     /** Collects a group's drawable geometry; false when it holds content whose extent is unknown. */
     private collectGeometry(node: XastElement, m: Matrix | null, viewport: Viewport, out: string[]): boolean {
         for (const c of node.children ?? []) {
-            if (c.type !== 'element' || !c.name || SKIP.has(c.name) || isDisplayNone(c)) continue;
+            if (c.type !== 'element' || !c.name || isNotRendered(c, this.foreign)) continue;
             const mm = childMatrix(c, m);
             if (GROUPS.has(c.name)) {
                 if (!this.collectGeometry(c, mm, viewport, out)) return false;
@@ -427,8 +682,8 @@ export class ClipPaths {
      */
     private flatten(node: XastElement, m: Matrix | null, out: string[], rule: ClipRule): void {
         for (const c of node.children ?? []) {
-            // Same filter as the mask and bbox walks: <title>, <desc>, <script>… draw nothing.
-            if (c.type !== 'element' || !c.name || SKIP.has(c.name) || isDisplayNone(c)) continue;
+            // Same filter as the renderer, the mask and bbox walks: <title>, foreign elements… draw nothing.
+            if (c.type !== 'element' || !c.name || isNotRendered(c, this.foreign)) continue;
             const mm = childMatrix(c, m);
             const childRule = clipRuleOf(c, rule);
             if (GROUPS.has(c.name)) {
@@ -445,20 +700,7 @@ export class ClipPaths {
                 continue;
             }
             const d = mm ? transformPathData(raw, mm) : raw;
-            if (childRule !== 'evenodd') {
-                out.push(d);
-                continue;
-            }
-            const nonzero = evenOddToNonZero(d, 1);
-            if (nonzero === null)
-                this.warn({
-                    code: 'unsupported-clip-path',
-                    message:
-                        'clip-rule="evenodd" with crossing or touching contours has no nonzero equivalent in a ' +
-                        'VectorDrawable <clip-path>; nonzero is used.',
-                    node: 'clipPath',
-                });
-            out.push(nonzero ?? d);
+            out.push(this.toNonZero(d, childRule, 'clipPath', 'clip-rule="evenodd"'));
         }
     }
 }

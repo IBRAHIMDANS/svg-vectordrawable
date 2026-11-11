@@ -117,6 +117,13 @@ const MAY_HAVE_SYMBOL_GEOMETRY = /<symbol\b[^>]*?\s(?:x|y|width|height)\s*=/;
  */
 const MAY_HAVE_CSS_TRANSFORM = /(?<![\w-])transform\s*:|transform-(?:origin|box)/;
 
+/**
+ * A CSS basic shape in `clip-path` (`inset()`, `circle()`, `ellipse()`, `polygon()`) is laid out on the
+ * element's reference box in its own user space: svgo only keeps the transform of an element clipped by
+ * a `url()`, and would bake it into the geometry (changing the box). Same guard as a CSS transform.
+ */
+const MAY_HAVE_CLIP_SHAPE = /clip-path\s*[:=]\s*["']?\s*(?:[a-z-]+\s+)?(?:inset|circle|ellipse|polygon)\(/i;
+
 /** svgo's own default `floatPrecision`: up to it, svgo's rounding is left exactly as it is. */
 const SVGO_FLOAT_PRECISION = 3;
 /** Above it, svgo's path and transform rounding falls back to `Math.round` (integers). */
@@ -161,7 +168,7 @@ function defaultConfigFor(svg: string, floatPrecision: number, fillBlackForUnfil
             defaultAttrs: false,
         };
     }
-    if (MAY_HAVE_CSS_TRANSFORM.test(svg)) {
+    if (MAY_HAVE_CSS_TRANSFORM.test(svg) || MAY_HAVE_CLIP_SHAPE.test(svg)) {
         overrides.moveElemsAttrsToGroup = false;
         overrides.moveGroupAttrsToElems = false;
         overrides.collapseGroups = false;
