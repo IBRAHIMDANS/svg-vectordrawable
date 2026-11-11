@@ -137,9 +137,7 @@ describe.each([true, false])('an invalid paint declaration is ignored, as CSS do
         expect(xml).toContain('android:fillColor="#FFFF0000"');
     });
 
-    // svgo (optimize: true) pushes the outer group's fill down onto the inner groups, where their own
-    // (invalid) fill overrides it: the value to fall back to is gone before the converter runs.
-    it.skipIf(optimize)('an invalid group paint is skipped: its children inherit the grandparent value', () => {
+    it('an invalid group paint is skipped: its children inherit the grandparent value', () => {
         const { xml, warnings } = run(
             `<g fill="#f00"><g fill="env(--x)"><rect width="10" height="10"/>${sibling}</g>` +
                 `<g fill="env(--x)"><rect x="12" width="10" height="10" fill="#00f"/>${sibling}</g></g>`,

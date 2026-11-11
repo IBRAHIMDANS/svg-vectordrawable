@@ -110,7 +110,7 @@ function contextResolved(
  * Anything else (`env()`, `var()`, `color-mix()`, a typo…) is an invalid declaration: CSS ignores
  * it, so the next declaration in the cascade (the presentation attribute) or the parent's value applies.
  */
-function isUsablePaint(value: string): boolean {
+export function isUsablePaint(value: string): boolean {
     const v = value.trim();
     return /^none$/i.test(v) || URL_PAINT.test(v) || CONTEXT_PAINT.test(v) || toAndroidColor(v, 1, '#000000') !== null;
 }

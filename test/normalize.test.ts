@@ -565,3 +565,63 @@ describe('normalize: <symbol> geometry (SVG 2) survives svgo', () => {
         }
     });
 });
+
+const icon = (inner: string): string => `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">${inner}</svg>`;
+/** Distinct fill / stroke colors of a VectorDrawable (svgo may merge same-paint paths). */
+const fillColors = (xml: string): string[] => [
+    ...new Set([...xml.matchAll(/android:(?:fill|stroke)Color="([^"]*)"/g)].map((m) => m[1]!)),
+];
+
+describe('normalize: a descendant made visible from CSS survives a hidden group', () => {
+    const rect = '<rect width="10" height="10" fill="#0f0"/>';
+    const visible = (attrs: string): string => rect.replace('<rect', `<rect ${attrs}`);
+
+    for (const optimize of [true, false])
+        it(`style attribute: the rect is drawn (optimize: ${optimize})`, () => {
+            const input = icon(`<g visibility="hidden">${visible('style="visibility:visible"')}</g>`);
+            const { xml, warnings } = convert(input, { optimize });
+            expect(warnings).toEqual([]);
+            expect(fillColors(xml)).toEqual(['#FF00FF00']);
+        });
+
+    // `<style>` is only applied with optimize: true (svgo inlines it).
+    it('<style> rule: the rect is drawn', () => {
+        const input = icon(`<style>.v{visibility:visible}</style><g visibility="hidden">${visible('class="v"')}</g>`);
+        const { xml, warnings } = convert(input);
+        expect(warnings).toEqual([]);
+        expect(fillColors(xml)).toEqual(['#FF00FF00']);
+    });
+
+    it('still drops hidden elements otherwise', () => {
+        expect(elementNames(icon(`<g visibility="hidden">${rect}</g>`))).toEqual(['svg']);
+        expect(elementNames(icon(`<g visibility="hidden">${visible('visibility="visible"')}</g>`))).toContain('path');
+    });
+});
+
+describe('normalize: an unusable fill / stroke keeps the inherited value', () => {
+    for (const [label, body] of <[string, string][]>[
+        ['fill', '<g fill="#0f0"><rect width="10" height="10" fill="env(--x)"/></g>'],
+        ['stroke', '<g fill="none" stroke="#0f0"><rect width="10" height="10" stroke="var(--x)"/></g>'],
+        ['style declaration', '<g fill="#0f0"><g style="fill:env(--x)"><rect width="10" height="10"/></g></g>'],
+        [
+            'two children sharing the invalid value',
+            '<g fill="#0f0"><rect width="10" height="10" fill="env(--x)"/><rect x="12" width="1" height="1" fill="env(--x)"/></g>',
+        ],
+    ])
+        it(`${label}: optimize: true paints like optimize: false`, () => {
+            const optimized = convert(icon(body));
+            const plain = convert(icon(body), { optimize: false });
+            expect(fillColors(optimized.xml)).toContain('#FF00FF00');
+            expect(fillColors(optimized.xml)).toEqual(fillColors(plain.xml));
+            // Same messages; mergePaths may join the shapes that report them.
+            const messages = (ws: { message: string }[]): Set<string> => new Set(ws.map((w) => w.message));
+            expect(messages(optimized.warnings)).toEqual(messages(plain.warnings));
+        });
+
+    it('keeps collapsing groups otherwise', () => {
+        expect(elementNames(icon('<g fill="#0f0"><rect width="10" height="10" fill="currentColor"/></g>'))).toEqual([
+            'svg',
+            'path',
+        ]);
+    });
+});
