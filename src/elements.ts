@@ -16,6 +16,8 @@ export const SKIP = new Set([
     'title',
     'desc',
     'style',
+    // Never executed: a script has no effect on a static render.
+    'script',
     'linearGradient',
     'radialGradient',
     'clipPath',
