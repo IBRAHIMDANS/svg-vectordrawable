@@ -98,6 +98,14 @@
     "dependencies": {
         "svgo": "^4.1.0"
     },
+    "peerDependencies": {
+        "@resvg/resvg-js": "^2.6.2"
+    },
+    "peerDependenciesMeta": {
+        "@resvg/resvg-js": {
+            "optional": true
+        }
+    },
     "devDependencies": {
         "@eslint/js": "^10.0.1",
         "@resvg/resvg-js": "^2.6.2",

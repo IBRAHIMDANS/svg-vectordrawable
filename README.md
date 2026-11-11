@@ -104,7 +104,8 @@ the exported `WARNING_CODES`). Each code has a category (exported `WARNING_CATEG
 style, API level). `strict: true` turns lossy and approximation warnings into errors, `strict: 'lossy'`
 only lossy ones; info warnings are never raised by `strict`. `rules` sets the severity per code
 (`'off' | 'warn' | 'error'`) and wins over `strict`. Errors are thrown as a
-`ConversionError` carrying the offending `warning`, so you can fall back (e.g. to a PNG):
+`ConversionError` carrying the offending `warning`, so you can fall back (e.g. to a PNG, which the
+CLI does with [`--fallback-png`](#png-fallback)):
 
 ```ts
 import { convert, ConversionError } from 'svg-vectordrawable';
@@ -167,19 +168,39 @@ cat icon.svg | svgvd > icon.xml   # stdin → stdout (also `svgvd -`, or `svgvd 
 svgvd icons/ -r -o out/        # recursive: icons/a/b.svg → out/a/b.xml
 svgvd icons/ -o out/ --json    # JSON report on stdout, for CI (see below)
 svgvd icons/ -r --dry-run      # convert and report, write nothing
+svgvd icons/ -o res/drawable --strict --fallback-png all   # PNGs for what cannot be a vector
 ```
 
-`--json` prints one entry per file, `[{ input, output, warnings, minSdk, error }]`, and nothing else on
+`--json` prints one entry per file, `[{ input, output, warnings, minSdk, error, fallback }]`, and nothing else on
 stdout (human-readable lines stay on stderr). Each warning carries its `code` and `category`
 (`lossy`, `approximation`, `info`); `error` is `null` or `{ message, code?, category? }` (`code` when a
 warning was escalated by `--strict` / `--rule`). The XML then has to go to files: `--json` is refused
 with `--stdout`, or with stdin / `-s` without `-o file.xml`, unless `--dry-run`. The exit code is 1
-when any file fails, as without `--json`.
+when any file fails, as without `--json`. `fallback` is `null`, or `{ outputs, reason }` for a file
+rendered to PNG (below): `output` is then `null`, and `reason` is the warning that rejected it.
 
 With `--recursive` and `--android-names`, the outputs are written flat into `-o` (an Android resource
 directory has no subdirectories) and a name collision across subdirectories fails before anything is
 written. Symbolic links to directories are not followed. Without an input argument, `svgvd` reads
 stdin only when it is not a terminal, and prints the help when nothing is piped.
+
+#### PNG fallback
+
+`<filter>`, `<text>`, a gray `<mask>`… will never be a VectorDrawable. With `--fallback-png <densities>`,
+a file that the conversion **rejects** (`--strict`, `--strict=lossy` or `--rule <code>=error`) is
+rendered to PNG instead, one per density bucket, and its XML is not written:
+
+```
+svgvd icons/ -o app/src/main/res/drawable --android-names --strict --fallback-png all
+# blur.svg → res/drawable-{mdpi,hdpi,xhdpi,xxhdpi,xxxhdpi}/blur.png, the others → res/drawable/*.xml
+```
+
+`<densities>` is `all` or a comma list of `mdpi,hdpi,xhdpi,xxhdpi,xxxhdpi` (1×, 1.5×, 2×, 3×, 4×). The
+PNG has the size the `<vector>` would have had in dp (`--width` / `--height` included) times the
+density, rendered by [resvg](https://github.com/linebender/resvg). It goes to `drawable-<density>/` in
+the directory of the XML, or beside it when that directory is named `drawable`. A file that converts,
+even with warnings, never gets a PNG; an invalid SVG still fails. The renderer is an optional
+dependency, loaded only when a fallback is needed: `npm install @resvg/resvg-js`.
 
 ### Browser
 
@@ -217,7 +238,8 @@ runs on this build, so its output can differ from the CLI on SVGs that rely on `
 A VectorDrawable simply cannot represent some SVG features. These are **warned** (or throw in
 `strict` mode), never silently mis‑rendered:
 
-- `<filter>`, `<pattern>`, `<image>`, `<text>` — not representable. A `<mask>` is converted to a
+- `<filter>`, `<pattern>`, `<image>`, `<text>` — not representable (the CLI can render such files to
+  PNG: [`--fallback-png`](#png-fallback)). A `<mask>` is converted to a
   `<clip-path>` when it is clip-equivalent (opaque white content, or opaque content with `mask-type: alpha`);
   any other mask (gray, translucent, stroked, gradient…) is warned with the reason.
 - `stroke-dasharray` in font-relative units (`em`, `ex`) — the stroke is drawn solid. Other dash
