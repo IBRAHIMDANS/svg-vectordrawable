@@ -373,3 +373,48 @@ describe('convert() keeps an explicit black fill with fillBlackForUnfilled: fals
             }
         });
 });
+
+describe('normalize: curves are not rewritten as arcs (svgo makeArcs)', () => {
+    // salute-developers/plasma, sdds-icons 16/MinusCircleOutline.svg: two rings drawn with cubics.
+    // makeArcs turned the outer one into `a6.999 6.999 0 1 0 0 13.996` (radius and end point rounded
+    // separately): the centre moved ~0.12 unit off the chord, 10 % of the inked pixels mismatched.
+    const minusCircle =
+        '<svg width="16" height="16" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">' +
+        '<path fill-rule="evenodd" clip-rule="evenodd" d="M2 7.99821C2 4.68561 4.68611 2 7.99987 2C11.3136 2 ' +
+        '13.9997 4.68561 13.9997 7.99821C13.9997 11.3108 11.3136 13.9964 7.99987 13.9964C4.68611 13.9964 2 ' +
+        '11.3108 2 7.99821ZM7.99987 1C4.13407 1 1 4.13308 1 7.99821C1 11.8633 4.13407 14.9964 7.99987 ' +
+        '14.9964C11.8657 14.9964 14.9997 11.8633 14.9997 7.99821C14.9997 4.13308 11.8657 1 7.99987 1ZM3.78392 ' +
+        '7.49854C3.50777 7.49854 3.28392 7.72239 3.28392 7.99854C3.28392 8.27468 3.50777 8.49854 3.78392 ' +
+        '8.49854H12.2162C12.4923 8.49854 12.7162 8.27468 12.7162 7.99854C12.7162 7.72239 12.4923 7.49854 ' +
+        '12.2162 7.49854H3.78392Z" fill="black"/></svg>';
+    const pathData = (xml: string): string => xml.match(/android:pathData="([^"]*)"/)?.[1] ?? '';
+    // Four cubic quarters of a circle of radius 7 centred on (12, 12).
+    const cubicCircle =
+        'd="M12 5C15.866 5 19 8.134 19 12C19 15.866 15.866 19 12 19C8.134 19 5 15.866 5 12C5 8.134 8.134 5 12 5Z"';
+
+    it('plasma MinusCircleOutline renders like its source (< 1 % mismatch)', () => {
+        const { xml } = convert(minusCircle, { floatPrecision: 3, fillBlackForUnfilled: true });
+        const result = compareSvgs(minusCircle, vdToSvg(xml));
+        expect(result.inked).toBeGreaterThan(0);
+        expect(result.mismatch).toBeLessThan(DEFAULT_MAX_MISMATCH);
+        expect(pathData(xml)).not.toMatch(/a/i);
+    });
+
+    it('keeps cubics as cubics alongside the other convertPathData overrides', () => {
+        const doc = (attrs: string): string =>
+            `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path ${attrs} ${cubicCircle}/></svg>`;
+        for (const attrs of ['', 'style="transform: scale(0.5)"'])
+            for (const floatPrecision of [3, 6]) {
+                const d = pathData(convert(doc(attrs), { floatPrecision }).xml);
+                expect(d, `${attrs} / ${floatPrecision}`).toMatch(/c/i);
+                expect(d, `${attrs} / ${floatPrecision}`).not.toMatch(/a/i);
+            }
+    });
+
+    it('still emits arcs for circles and authored arcs', () => {
+        const doc = (inner: string): string =>
+            `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">${inner}</svg>`;
+        expect(pathData(convert(doc('<circle cx="12" cy="12" r="7"/>')).xml)).toMatch(/a/i);
+        expect(pathData(convert(doc('<path d="M5 12a7 7 0 0 1 14 0z"/>')).xml)).toMatch(/a/i);
+    });
+});
