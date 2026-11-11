@@ -113,3 +113,19 @@ describe('clip-path declared in CSS (issue #51)', () => {
         expect(codes(doc, true)).toContain('missing-clip-path');
     });
 });
+
+describe('non-rendering children of a <clipPath> (TASK-069)', () => {
+    const DOC = svg(
+        '<clipPath id="c"><title>Clip</title><desc>Square</desc><script>void 0</script>' +
+            '<rect x="4" y="4" width="16" height="16"/></clipPath>' +
+            `<g clip-path="url(#c)">${CIRCLE}</g>`,
+    );
+    for (const optimize of MODES) {
+        it(`skips <title>/<desc>/<script> and keeps the clip (optimize: ${optimize})`, () => {
+            const { xml, warnings } = convert(DOC, { optimize, strict: true });
+            expect(warnings).toEqual([]);
+            expect(clipCount(xml)).toBe(1);
+            expectRendersLike(DOC, optimize, svg(`<g clip-path="url(#c)">${CIRCLE}</g>${CLIP}`));
+        });
+    }
+});
