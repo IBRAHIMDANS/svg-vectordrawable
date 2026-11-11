@@ -59,7 +59,7 @@ export function createConverter(createWorker, { timeoutMs = DEFAULT_TIMEOUT_MS }
     /**
      * @param {string} svg
      * @param {object} options ConvertOptions of the lite build
-     * @param {{ applyTint?: boolean }} [preview] options of vectorDrawableToSvg
+     * @param {{ applyTint?: boolean, colors?: Record<string, string> }} [preview] options of vectorDrawableToSvg
      * @returns {Promise<object>} an outcome: `ok`, `error`, `timeout` or `superseded`
      */
     function convert(svg, options, preview = {}) {
@@ -113,6 +113,24 @@ export function buildOptions({ strict = 'off', currentColor = '', floatPrecision
 }
 
 /**
+ * Turns the "Preview colors" field into the `colors` option of `vectorDrawableToSvg`: pairs
+ * `reference=color` separated by commas, semicolons or line breaks, e.g.
+ * `?attr/colorPrimary=#6750A4, @color/brand=#FF0000`. Spaces around each part are ignored and a later
+ * pair overrides an earlier one. Nothing is validated here: a malformed reference or color is
+ * passed on, and the preview error the library raises is shown as is.
+ */
+export function parsePreviewColors(text = '') {
+    const colors = {};
+    for (const pair of text.split(/[,;\n]/)) {
+        if (!pair.trim()) continue;
+        const separator = pair.indexOf('=');
+        const reference = (separator < 0 ? pair : pair.slice(0, separator)).trim();
+        colors[reference] = separator < 0 ? '' : pair.slice(separator + 1).trim();
+    }
+    return colors;
+}
+
+/**
  * The status line of a failed outcome. A `strict` rejection names the warning category that
  * triggered it, e.g. `[unsupported-element] <text> cannot be represented… (lossy, rejected by strict mode)`.
  */
@@ -121,14 +139,85 @@ export function describeError({ message, category }) {
 }
 
 /**
- * The note under the drawable preview listing the color references it drew in gray, or `''` when
- * every color resolved, e.g. `Drawn in gray (no preview value): ?attr/colorPrimary`.
+ * The note under the previews listing the color references the drawable preview drew in gray, or `''`
+ * when every color resolved, e.g. `VectorDrawable result: drawn in gray (no preview value): ?attr/colorPrimary`.
+ * It names the drawable preview because the note spans both figures and the source SVG is never gray.
  */
 export function describeUnresolvedColors(references = []) {
-    return references.length ? `Drawn in gray (no preview value): ${references.join(', ')}` : '';
+    return references.length ? `VectorDrawable result: drawn in gray (no preview value): ${references.join(', ')}` : '';
 }
 
 /** A `data:` URL for an `<img>` (scripts in an SVG loaded as an image never run). */
 export function svgDataUrl(svg) {
     return `data:image/svg+xml,${encodeURIComponent(svg)}`;
+}
+
+/** Above this length the XML is shown as plain text: one `<span>` per token would slow the page. */
+export const MAX_HIGHLIGHT_CHARS = 200_000;
+
+const XML_TOKEN = /(<!--[\s\S]*?-->|<\?[\s\S]*?\?>)|(<\/?[\w:.-]+|\/?>)|("[^"]*")|([\w:.-]+)(?==)/g;
+const XML_TOKEN_TYPES = ['comment', 'tag', 'value', 'attr'];
+
+/**
+ * Splits VectorDrawable XML into `{ type, text }` tokens for syntax coloring (`comment`, `tag`,
+ * `attr`, `value`, or `text` for everything else). Joining the `text` fields gives the input back.
+ */
+export function tokenizeXml(xml) {
+    const tokens = [];
+    let end = 0;
+    for (const match of xml.matchAll(XML_TOKEN)) {
+        if (match.index > end) tokens.push({ type: 'text', text: xml.slice(end, match.index) });
+        const group = match.slice(1).findIndex((value) => value !== undefined);
+        tokens.push({ type: XML_TOKEN_TYPES[group], text: match[0] });
+        end = match.index + match[0].length;
+    }
+    if (end < xml.length) tokens.push({ type: 'text', text: xml.slice(end) });
+    return tokens;
+}
+
+const DEFAULT_RESOURCE_NAME = 'ic_drawable';
+
+/** Java reserved keywords and literals, which are not valid `R` field names. */
+const JAVA_RESERVED = new Set(
+    (
+        'abstract assert boolean break byte case catch char class const continue default do double else enum ' +
+        'extends false final finally float for goto if implements import instanceof int interface long native ' +
+        'new null package private protected public return short static strictfp super switch synchronized this ' +
+        'throw throws transient true try void volatile while'
+    ).split(' '),
+);
+
+/**
+ * The name of the downloaded file: an Android resource name (`[a-z][a-z0-9_]*`) derived from the
+ * source file name, e.g. `Arrow-Left.svg` → `arrow_left.xml`, `new.svg` → `new_.xml`. A copy of
+ * `androidResourceName` (`src/resourceName.ts`), which the lite build does not export; the smoke
+ * test checks both stay in sync. Only difference: an empty name falls back to `ic_drawable`, not `ic`.
+ */
+export function resourceFileName(sourceName = '') {
+    const name = sourceName
+        .replace(/\.svg$/i, '')
+        .normalize('NFD')
+        .replace(/\p{M}/gu, '')
+        .replace(/([a-z0-9])([A-Z])/g, '$1_$2')
+        .replace(/([A-Z])([A-Z][a-z])/g, '$1_$2')
+        .toLowerCase()
+        .replace(/[^a-z0-9]+/g, '_')
+        .replace(/^_+|_+$/g, '');
+    if (!name) return `${DEFAULT_RESOURCE_NAME}.xml`;
+    if (/^[0-9]/.test(name)) return `ic_${name}.xml`;
+    return JAVA_RESERVED.has(name) ? `${name}_.xml` : `${name}.xml`;
+}
+
+/** A human-readable size, e.g. `812 B`, `1.4 kB`, `1.2 MB`. */
+export function formatBytes(bytes) {
+    if (bytes < 1000) return `${bytes} B`;
+    if (bytes < 1_000_000) return `${(bytes / 1000).toFixed(1)} kB`;
+    return `${(bytes / 1_000_000).toFixed(1)} MB`;
+}
+
+/** The drawable's intrinsic size read from the XML, e.g. `24 × 24 dp`, or `''` when absent. */
+export function describeSize(xml) {
+    const width = /android:width="([^"]+?)dp"/.exec(xml);
+    const height = /android:height="([^"]+?)dp"/.exec(xml);
+    return width && height ? `${width[1]} × ${height[1]} dp` : '';
 }

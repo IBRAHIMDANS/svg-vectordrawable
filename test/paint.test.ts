@@ -109,12 +109,13 @@ describe.each([true, false])('an invalid paint declaration is ignored, as CSS do
         expect(xml).not.toContain('strokeColor');
     });
 
-    it('an invalid style declaration lets the presentation attribute apply', () => {
+    // CSS Variables 1 §3.1: it wins over the attribute, then acts as `unset` (the parent's value).
+    it('a style declaration with a substitution hides the presentation attribute: the parent value applies', () => {
         const { xml, warnings } = run(
-            `<g fill="#f00"><rect width="10" height="10" style="fill:env(x);stroke:env(y)" fill="blue" stroke="#0f0"/>${sibling}</g>`,
+            `<g fill="#f00" stroke="#0f0"><rect width="10" height="10" style="fill:env(x);stroke:var(--y)" fill="blue" stroke="#ff0"/>${sibling}</g>`,
         );
-        expect(warnings).toEqual([ignored('fill', 'env(x)'), ignored('stroke', 'env(y)')]);
-        expect(xml).toContain('android:fillColor="#FF0000FF"');
+        expect(warnings).toEqual([ignored('fill', 'env(x)'), ignored('stroke', 'var(--y)')]);
+        expect(xml).toContain('android:fillColor="#FFFF0000"');
         expect(xml).toContain('android:strokeColor="#FF00FF00"');
     });
 
@@ -161,7 +162,7 @@ describe('unparseable paints', () => {
         return { xml, codes: warnings.map((w) => w.code), messages: warnings.map((w) => w.message) };
     };
 
-    it.each(['var(--brand)', 'color-mix(in srgb, red, blue)', 'rgb(from red r g b)', 'light-dark(red, blue)', 'redd'])(
+    it.each(['var(--brand)', 'color-mix(in srgb, red, blue)', 'rgb(from red r g b)', 'light-dark(red, blue)'])(
         'fill="%s" warns and paints the initial black fill',
         (value) => {
             const { xml, codes } = run(`<rect width="10" height="10" fill="${value}"/>`);
@@ -169,6 +170,14 @@ describe('unparseable paints', () => {
             expect(xml).toContain('android:fillColor="#FF000000"');
         },
     );
+
+    it('fill="redd" is dropped like a browser does (attribute or style): the initial black fill, no warning', () => {
+        for (const paint of ['fill="redd"', 'style="fill:redd"']) {
+            const { xml, codes } = run(`<rect width="10" height="10" ${paint}/>`);
+            expect(codes).toEqual([]);
+            expect(xml).toContain('android:fillColor="#FF000000"');
+        }
+    });
 
     it('context-stroke drops the stroke, keeps the fill, and warns', () => {
         const { xml, codes, messages } = run(
@@ -329,15 +338,21 @@ describe.each([true, false])('invalid gradient paint servers (optimize: %s)', (o
         const { xml, warnings } = convert(svg(`<defs>${singular}</defs>${body}`), { optimize });
         return { xml, warnings: warnings.map((w) => [w.code, w.message]) };
     };
-    const notPainted = (property: string): [string, string] => [
+    const notPainted = (
+        property: string,
+        reason = 'a gradient that is not a valid paint server ',
+    ): [string, string] => [
         'missing-gradient',
         expect.stringMatching(
             // svgo (optimize: true) may rename the id.
-            new RegExp(
-                `^${property}="url\\(#\\w+\\)" points at a gradient that is not a valid paint server .* the ${property} is not painted\\.$`,
-            ),
+            new RegExp(`^${property}="url\\(#\\w+\\)" points at ${reason}.* the ${property} is not painted\\.$`),
         ) as string,
     ];
+    const noStops = 'a gradient without stops, which paints none';
+    const empty = (body: string): { xml: string; warnings: [string, string][] } => {
+        const { xml, warnings } = convert(svg(`<defs><linearGradient id="e"/></defs>${body}`), { optimize });
+        return { xml, warnings: warnings.map((w) => [w.code, w.message]) };
+    };
 
     it('a fill on a singular gradientTransform without fallback paints nothing (SVG 2 §13.2)', () => {
         const { xml, warnings } = run('<rect width="10" height="10" fill="url(#g)"/>');
@@ -361,12 +376,33 @@ describe.each([true, false])('invalid gradient paint servers (optimize: %s)', (o
     });
 
     it('a gradient without stops is not painted either (SVG 1.1 §13.2.4)', () => {
-        const { xml, warnings } = convert(
-            svg('<defs><linearGradient id="g"/></defs><rect width="10" height="10" fill="url(#g)"/>'),
-            { optimize },
-        );
-        expect(warnings.map((w) => [w.code, w.message])).toEqual([notPainted('fill')]);
+        const { xml, warnings } = empty('<rect width="10" height="10" fill="url(#e)" stroke="url(#e)"/>');
+        expect(warnings).toEqual([notPainted('fill', noStops), notPainted('stroke', noStops)]);
         expect(xml).not.toContain('<path');
+    });
+
+    it('a gradient without stops paints none even over a fallback color (SVG 1.1 §13.2.4)', () => {
+        const { xml, warnings } = empty('<rect width="10" height="10" fill="url(#e) #00f" stroke="url(#e) #0f0"/>');
+        expect(warnings).toEqual([notPainted('fill', noStops), notPainted('stroke', noStops)]);
+        expect(xml).not.toContain('<path');
+    });
+
+    it("names the author's gradient when context-fill / context-stroke take one without stops", () => {
+        const { xml, warnings } = empty(
+            '<defs><rect id="r" width="10" height="10" fill="context-fill" stroke="context-stroke"/></defs>' +
+                '<use href="#r" fill="url(#e) red" stroke="url(#e) #0f0"/>',
+        );
+        expect(warnings).toEqual([notPainted('fill', noStops), notPainted('stroke', noStops)]);
+        expect(warnings.map(([, message]) => message).join()).not.toContain('svgvd-');
+        if (!optimize) expect(warnings[0]![1]).toMatch(/^fill="url\(#e\)"/);
+        expect(xml).not.toContain('<path');
+    });
+
+    it('keeps the solid stroke of a path whose fill has a gradient without stops', () => {
+        const { xml, warnings } = empty('<rect width="10" height="10" fill="url(#e) #00f" stroke="#0f0"/>');
+        expect(warnings).toEqual([notPainted('fill', noStops)]);
+        expect(xml).not.toContain('fillColor');
+        expect(xml).toContain('android:strokeColor="#FF00FF00"');
     });
 
     it('uses the fallback color of an invalid gradient, without warning', () => {
@@ -376,14 +412,28 @@ describe.each([true, false])('invalid gradient paint servers (optimize: %s)', (o
         expect(xml).toContain('android:strokeColor="#FF00FF00"');
     });
 
-    it('keeps the black fill and its message for an unknown reference', () => {
+    it('paints nothing for an unknown reference without fallback (SVG 2 §13.2)', () => {
         const { xml, warnings } = run('<rect width="10" height="10" fill="url(#nope)" stroke="url(#nope)"/>');
-        expect(warnings).toEqual([
-            ['missing-gradient', 'Path references unknown gradient "nope"; using black.'],
-            ['missing-gradient', 'Stroke references unknown paint "nope"; stroke dropped.'],
-        ]);
-        expect(xml).toContain('android:fillColor="#FF000000"');
-        expect(xml).not.toContain('strokeColor');
+        const unknown = (property: string): [string, string] => [
+            'missing-gradient',
+            `${property}="url(#nope)" points at nothing (unknown paint server), without fallback color; the ${property} is not painted.`,
+        ];
+        expect(warnings).toEqual([unknown('fill'), unknown('stroke')]);
+        expect(xml).not.toContain('<path');
+    });
+
+    it('keeps the solid stroke of a path whose unknown fill reference is not painted', () => {
+        const { xml, warnings } = run('<rect width="10" height="10" fill="url(#nope)" stroke="#0f0"/>');
+        expect(warnings.map(([code]) => code)).toEqual(['missing-gradient']);
+        expect(xml).not.toContain('fillColor');
+        expect(xml).toContain('android:strokeColor="#FF00FF00"');
+    });
+
+    it('uses the fallback color of an unknown reference, without warning', () => {
+        const { xml, warnings } = run('<rect width="10" height="10" fill="url(#nope) #00f" stroke="url(#nope) #0f0"/>');
+        expect(warnings).toEqual([]);
+        expect(xml).toContain('android:fillColor="#FF0000FF"');
+        expect(xml).toContain('android:strokeColor="#FF00FF00"');
     });
 });
 
@@ -457,5 +507,464 @@ describe('roundPathNumbers: rounding in absolute coordinates', () => {
         const source = svg(body);
         const result = compareSvgs(source, vdToSvg(convert(source, { floatPrecision }).xml));
         expect(result.mismatch).toBeLessThan(DEFAULT_MAX_MISMATCH);
+    });
+});
+
+// SVG draws nothing for a zero stroke width, Android a hairline: no stroke attribute is written.
+describe('a zero stroke width (rounded to zero included) is not emitted', () => {
+    const both = (body: string): { xml: string; codes: string[] } => {
+        const [on, off] = [true, false].map((optimize) => convert(svg(body), { optimize }));
+        // pathData is written differently per mode (svgo's convertPathData): the rest is identical.
+        const attrs = (xml: string): string => xml.replace(/android:pathData="[^"]*"/g, '');
+        expect(attrs(off!.xml)).toBe(attrs(on!.xml));
+        expect(off!.warnings).toEqual(on!.warnings);
+        return { xml: on!.xml, codes: on!.warnings.map((w) => w.code) };
+    };
+
+    it.each([
+        ['stroke-width="0"', '0'],
+        ['stroke-width="0.0001"', '0.0001'],
+        ['style="stroke-width:0px"', 'css 0px'],
+    ])('%s with a fill: the fill only (%s)', (decl) => {
+        const { xml, codes } = both(
+            `<rect width="10" height="10" fill="green" stroke="blue" ${decl} stroke-linecap="round" stroke-dasharray="2"/>`,
+        );
+        expect(codes).toEqual([]);
+        expect(xml).toContain('android:fillColor="#FF008000"');
+        expect(xml).not.toMatch(/stroke[A-Z]/);
+    });
+
+    it('stroke-width="0" without fill: nothing drawn', () => {
+        const { xml, codes } = both('<rect width="10" height="10" fill="none" stroke="blue" stroke-width="0"/>');
+        expect(codes).toEqual([]);
+        expect(xml).not.toContain('<path');
+    });
+
+    // optimize: false keeps the transform as a <group> (no baking): optimize: true only.
+    it('a stroke scaled to zero by a baked transform (optimize: true)', () => {
+        const { xml, warnings } = convert(
+            svg('<path d="M0 0H100000V100000H0z" transform="scale(0.0001)" fill="green" stroke="blue"/>'),
+        );
+        expect(warnings).toEqual([]);
+        expect(xml).toContain('android:fillColor="#FF008000"');
+        expect(xml).not.toMatch(/stroke[A-Z]/);
+    });
+
+    it('a stroke gradient with zero width is not emitted either', () => {
+        const { xml } = both(
+            '<defs><linearGradient id="g"><stop stop-color="#f00"/><stop offset="1" stop-color="#00f"/></linearGradient></defs>' +
+                '<rect width="10" height="10" fill="green" stroke="url(#g)" stroke-width="0"/>',
+        );
+        expect(xml).not.toContain('strokeColor');
+        expect(xml).not.toContain('aapt');
+    });
+
+    it('stroke-width="0.01" keeps the stroke', () => {
+        const { xml } = both('<rect width="10" height="10" fill="green" stroke="blue" stroke-width="0.01"/>');
+        expect(xml).toContain('android:strokeColor="#FF0000FF"');
+        expect(xml).toContain('android:strokeWidth="0.01"');
+    });
+});
+
+// T-63 (option A): a <pattern> paint without fallback color paints nothing, fill as stroke; the fallback otherwise.
+describe.each([true, false])('<pattern> paints (optimize: %s)', (optimize) => {
+    const pattern = '<pattern id="p" width="2" height="2"><rect width="1" height="1" fill="#f00"/></pattern>';
+    const run = (body: string): { xml: string; codes: string[] } => {
+        const { xml, warnings } = convert(svg(pattern + body), { optimize });
+        return { xml, codes: warnings.map((w) => w.code) };
+    };
+
+    it('fill="url(#p)" alone paints nothing, reported', () => {
+        const { xml, codes } = run('<rect width="10" height="10" fill="url(#p)"/>');
+        expect(codes).toEqual(['unsupported-paint']);
+        expect(xml).not.toContain('<path');
+        expect(() =>
+            convert(svg(pattern + '<rect width="10" height="10" fill="url(#p)"/>'), { optimize, strict: true }),
+        ).toThrow(ConversionError);
+    });
+
+    it('fill="url(#p)" with a stroke: the stroke only', () => {
+        const { xml, codes } = run('<rect width="10" height="10" fill="url(#p)" stroke="#00f"/>');
+        expect(codes).toEqual(['unsupported-paint']);
+        expect(xml).not.toContain('fillColor');
+        expect(xml).toContain('android:strokeColor="#FF0000FF"');
+    });
+
+    it('stroke="url(#p)" alone paints nothing, reported', () => {
+        const { xml, codes } = run('<rect width="10" height="10" fill="none" stroke="url(#p)"/>');
+        expect(codes).toEqual(['unsupported-paint']);
+        expect(xml).not.toContain('<path');
+    });
+
+    it.each([
+        ['fill', 'fillColor'],
+        ['stroke', 'strokeColor'],
+    ])('%s="url(#p) blue" uses the fallback color', (property, attr) => {
+        const other = property === 'fill' ? '' : 'fill="none"';
+        const { xml, codes } = run(`<rect width="10" height="10" ${other} ${property}="url(#p) blue"/>`);
+        expect(codes).toEqual(['unsupported-paint']);
+        expect(xml).toContain(`android:${attr}="#FF0000FF"`);
+    });
+});
+
+describe.each([true, false])('an invalid length is not reported as an unresolvable unit (optimize: %s)', (optimize) => {
+    const messages = (body: string): string[] => convert(svg(body), { optimize }).warnings.map((w) => w.message);
+
+    // Still reported (T-129): Firefox uses `auto` (a circle), Chrome 0 (nothing drawn, `auto` unsupported too).
+    it.each(['abc', '10abc'])('<ellipse rx="%s">: a circle, and the message cites the invalid value', (value) => {
+        const { xml, warnings } = convert(svg(`<ellipse cx="12" cy="12" rx="${value}" ry="10"/>`), { optimize });
+        expect(xml).toContain('<path');
+        expect(warnings.map((w) => [w.code, w.message])).toEqual([
+            ['unsupported-attribute', `rx="${value}" on <ellipse> is not a valid length; auto is used.`],
+        ]);
+        expect(warnings[0]!.message).not.toMatch(/\bex\b|calc\(/);
+        expect(strictError(svg(`<ellipse cx="12" cy="12" rx="${value}" ry="10"/>`), optimize)?.code).toBe(
+            'unsupported-attribute',
+        );
+    });
+
+    // T-129: Chrome and Firefox use the initial value, as the converter does: reported exactly as the
+    // initial value written out (a shape of size 0 keeps its `empty-path`, as with r="0").
+    it.each([
+        ['<rect x="10abc" width="5" height="5"/>', '<rect x="0" width="5" height="5"/>'],
+        ['<rect x="2" width="abc" height="5"/>', '<rect x="2" width="0" height="5"/>'],
+        ['<circle cx="12" cy="12" r="abc"/>', '<circle cx="12" cy="12" r="0"/>'],
+        [
+            '<line x1="2" y1="12" x2="abc" y2="12" stroke="#000"/>',
+            '<line x1="2" y1="12" x2="0" y2="12" stroke="#000"/>',
+        ],
+        [
+            '<svg x="2" width="abc" height="10" viewBox="0 0 1 1"><rect width="1" height="1"/></svg>',
+            '<svg x="2" width="100%" height="10" viewBox="0 0 1 1"><rect width="1" height="1"/></svg>',
+        ],
+        [
+            '<clipPath id="c"><rect x="abc" width="6" height="6"/></clipPath><rect width="10" height="10" clip-path="url(#c)"/>',
+            '<clipPath id="c"><rect x="0" width="6" height="6"/></clipPath><rect width="10" height="10" clip-path="url(#c)"/>',
+        ],
+    ])('%s: as the initial value, without unsupported-attribute', (body, initial) => {
+        const { xml, warnings } = convert(svg(body), { optimize });
+        const expected = convert(svg(initial), { optimize });
+        expect(warnings).toEqual(expected.warnings);
+        expect(warnings.map((w) => w.code)).not.toContain('unsupported-attribute');
+        expect(strictError(svg(body), optimize)).toEqual(strictError(svg(initial), optimize));
+        expect(compareSvgs(svg(initial), vdToSvg(xml)).mismatch).toBeLessThan(DEFAULT_MAX_MISMATCH);
+    });
+
+    it('<rect x="10abc">: strict passes', () => {
+        expect(strictError(svg('<rect x="10abc" width="5" height="5"/>'), optimize)).toBeNull();
+    });
+
+    it('<rect x="1ex">: a valid length the converter cannot resolve keeps its warning', () => {
+        expect(messages('<rect x="1ex" width="5" height="5"/>')).toEqual([
+            'x="1ex" on <rect> is not a length the converter can resolve (ex, ch, calc()…); 0 is used.',
+        ]);
+    });
+
+    it.each(['1ex', '2ch', '1vw', '3Q', 'calc(1px + 2px)', 'var(--r)'])(
+        '<ellipse rx="%s">: valid but unresolvable, the message keeps naming ex / ch / calc()',
+        (value) => {
+            expect(messages(`<ellipse cx="12" cy="12" rx="${value}" ry="10"/>`)).toEqual([
+                `rx="${value}" on <ellipse> is not a length the converter can resolve (ex, ch, calc()…); auto is used.`,
+            ]);
+        },
+    );
+});
+
+describe.each([true, false])(
+    'a var() declaration inherited by several paths is reported once (optimize: %s)',
+    (optimize) => {
+        const RECTS =
+            '<rect width="4" height="4"/><rect x="8" width="4" height="4"/><rect x="16" width="4" height="4"/>';
+        const warningsOf = (body: string): [string, string][] =>
+            convert(svg(body), { optimize }).warnings.map((w) => [w.code, w.message]);
+
+        it.each([
+            [
+                'fill-opacity',
+                '<g style="fill-opacity:var(--o)">',
+                'unsupported-style',
+                'fill-opacity: var(--o) cannot be resolved',
+            ],
+            ['fill', '<g style="fill:var(--c)">', 'unsupported-paint', 'fill="var(--c)" is not a color'],
+            [
+                'stroke-width',
+                '<g stroke="red" style="stroke-width:var(--w)">',
+                'unsupported-style',
+                'stroke-width: var(--w) cannot be resolved',
+            ],
+            [
+                'color (currentColor fill)',
+                '<g fill="currentColor" style="color:var(--c)">',
+                'unsupported-paint',
+                'color="var(--c)" cannot be resolved',
+            ],
+        ])('%s on a group of three paths: one warning', (_name, group, code, message) => {
+            expect(warningsOf(`${group}${RECTS}</g>`)).toEqual([[code, expect.stringContaining(message)]]);
+        });
+
+        it('two different var() declarations stay two warnings', () => {
+            expect(
+                warningsOf(
+                    `<g style="fill-opacity:var(--a)">${RECTS}</g><g style="fill-opacity:var(--b)">${RECTS}</g>`,
+                ),
+            ).toEqual([
+                ['unsupported-style', expect.stringContaining('fill-opacity: var(--a)')],
+                ['unsupported-style', expect.stringContaining('fill-opacity: var(--b)')],
+            ]);
+        });
+    },
+);
+
+// T-124 / T-145: Chrome and Firefox paint the fallback (nothing without one) of a paint server in
+// another document that cannot be loaded (and a valid one when it can: a `data:` URL with a
+// gradient), so the fallback is lossy.
+describe.each([true, false])('a non-local url() paint (optimize: %s)', (optimize) => {
+    const external = (property: string, url: string): [string, string] => [
+        'unsupported-paint',
+        `${property}="url(${url})" points at a paint server in another document, which the converter does not load; its fallback color red is used.`,
+    ];
+    const warningsOf = (source: string): [string, string][] =>
+        convert(source, { optimize }).warnings.map((w) => [w.code, w.message]);
+    const reference = svg('<rect width="10" height="10" fill="red"/>');
+
+    it.each([
+        ['attribute, relative file', '<rect width="10" height="10" fill="url(other.svg#g) red"/>', 'other.svg#g'],
+        [
+            'attribute, quoted data: URL',
+            `<rect width="10" height="10" fill="url('data:image/svg+xml,%3Csvg/%3E#g') red"/>`,
+            'data:image/svg+xml,%3Csvg/%3E#g',
+        ],
+        [
+            'style, data: URL with a ";"',
+            `<rect width="10" height="10" style="fill:url('data:image/svg+xml;utf8,%3Csvg/%3E#g') red"/>`,
+            'data:image/svg+xml;utf8,%3Csvg/%3E#g',
+        ],
+    ])('fill (%s): the fallback color, reported', (_, body, url) => {
+        const source = svg(body);
+        const { xml } = convert(source, { optimize });
+        expect(xml).toContain('android:fillColor="#FFFF0000"');
+        // svgo lowercases the percent-escapes of a data: URL.
+        expect(warningsOf(source).map(([c, m]) => [c, m.toLowerCase()])).toEqual([
+            external('fill', url).map((s) => s.toLowerCase()),
+        ]);
+        expect(compareSvgs(reference, vdToSvg(xml)).mismatch).toBeLessThan(DEFAULT_MAX_MISMATCH);
+        expect(strictError(source, optimize)?.code).toBe('unsupported-paint');
+    });
+
+    it('stroke: the fallback color, reported', () => {
+        const source = svg('<rect width="10" height="10" fill="none" stroke="url(other.svg#g) red"/>');
+        const { xml } = convert(source, { optimize });
+        expect(xml).toContain('android:strokeColor="#FFFF0000"');
+        expect(warningsOf(source)).toEqual([external('stroke', 'other.svg#g')]);
+    });
+
+    it('reported once for a declaration inherited by several paths', () => {
+        const source = svg(
+            '<g fill="url(other.svg#g) red"><rect width="4" height="4"/><rect x="8" width="4" height="4"/></g>',
+        );
+        expect(warningsOf(source)).toEqual([external('fill', 'other.svg#g')]);
+    });
+
+    // T-145: without fallback, Chrome and Firefox paint nothing (as for a <pattern>, T-63).
+    const unpainted = (property: string, url: string): [string, string] => [
+        'unsupported-paint',
+        `${property}="url(${url})" points at a paint server in another document, which the converter does not load; the ${property} is not painted.`,
+    ];
+
+    it.each([
+        ['fill', '<rect width="10" height="10" fill="url(other.svg#g)"/>'],
+        ['stroke', '<rect width="10" height="10" fill="none" stroke="url(other.svg#g)" stroke-width="2"/>'],
+    ])('%s without fallback: nothing painted, reported, rejected by strict', (property, body) => {
+        const source = svg(body);
+        expect(convert(source, { optimize }).xml).not.toContain('<path');
+        expect(warningsOf(source)).toEqual([unpainted(property, 'other.svg#g')]);
+        expect(strictError(source, optimize)?.code).toBe('unsupported-paint');
+    });
+
+    it('fill without fallback over a stroke: the stroke only', () => {
+        const source = svg('<rect width="10" height="10" fill="url(other.svg#g)" stroke="#00f"/>');
+        const { xml } = convert(source, { optimize });
+        expect(xml).not.toContain('fillColor');
+        expect(xml).toContain('android:strokeColor="#FF0000FF"');
+        expect(warningsOf(source)).toEqual([unpainted('fill', 'other.svg#g')]);
+    });
+
+    it('stroke without fallback under a fill: the fill only', () => {
+        const source = svg('<rect width="10" height="10" fill="#f00" stroke="url(other.svg#g)"/>');
+        const { xml } = convert(source, { optimize });
+        expect(xml).toContain('android:fillColor="#FFFF0000"');
+        expect(xml).not.toContain('strokeColor');
+        expect(warningsOf(source)).toEqual([unpainted('stroke', 'other.svg#g')]);
+    });
+
+    it('without fallback, inherited by several paths: reported once', () => {
+        const source = svg(
+            '<g fill="url(other.svg#g)" stroke="#000"><rect width="4" height="4"/><rect x="8" width="4" height="4"/></g>',
+        );
+        expect(warningsOf(source)).toEqual([unpainted('fill', 'other.svg#g')]);
+    });
+
+    it('a local url(#absent) with a fallback stays silent', () => {
+        expect(warningsOf(svg('<rect width="10" height="10" fill="url(#absent) red"/>'))).toEqual([]);
+    });
+});
+
+// T-129 (also): a declaration inherited by several children is reported once, as svgo may merge them.
+describe.each([true, false])('paint warnings repeated per child are reported once (optimize: %s)', (optimize) => {
+    const codes = (body: string): string[] => convert(svg(body), { optimize }).warnings.map((w) => w.code);
+
+    it('<g fill="url(#missing)"> with 3 children: one missing-gradient', () => {
+        expect(
+            codes(
+                '<g fill="url(#missing)" stroke="#000"><rect width="4" height="4"/><rect x="8" width="4" height="4"/><rect x="16" width="4" height="4"/></g>',
+            ),
+        ).toEqual(['missing-gradient']);
+    });
+
+    it('<g paint-order="stroke"> with 2 children: one unsupported-attribute', () => {
+        expect(
+            codes(
+                '<g paint-order="stroke" fill="#f00" stroke="#000" stroke-width="2"><rect width="4" height="4"/><circle cx="16" cy="4" r="3"/></g>',
+            ),
+        ).toEqual(['unsupported-attribute']);
+    });
+});
+
+// T-139: a <pattern> paint inherited by several children is reported once per message, as svgo may merge them.
+describe.each([true, false])('<pattern> paint warnings under a <g> are reported once (optimize: %s)', (optimize) => {
+    const pattern = '<pattern id="p" width="2" height="2"><rect width="1" height="1" fill="#f00"/></pattern>';
+    const children =
+        '<rect width="4" height="4"/><rect x="8" width="4" height="4"/><rect x="16" width="4" height="4"/>';
+    const messages = (g: string): string[] =>
+        convert(svg(`${pattern}<g ${g}>${children}</g>`), { optimize }).warnings.map((w) => w.message);
+
+    it.each([
+        ['fill="url(#p)" stroke="#000"', /^<pattern> fill "p" .*the fill is not painted\.$/],
+        ['fill="url(#p) #0f0"', /^<pattern> fill "p" .*using its fallback color\.$/],
+        ['fill="none" stroke="url(#p)"', /^Pattern strokes .*stroke dropped\.$/],
+        ['fill="#0f0" stroke="url(#p) #00f"', /^Pattern strokes .*using the fallback color\.$/],
+    ])('%s: one warning', (g, message) => {
+        const found = messages(g);
+        expect(found).toHaveLength(1);
+        expect(found[0]).toMatch(message);
+    });
+
+    it('fill and stroke <pattern>: one warning per message', () => {
+        const found = messages('fill="url(#p) #0f0" stroke="url(#p)"');
+        expect(found).toHaveLength(2);
+        expect(found.some((m) => m.startsWith('<pattern> fill'))).toBe(true);
+        expect(found.some((m) => m.startsWith('Pattern strokes'))).toBe(true);
+    });
+});
+
+// T-142: the stroke and opacity warnings of a declaration inherited by several children are reported
+// once, as svgo may merge those children.
+describe.each([true, false])('stroke and opacity warnings under a <g> are reported once (optimize: %s)', (optimize) => {
+    const children =
+        '<rect width="4" height="4"/><rect x="8" width="4" height="4"/><rect x="16" width="4" height="4"/>';
+    const warningsOf = (g: string): [string, string][] =>
+        convert(svg(`<g ${g}>${children}</g>`), { optimize }).warnings.map((w) => [w.code, w.message]);
+
+    it.each([
+        ['fill="none" stroke="#000" stroke-linejoin="arcs"', 'unsupported-attribute', 'stroke-linejoin="arcs"'],
+        [
+            'fill="none" stroke="#000" stroke-linejoin="miter-clip"',
+            'unsupported-attribute',
+            'stroke-linejoin="miter-clip"',
+        ],
+        ['fill="none" stroke="#000" stroke-dasharray="calc(1px)"', 'unsupported-stroke-dasharray', 'calc(1px)'],
+        // Children apart: no group-level overlap warning, only the per-path fill + stroke one.
+        ['opacity="0.5" fill="#f00" stroke="#000"', 'opacity-approximated', 'fillAlpha/strokeAlpha'],
+    ])('%s: one warning', (g, code, message) => {
+        expect(warningsOf(g)).toEqual([[code, expect.stringContaining(message)]]);
+    });
+
+    it('two different joins stay two warnings', () => {
+        const source = svg(
+            `<g fill="none" stroke="#000"><rect width="4" height="4" stroke-linejoin="arcs"/><rect x="8" width="4" height="4" stroke-linejoin="miter-clip"/></g>`,
+        );
+        expect(convert(source, { optimize }).warnings.map((w) => w.message)).toEqual([
+            expect.stringContaining('"arcs"'),
+            expect.stringContaining('"miter-clip"'),
+        ]);
+    });
+});
+
+// T-166: gradient-under-skew was deduplicated per path only, vector-effect not at all.
+describe.each([true, false])('skew and vector-effect warnings are reported once (optimize: %s)', (optimize) => {
+    const codesOf = (body: string): [string, string][] =>
+        convert(svg(body), { optimize }).warnings.map((w) => [w.code, w.message]);
+    const gradient =
+        '<defs><linearGradient id="g"><stop offset="0" stop-color="#f00"/><stop offset="1" stop-color="#00f"/></linearGradient></defs>';
+
+    it('three gradient-filled children of a skewed <g>: one gradient-under-skew', () => {
+        const children =
+            '<rect width="5" height="5" fill="url(#g)"/><rect x="6" width="5" height="5" fill="url(#g)"/><circle cx="15" cy="15" r="3" fill="url(#g)"/>';
+        expect(codesOf(`${gradient}<g transform="skewX(10)">${children}</g>`)).toEqual([
+            ['gradient-under-skew', expect.any(String)],
+        ]);
+    });
+
+    it('an element with vector-effect instanced by three <use>: one warning', () => {
+        const body =
+            '<defs><path id="p" d="M0 0L5 5" stroke="#000" vector-effect="non-scaling-stroke"/></defs><use href="#p"/><use href="#p" x="5"/><use href="#p" x="10"/>';
+        expect(codesOf(body)).toEqual([['unsupported-attribute', expect.stringContaining('vector-effect')]]);
+    });
+
+    it('two different vector-effect values stay two warnings', () => {
+        const body =
+            '<path d="M0 0L5 5" stroke="#000" vector-effect="non-scaling-stroke"/><path d="M5 0L9 5" stroke="#000" vector-effect="non-scaling-size"/>';
+        expect(codesOf(body).map(([, m]) => m)).toEqual([
+            expect.stringContaining('"non-scaling-stroke"'),
+            expect.stringContaining('"non-scaling-size"'),
+        ]);
+    });
+});
+
+describe('a fill without area beside a painted stroke is not emitted (T-157)', () => {
+    const paths = (xml: string): string[] => xml.match(/<path[\s\S]*?\/>/g) ?? [];
+    const both = (input: string): { xml: string; warnings: Warning[] }[] =>
+        [true, false].map((optimize) => convert(input, { optimize }));
+
+    it.each([
+        ['<line x1="1" y1="1" x2="20" y2="20" stroke="red"/>', 'a <line>'],
+        ['<line x1="1" y1="1" x2="20" y2="20" stroke="red" stroke-dasharray="2"/>', 'a dashed <line>'],
+        ['<polyline points="1 1 20 1 5 1" stroke="red"/>', 'a flat <polyline>'],
+        ['<path d="M1 1L20 20M1 5H20" stroke="red"/>', 'flat subpaths on different lines'],
+    ])('%s: one stroke path, identical in both modes', (body) => {
+        const [opt, raw] = both(svg(body));
+        // svgo rewrites the path data; everything else is identical.
+        const noData = (xml: string): string => xml.replace(/pathData="[^"]*"/g, 'pathData=""');
+        expect(noData(raw!.xml)).toBe(noData(opt!.xml));
+        expect(paths(raw!.xml)).toHaveLength(1);
+        expect(raw!.xml).not.toContain('fillColor');
+        expect(raw!.xml).toContain('strokeColor="#FFFF0000"');
+        expect(raw!.warnings).toEqual([]);
+        expect(opt!.warnings).toEqual([]);
+    });
+
+    it.each([true, false])('reports nothing about the unused fill (optimize: %s)', (optimize) => {
+        const input = svg(
+            '<defs><pattern id="p" width="2" height="2"><rect width="1" height="1"/></pattern></defs>' +
+                '<line x1="1" y1="1" x2="20" y2="20" fill="url(#p)" stroke="red" opacity="0.5"/>',
+        );
+        expect(strictError(input, optimize)).toBeNull();
+        expect(convert(input, { optimize }).xml).not.toContain('fillColor');
+    });
+
+    it.each([
+        ['<polyline points="1 1 20 1 20 20" stroke="red"/>', 'an open subpath that is not flat'],
+        ['<path d="M0 0L10 10L0 10L10 0Z" stroke="red"/>', 'a closed figure-eight (signed area 0)'],
+    ])('%s: keeps its fill (%s)', (body) => {
+        for (const { xml } of both(svg(body))) {
+            expect(paths(xml)).toHaveLength(1);
+            expect(xml).toContain('fillColor="#FF000000"');
+            expect(xml).toContain('strokeColor="#FFFF0000"');
+        }
+    });
+
+    it('a flat path with only a fill is left as is', () => {
+        const { xml } = convert(svg('<path d="M0 0h5"/>'), { optimize: false });
+        expect(xml).toContain('fillColor="#FF000000"');
     });
 });

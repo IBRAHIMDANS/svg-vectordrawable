@@ -1,7 +1,8 @@
 import { formatNumber } from './format.js';
-import { arcCenter, type ArcCenter, fmt, toAbsolute } from './pathAbsolute.js';
+import { arcCenter, type ArcCenter, toAbsolute } from './pathAbsolute.js';
 import { transformPathData } from './pathData.js';
 import { parsePath } from './pathParse.js';
+import { cssComponents } from './style.js';
 import { IDENTITY } from './transform.js';
 import { parseLength } from './units.js';
 
@@ -231,12 +232,19 @@ function paramAt(seg: Segment, s: number): number {
     return s1 > s0 ? t0 + ((s - s0) / (s1 - s0)) * (ts[lo]! - t0) : t0;
 }
 
-/** Splits a path into subpaths of line / quad / cubic / arc segments, in absolute coordinates. */
-function parseSubpaths(d: string, tolerance: number): Subpath[] {
+/**
+ * Splits a path into subpaths of line / quad / cubic / arc segments, in absolute coordinates rounded
+ * to `decimals` places.
+ */
+function parseSubpaths(d: string, tolerance: number, decimals: number): Subpath[] {
     const commands = parsePath(d);
+    const f = 10 ** decimals;
+    const round = (n: number): number => (Number.isFinite(n) ? Math.round(n * f) / f || 0 : 0);
     // Arcs are measured on the true ellipse: hand toAbsolute a line to the arc's end point instead, so
     // it maps commands one to one (it would lower an arc to cubics) and still resolves relative and
-    // shorthand coordinates. Coordinates are rounded like transformPathData output.
+    // shorthand coordinates. Coordinates are rounded to the output precision (never below the 3
+    // decimals of transformPathData), so the dashes lie on the emitted path and the last one ends at
+    // its end point: under a large group scale, 3 decimals would move both.
     const arcArgs = commands.map((c) => (c.cmd === 'A' || c.cmd === 'a' ? c.args : null));
     const abs = toAbsolute(
         commands.map((c, k) => (arcArgs[k] ? { cmd: c.cmd === 'A' ? 'L' : 'l', args: c.args.slice(5) } : c)),
@@ -253,7 +261,7 @@ function parseSubpaths(d: string, tolerance: number): Subpath[] {
     };
     abs.forEach(({ cmd, args }, k) => {
         const pts: Point[] = [pen];
-        for (let j = 0; j + 1 < args.length; j += 2) pts.push([Number(fmt(args[j]!)), Number(fmt(args[j + 1]!))]);
+        for (let j = 0; j + 1 < args.length; j += 2) pts.push([round(args[j]!), round(args[j + 1]!)]);
         if (cmd === 'M') {
             pen = pts[1]!;
             current = null;
@@ -395,8 +403,8 @@ export function dashPathData(
 ): string | null {
     const { precision = 3, pathLength } = options;
     // pathLength="0": every non-zero dash and gap becomes infinite, which browsers draw solid.
-    if (pathLength === 0) return transformPathData(d, IDENTITY);
-    const subpaths = parseSubpaths(d, tolerance > 0 ? tolerance : 1e-3);
+    if (pathLength === 0) return transformPathData(d, IDENTITY, precision);
+    const subpaths = parseSubpaths(d, tolerance > 0 ? tolerance : 1e-3, Math.max(precision, 3));
     let pattern = dasharray;
     let offset = dashoffset;
     if (pathLength !== undefined && pathLength > 0) {
@@ -405,8 +413,11 @@ export function dashPathData(
         offset *= scale;
     }
     if (!(pattern.reduce((a, b) => a + b, 0) > 0)) return null;
-    // No gap: one dash per subpath, i.e. the solid stroke.
-    if (pattern.every((v, i) => i % 2 === 0 || v === 0)) return transformPathData(d, IDENTITY);
+    // No gap: one dash per subpath, i.e. the solid stroke. parseDasharray already returns [] for a
+    // gapless pattern, so this guards direct calls and the pathLength scaling above, which can
+    // underflow a tiny gap to 0 (`1 1e-30` with pathLength="1e308"): without it the zero-gap
+    // pattern exceeds MAX_DASHES and the solid stroke gets a spurious warning.
+    if (pattern.every((v, i) => i % 2 === 0 || v === 0)) return transformPathData(d, IDENTITY, precision);
 
     const out = new Writer(precision);
     let budget = MAX_DASHES;
@@ -444,7 +455,8 @@ export function dashPathData(
 export function parseDasharray(raw: string | undefined, diagonal: number): number[] | null {
     const value = raw?.trim() ?? 'none';
     if (value === '' || value.toLowerCase() === 'none') return [];
-    const list = value.split(/[\s,]+/).filter(Boolean);
+    // Split as the CSS tokenizer does: svgo writes `stroke-dasharray: 10% 5` as `10%5`.
+    const list = cssComponents(value).filter((v) => v !== ',');
     const lengths = list.map((v) => parseLength(v, diagonal));
     if (lengths.some((v) => Number.isNaN(v))) return null;
     if (lengths.some((v) => v < 0) || lengths.every((v) => v === 0)) return [];

@@ -11,6 +11,11 @@ android {
     }
 }
 
+kotlin {
+    // Compile and run with a full JDK 21 instead of whatever java is on the PATH (may be a JRE).
+    jvmToolchain(21)
+}
+
 // Inputs / outputs shared with the Node scripts (prepare.mjs writes the manifest, compare.mjs reads the PNGs).
 val renderDir = rootProject.layout.buildDirectory.dir("render")
 

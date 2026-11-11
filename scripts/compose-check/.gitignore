@@ -1,0 +1,4 @@
+# Gradle / Kotlin state, build outputs and the generated Kotlin (build/generated/kotlin)
+.gradle/
+build/
+.kotlin/

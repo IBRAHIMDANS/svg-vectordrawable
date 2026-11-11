@@ -88,12 +88,13 @@ const LMS_TO_XYZ: Mat3 = [
     [-0.0763729366746601, -0.4214933324022432, 1.5869240198367816],
 ];
 
-/** sRGB (and display-p3) transfer function: encoded → linear light. */
-const srgbToLinear = (c: number): number => {
+/** sRGB (and display-p3) transfer function: encoded → linear light (CSS Color 4 §10.2 `lin_sRGB`). */
+export const srgbToLinear = (c: number): number => {
     const abs = Math.abs(c);
     return abs <= 0.04045 ? c / 12.92 : Math.sign(c) * ((abs + 0.055) / 1.055) ** 2.4;
 };
-const linearToSrgb = (c: number): number => {
+/** Inverse sRGB transfer function: linear light → encoded (CSS Color 4 §10.2 `gam_sRGB`). */
+export const linearToSrgb = (c: number): number => {
     const abs = Math.abs(c);
     return abs > 0.0031308 ? Math.sign(c) * (1.055 * abs ** (1 / 2.4) - 0.055) : 12.92 * c;
 };

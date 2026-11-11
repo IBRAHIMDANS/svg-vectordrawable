@@ -1,10 +1,10 @@
 import { readFileSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { describe, expect, it } from 'vitest';
+import { beforeAll, describe, expect, it, vi } from 'vitest';
 import { convert, ConversionError } from '../src/index.js';
 import type { XastElement } from '../src/ast.js';
-import { parseSvg } from '../src/normalize.js';
+import { parseSvg, prepareSource } from '../src/normalize.js';
 import { vdToSvg } from './visual/vdToSvg.js';
 import { compareSvgs, DEFAULT_MAX_MISMATCH } from './visual/compare.js';
 
@@ -37,16 +37,32 @@ describe('normalize: mergePaths threshold', () => {
         expect(countPaths(xml)).toBe(1);
     });
 
-    it('converts 10,000 paths with optimize:true in near-linear time', () => {
-        const input = svg(grid(10_000));
-        const start = performance.now();
-        const { xml } = convert(input);
-        const elapsed = performance.now() - start;
-        expect(countPaths(xml)).toBe(10_000);
-        // ~0.5-1.7 s locally (24.6 s before the threshold). The path count above is the deterministic
-        // check; this bound only catches a return of the quadratic blow-up on a loaded CI runner.
-        expect(elapsed).toBeLessThan(8_000);
-    }, 20_000);
+    it('converts paths with optimize:true in near-linear time', () => {
+        // A ratio of two timings on the same machine, not an absolute bound: load slows both runs.
+        // Measured for 5x the paths: 3-7.5 as is (also at load 35), ~24 with the threshold removed.
+        const small = 1_000;
+        const large = 5 * small;
+        const maxRatio = 11;
+        const inputs = { small: svg(grid(small)), large: svg(grid(large)) };
+        const time = (input: string): { ms: number; xml: string } => {
+            const start = performance.now();
+            const { xml } = convert(input);
+            return { ms: performance.now() - start, xml };
+        };
+        time(inputs.small); // warm-up
+        let best = { small: Infinity, large: Infinity };
+        let largeXml: string;
+        // Min of a few interleaved runs filters out load spikes; stop as soon as the ratio holds.
+        let attempt = 0;
+        do {
+            const s = time(inputs.small);
+            const l = time(inputs.large);
+            largeXml = l.xml;
+            best = { small: Math.min(best.small, s.ms), large: Math.min(best.large, l.ms) };
+        } while (++attempt < 3 && best.large / best.small >= maxRatio);
+        expect(best.large / best.small).toBeLessThan(maxRatio);
+        expect(countPaths(largeXml)).toBe(large);
+    }, 120_000);
 });
 
 describe('normalize: convertPathData threshold', () => {
@@ -109,11 +125,11 @@ describe('normalize: floatPrecision', () => {
 
     it('keeps baked transforms finer than coordinates', () => {
         // The stroke scale goes through svgo's transformPrecision (5 by default): 1.23457 × 1.123456
-        // would give 1.386987 instead of 1.386983.
+        // would give 1.386987 instead of 1.386983. The scale above 1 adds a decimal (7).
         const scaled =
             '<g transform="scale(1.23456789)"><path fill="none" stroke="#000" stroke-width="1.123456" d="M1.111111 1L5 5"/></g>';
         const path = firstPath(scaled, 6);
-        expect(path.d).toBe('m1.371742 1.234568 4.801097 4.938271');
+        expect(path.d).toBe('m1.371742 1.2345679 4.8010974 4.9382715');
         expect(Number(path['stroke-width']).toFixed(6)).toBe('1.386983');
     });
 
@@ -138,6 +154,30 @@ describe('normalize: floatPrecision', () => {
             6,
         );
         expect(JSON.stringify(root)).toContain('"d":"m2.123 2 8.865 1.333z"');
+    });
+});
+
+describe('normalize: rotate / skew angles keep their decimals (svgo convertTransform)', () => {
+    // svgo rounds `matrix(1,0,0.5,1,0,0)` to `skewX(27)` instead of skewX(26.565): ~2% of the
+    // drawing moved, whether the transform is then baked into the path or kept on a group.
+    const skewed = (inner: string): string =>
+        `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><g transform="matrix(1,0,0.5,1,0,0)">${inner}</g></svg>`;
+    const TIGHT = 0.001;
+
+    it('when the transform is baked into the path', () => {
+        // The id keeps svgo from collapsing the group first, so convertTransform rewrites the matrix.
+        const source = skewed('<path id="x" d="M0 0L0 10L10 10z"/>');
+        const { xml } = convert(source);
+        expect(xml).toContain('android:pathData="M0 0L5 10L15 10Z"');
+        expect(compareSvgs(source, vdToSvg(xml)).mismatch).toBeLessThan(TIGHT);
+    });
+
+    it('when the transform stays on a group', () => {
+        const source = skewed(
+            '<clipPath id="c"><rect width="20" height="20"/></clipPath><g clip-path="url(#c)"><path d="M0 0L0 10L10 10z"/><path d="M12 0h6v6h-6z"/></g>',
+        );
+        const { xml } = convert(source);
+        expect(compareSvgs(source, vdToSvg(xml)).mismatch).toBeLessThan(TIGHT);
     });
 });
 
@@ -207,8 +247,7 @@ describe('normalize: shapes with a negative size are not drawn', () => {
         '<rect width="10" height="-10"/>',
         '<rect width="10" height=" -10"/>',
         "<circle cx='50' cy='50' r='-5'/>",
-        '<ellipse cx="50" cy="50" rx="-5" ry="10"/>',
-        '<ellipse cx="50" cy="50" rx="5" ry="-10"/>',
+        '<ellipse cx="50" cy="50" rx="-5" ry="-10"/>',
     ]) {
         it(`skips ${shape}`, () => {
             const { xml, warnings } = convert(svg(shape));
@@ -237,6 +276,16 @@ describe('normalize: shapes with a zero size warn in both modes', () => {
         "<circle cx='50' cy='50' r='0'/>",
         '<ellipse cx="50" cy="50" rx="0" ry="10"/>',
         '<ellipse cx="50" cy="50" rx="5" ry="0"/>',
+        // An empty or blank size is an invalid length, read as 0 (not rendered); svgo draws it.
+        '<rect width="" height="10"/>',
+        '<rect width="10" height=" "/>',
+        "<rect width='\t' height='10'/>",
+        '<circle cx="50" cy="50" r=""/>',
+        '<circle cx="50" cy="50" r=" "/>',
+        // cleanupNumericValues turns a zero in absolute units into "0", which removeHiddenElems deletes.
+        '<rect width="0mm" height="10"/>',
+        '<circle cx="50" cy="50" r="0mm"/>',
+        '<ellipse cx="50" cy="50" rx="0pt" ry="5"/>',
     ]) {
         it(`${shape}: optimize: true emits the same warnings as optimize: false`, () => {
             const source = svg(`${shape}<path d="M0 0h10v10z"/>`);
@@ -259,6 +308,24 @@ describe('normalize: shapes with a zero size warn in both modes', () => {
             }
         });
     }
+
+    it('a stroked rect with an empty width draws nothing in both modes (Chrome, Firefox)', () => {
+        const source = svg('<rect x="10" width="" height="50" stroke="#f00"/>');
+        for (const optimize of [true, false]) {
+            const { xml, warnings } = convert(source, { optimize });
+            expect(countPaths(xml)).toBe(0);
+            expect(warnings.map((w) => w.code)).toEqual(['empty-path', 'large-vector']);
+        }
+    });
+
+    it('a circle with an empty r followed by a rect warns in both modes', () => {
+        const source = svg('<circle cx="50" cy="50" r=""/><rect width="10" height="10"/>');
+        for (const optimize of [true, false]) {
+            const { xml, warnings } = convert(source, { optimize });
+            expect(countPaths(xml)).toBe(1);
+            expect(warnings.map((w) => w.code)).toEqual(['empty-path', 'large-vector']);
+        }
+    });
 
     it('keeps converting shapes to paths otherwise (a zero position does not count)', () => {
         expect(elementNames(svg('<rect x="0" y="0" width="10" height="10"/><circle cx="0" cy="0" r="5"/>'))).toEqual([
@@ -285,8 +352,8 @@ describe('normalize: elements with empty geometry warn in both modes', () => {
         '<polygon points="10,10 20"/>',
         '<circle cx="50" cy="50"/>',
         '<circle cx="50" cy="50" style="r:0"/>',
-        '<ellipse cx="50" cy="50" rx="5"/>',
-        '<ellipse cx="50" cy="50" ry="5"/>',
+        '<ellipse cx="50" cy="50"/>',
+        '<ellipse cx="50" cy="50" rx="-5"/>',
     ]) {
         it(`${shape}: optimize: true emits the same warnings as optimize: false`, () => {
             const source = svg(`${shape}<path d="M0 0h10v10z"/>`);
@@ -623,5 +690,521 @@ describe('normalize: an unusable fill / stroke keeps the inherited value', () =>
             'svg',
             'path',
         ]);
+    });
+});
+
+describe('normalize: internal data-svgvd-* markers written in the source are ignored', () => {
+    const cases: [string, string, string, boolean][] = [
+        [
+            'data-svgvd-use-instance',
+            '<g fill="red" data-svgvd-use-instance=""><rect width="10" height="10" fill="context-fill"/></g>',
+            '<g fill="red"><rect width="10" height="10" fill="context-fill"/></g>',
+            false,
+        ],
+        ['data-svgvd-id', '<path data-svgvd-id="evil" d="M0 0h10v10z"/>', '<path d="M0 0h10v10z"/>', true],
+    ];
+    for (const [label, marked, plain, preserveIds] of cases)
+        for (const optimize of [false, true])
+            for (const ids of [preserveIds, !preserveIds])
+                it(`${label}: same output as without it (optimize: ${optimize}, preserveIds: ${ids})`, () => {
+                    const options = { optimize, preserveIds: ids };
+                    expect(convert(icon(marked), options)).toEqual(convert(icon(plain), options));
+                });
+
+    it('data-svgvd-use-instance: context-fill still reports unsupported-paint', () => {
+        const { warnings } = convert(icon(cases[0]![1]), { optimize: false });
+        expect(warnings.map((w) => w.code)).toContain('unsupported-paint');
+    });
+
+    it('data-svgvd-id: no android:name taken from it', () => {
+        expect(convert(icon(cases[1]![1]), { preserveIds: true }).xml).not.toContain('evil');
+    });
+
+    it('is stripped before a custom svgoConfig', () => {
+        const svgoConfig = { plugins: [] };
+        expect(convert(icon(cases[0]![1]), { svgoConfig })).toEqual(convert(icon(cases[0]![2]), { svgoConfig }));
+    });
+
+    it('keeps an authored id under preserveIds', () => {
+        expect(convert(icon('<path id="named" d="M0 0h10v10z"/>'), { preserveIds: true }).xml).toContain(
+            'android:name="named"',
+        );
+    });
+});
+
+describe('normalize: an invalid transform list reaches the converter as authored', () => {
+    /** The attributes of every element, in document order. */
+    const attrsOf = (svgText: string): Record<string, string>[] => {
+        const out: Record<string, string>[] = [];
+        const walk = (n: { children?: unknown[] }): void => {
+            for (const c of (n.children ?? []) as XastElement[]) {
+                if (c.type !== 'element') continue;
+                out.push(c.attributes ?? {});
+                walk(c);
+            }
+        };
+        walk(parseSvg(svgText, true));
+        return out;
+    };
+
+    it.each([
+        ['transform', 'translate(10px 5px)', '<path transform="translate(10px 5px)" d="M0 0h4v4z"/>'],
+        [
+            'gradientTransform',
+            'translate(foo 5)',
+            '<linearGradient id="a" gradientTransform="translate(foo 5)"/><path fill="url(#a)" d="M0 0h4v4z"/>',
+        ],
+        [
+            'patternTransform',
+            'scale(1,)',
+            '<pattern id="p" patternTransform="scale(1,)"/><path fill="url(#p)" d="M0 0h4v4z"/>',
+        ],
+    ])('keeps an invalid %s untouched by svgo', (attr, authored, body) => {
+        const attrs = attrsOf(svg(body));
+        expect(attrs.map((a) => a[attr]).filter(Boolean)).toEqual([authored]);
+        expect(attrs.some((a) => Object.keys(a).some((k) => k.startsWith('data-svgvd-')))).toBe(false);
+    });
+
+    it('ignores an authored stash marker', () => {
+        const attrs = attrsOf(svg('<path data-svgvd-invalid-transform="translate(5 5)" d="M0 0h4v4z"/>'));
+        expect(attrs.every((a) => a.transform === undefined)).toBe(true);
+    });
+
+    describe('under a custom svgoConfig that moves a group transform onto it', () => {
+        const source = (inner: string): string =>
+            `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">${inner}</svg>`;
+        const strictCodeWith = (input: string, options: Parameters<typeof convert>[1]): string | undefined => {
+            try {
+                convert(input, { ...options, strict: true });
+            } catch (err) {
+                if (err instanceof ConversionError) return err.warning.code;
+                throw err;
+            }
+            return undefined;
+        };
+
+        it.each([
+            ['moveGroupAttrsToElems', '<g transform="translate(5)"><path transform="rotate(foo)" d="M0 0h4v4z"/></g>'],
+            ['collapseGroups', '<g transform="translate(5)"><path transform="rotate(foo)" d="M0 0h4v4z"/></g>'],
+            [
+                'moveGroupAttrsToElems',
+                '<g transform="translate(5)"><g transform="scale(1,)"><path transform="rotate(foo)" d="M0 0h4v4z"/></g><path d="M8 0h4v4z"/></g>',
+            ],
+        ])('%s: %s is drawn as svgo moves it and warns as without svgo', (plugin, inner) => {
+            const input = source(inner);
+            const svgoConfig = { plugins: [plugin] } as NonNullable<Parameters<typeof convert>[1]>['svgoConfig'];
+            const reference = convert(input, { optimize: false });
+            const custom = convert(input, { svgoConfig });
+            expect(custom.warnings).toEqual(reference.warnings);
+            expect(custom.warnings.length).toBeGreaterThan(0);
+            expect(compareSvgs(vdToSvg(custom.xml), vdToSvg(reference.xml)).mismatch).toBe(0);
+            expect(strictCodeWith(input, { svgoConfig })).toBe('unsupported-attribute');
+            expect(strictCodeWith(input, { optimize: false })).toBe('unsupported-attribute');
+        });
+
+        it('leaves the default config output unchanged', () => {
+            const input = source('<g transform="translate(5)"><path transform="rotate(foo)" d="M0 0h4v4z"/></g>');
+            const { xml, warnings } = convert(input);
+            expect(xml).toContain('android:translateX="5"');
+            expect(xml.match(/<group/g)).toHaveLength(1);
+            expect(warnings).toEqual(convert(input, { optimize: false }).warnings);
+        });
+    });
+});
+
+const small = (inner: string): string => `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20">${inner}</svg>`;
+const MODES = [true, false] as const;
+const strictCode = (source: string, optimize: boolean): string | undefined => {
+    try {
+        convert(source, { optimize, strict: true });
+    } catch (err) {
+        if (err instanceof ConversionError) return err.warning.code;
+        throw err;
+    }
+    return undefined;
+};
+
+describe('normalize: numeric character references are decoded before the guards', () => {
+    it.each([
+        ['<rect width="&#10;-5" height="10"/>', '<rect width="\n-5" height="10"/>'],
+        ['<rect width="&#32;-5" height="10"/>', '<rect width=" -5" height="10"/>'],
+        ['<rect width="&#45;5" height="10"/>', '<rect width="-5" height="10"/>'],
+        ['<rect width="&#x2D;5" height="10"/>', '<rect width="-5" height="10"/>'],
+        ['<rect width="&#48;" height="10"/>', '<rect width="0" height="10"/>'],
+        ['<circle cx="5" cy="5" r="&#10;-5"/>', '<circle cx="5" cy="5" r="\n-5"/>'],
+        ['<circle cx="5" cy="5" r="&#x2d;5"/>', '<circle cx="5" cy="5" r="-5"/>'],
+        ['<circle cx="5" cy="5" r="&#48;"/>', '<circle cx="5" cy="5" r="0"/>'],
+        ['<ellipse cx="5" cy="5" rx="&#45;5" ry="-3"/>', '<ellipse cx="5" cy="5" rx="-5" ry="-3"/>'],
+    ])('%s draws nothing and warns in both modes; strict rejects it', (encoded, literal) => {
+        const reference = convert(small(literal), { optimize: false });
+        for (const optimize of MODES) {
+            const { xml, warnings } = convert(small(encoded), { optimize });
+            expect(xml).toBe(reference.xml);
+            expect(countPaths(xml)).toBe(0);
+            expect(warnings).toEqual(reference.warnings);
+            expect(warnings.map((w) => w.code)).toEqual(['empty-path']);
+            expect(strictCode(small(encoded), optimize)).toBe('empty-path');
+        }
+    });
+
+    it('an encoded negative rx on an ellipse falls back to ry (auto) in both modes', () => {
+        const encoded = small('<ellipse cx="5" cy="5" rx="&#45;5" ry="3"/>');
+        const reference = convert(small('<ellipse cx="5" cy="5" rx="-5" ry="3"/>'), { optimize: false });
+        for (const optimize of MODES) {
+            const { xml, warnings } = convert(encoded, { optimize });
+            expect(xml).toBe(reference.xml);
+            expect(warnings).toEqual(reference.warnings);
+        }
+    });
+
+    it('a path whose d holds an encoded newline still merges with its sibling (optimize: true)', () => {
+        const source = small('<path d="M0 0h5v5z&#10;M10 10h5v5z"/><path d="M0 10h5v5z"/>');
+        expect(countPaths(convert(source).xml)).toBe(1);
+    });
+
+    it('leaves encoded markup characters encoded, so the guards still see one attribute', () => {
+        // `&#34;` decoded in the guards' copy would close `width` early and look like an empty value.
+        const source = small('<rect width="5" height="5" data-x="&#34;&#60;&#38;"/>');
+        for (const optimize of MODES) expect(countPaths(convert(source, { optimize }).xml)).toBe(1);
+    });
+});
+
+describe('normalize: a d whose exponent has no digits is cut there in both modes', () => {
+    const dOf = (source: string): string[] => {
+        const out: string[] = [];
+        const walk = (n: { children?: unknown[] }): void => {
+            for (const c of (n.children ?? []) as XastElement[]) {
+                if (c.type !== 'element') continue;
+                if (c.name === 'path') out.push(c.attributes?.d ?? '');
+                walk(c);
+            }
+        };
+        // An empty custom config: only the converter's own head plugins run on the tree.
+        walk(parseSvg(source, true, { plugins: [] }));
+        return out;
+    };
+
+    it.each([
+        ['M0 0 L1e 5 9 5', null],
+        ['M0 0 L1e- 5 9 5', null],
+        ['M0 0 L1E+ 5 9 5', null],
+        ['M0 0 L5 5 1e 9 9 9', 'M0 0 L5 5'],
+    ])('d="%s" renders as its valid prefix', (d, prefix) => {
+        expect(dOf(small(`<path d="${d}"/>`))).toEqual([prefix ?? '']);
+        const reference = convert(small(prefix ? `<path d="${prefix}"/>` : '<path d="M0 0"/>'), { optimize: false });
+        for (const optimize of MODES) {
+            const { xml, warnings } = convert(small(`<path d="${d}"/>`), { optimize });
+            expect(xml).toBe(convert(small(prefix ? `<path d="${prefix}"/>` : '<path d=""/>'), { optimize }).xml);
+            expect(warnings.map((w) => w.code)).toEqual(reference.warnings.map((w) => w.code));
+            expect(strictCode(small(`<path d="${d}"/>`), optimize)).toBe(prefix ? undefined : 'empty-path');
+        }
+        // Same geometry in both modes.
+        const [a, b] = MODES.map((optimize) => convert(small(`<path d="${d}"/>`), { optimize }).xml);
+        if (prefix) expect(compareSvgs(vdToSvg(a!), vdToSvg(b!)).mismatch).toBeLessThan(DEFAULT_MAX_MISMATCH);
+        else expect(a).toBe(b);
+    });
+
+    it('keeps exponents with digits (2e1, 1e-5, 1E+2) untouched', () => {
+        const d = 'M0 0 L2e1 5 1e-5 9 1E+2 3';
+        expect(dOf(small(`<path d="${d}"/>`))).toEqual([d]);
+        for (const optimize of MODES) expect(convert(small(`<path d="${d}"/>`), { optimize }).warnings).toEqual([]);
+    });
+});
+
+describe('normalize: an empty width / height on <use> reaches the converter', () => {
+    it('<use width=""> on a <symbol viewBox> is not scaled and warns alike in both modes', () => {
+        const source = small(
+            '<symbol id="mySymbol" viewBox="0 0 10 10"><rect width="10" height="10"/></symbol>' +
+                '<use href="#mySymbol" width="" height="20"/>',
+        );
+        const [a, b] = MODES.map((optimize) => convert(source, { optimize }));
+        expect(a!.warnings).toEqual(b!.warnings);
+        expect(a!.warnings.map((w) => w.code)).toEqual(['unsupported-attribute']);
+        for (const { xml } of [a!, b!]) {
+            expect(xml).not.toMatch(/scale[XY]=/);
+            expect(xml).not.toMatch(/<clip-path/);
+        }
+        expect(compareSvgs(vdToSvg(a!.xml), vdToSvg(b!.xml)).mismatch).toBeLessThan(DEFAULT_MAX_MISMATCH);
+        for (const optimize of MODES) expect(strictCode(source, optimize)).toBe('unsupported-attribute');
+    });
+});
+
+describe('normalize: warnings quote the authored ids (svgo does not minify them)', () => {
+    it.each([
+        [
+            'a gradient without stops',
+            '<linearGradient id="emptyGradient"/><rect width="5" height="5" fill="url(#emptyGradient) red"/>',
+            'url(#emptyGradient)',
+        ],
+        [
+            'a clipPath with text',
+            '<clipPath id="myClip"><text>a</text></clipPath><rect width="5" height="5" clip-path="url(#myClip)"/>',
+            'clipPath "myClip"',
+        ],
+        [
+            'a <pattern> fill',
+            '<pattern id="myPattern" width="2" height="2"><rect width="1" height="1"/></pattern>' +
+                '<rect width="5" height="5" fill="url(#myPattern)"/>',
+            '"myPattern"',
+        ],
+        [
+            'a mask with stroked content',
+            '<mask id="myMask"><rect width="5" height="5" fill="#fff" stroke="#fff"/></mask>' +
+                '<rect width="5" height="5" mask="url(#myMask)"/>',
+            'mask "myMask"',
+        ],
+        [
+            'a gradient length in ex',
+            '<linearGradient id="myGrad" x2="1ex"><stop offset="0" stop-color="red"/><stop offset="1" stop-color="blue"/></linearGradient>' +
+                '<rect width="5" height="5" fill="url(#myGrad)"/>',
+            'Gradient "myGrad"',
+        ],
+        [
+            'a <use> of a <symbol> with an empty width',
+            '<symbol id="mySymbol" viewBox="0 0 10 10"><rect width="10" height="10"/></symbol>' +
+                '<use href="#mySymbol" width="" height="20"/>',
+            '<use href="#mySymbol">',
+        ],
+    ])('%s', (_name, body, quoted) => {
+        const [a, b] = MODES.map((optimize) => convert(small(body), { optimize }).warnings);
+        expect(a!.length).toBeGreaterThan(0);
+        expect(a).toEqual(b);
+        expect(a!.some((w) => w.message.includes(quoted))).toBe(true);
+    });
+});
+
+describe('normalize: svgo keeps the decimals a scale above 1 magnifies', () => {
+    // svgo rounds where the numbers are authored, before the scale: under scale(1000), 0.0021 → 0.002
+    // is drawn at 2 instead of 2.1 (~12% of the square) with no warning.
+    const square = 'M0.0021 0.0021h0.0104v0.0104h-0.0104z';
+    const icon = (body: string): string =>
+        `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="24" height="24">${body}</svg>`;
+    const CASES = {
+        'a path under a clipped group (the transform stays on it)':
+            `<defs><clipPath id="c"><rect width="24" height="24"/></clipPath></defs>` +
+            `<g transform="scale(1000)" clip-path="url(#c)"><path d="${square}"/></g>`,
+        'a gradient-filled path and its gradient':
+            '<defs><linearGradient id="g" gradientUnits="userSpaceOnUse" x1="0.0021" x2="0.0201">' +
+            '<stop stop-color="red"/><stop offset="1" stop-color="blue"/></linearGradient></defs>' +
+            `<g transform="scale(1000)"><path d="${square}" fill="url(#g)"/></g>`,
+        'a CSS transform': `<g style="transform:scale(1000)"><path d="${square}"/></g>`,
+        'a <use> of a scaled path': `<defs><path id="p" d="${square}"/></defs><use href="#p" transform="scale(1000)"/>`,
+        'an ellipse': '<ellipse transform="scale(1000)" cx="0.0121" cy="0.0121" rx="0.0051" ry="0.0031"/>',
+        'a line':
+            '<line transform="scale(1000)" x1="0.0021" y1="0.0021" x2="0.0211" y2="0.0151" stroke="#000" stroke-width="0.0015"/>',
+    };
+    for (const optimize of [true, false])
+        for (const [name, body] of Object.entries(CASES))
+            it(`${name} renders like the source (optimize: ${optimize})`, () => {
+                const { xml, warnings } = convert(icon(body), { optimize });
+                expect(warnings).toEqual([]);
+                const result = compareSvgs(icon(body), vdToSvg(xml));
+                expect(result.inked).toBeGreaterThan(0);
+                expect(result.mismatch).toBeLessThan(DEFAULT_MAX_MISMATCH);
+            });
+
+    it('reads the two components of a CSS scale property: x="0.0021" kept in both modes', () => {
+        const body = '<g style="scale: 1000 1000"><rect x="0.0021" width="0.004" height="0.004"/></g>';
+        const startX = (optimize: boolean): number =>
+            parseFloat(/pathData="M([\d.]+)/.exec(convert(icon(body), { optimize }).xml)![1]!);
+        expect(startX(true)).toBe(0.0021);
+        expect(startX(false)).toBe(0.0021);
+    });
+
+    /** `d` of the drawn path (not the clip rectangle) in svgo's output tree. */
+    const pathData = (body: string, floatPrecision?: number): string | undefined => {
+        const paths = (node: XastElement): XastElement[] =>
+            node.name === 'path' ? [node] : (node.children ?? []).flatMap((c) => paths(c as XastElement));
+        const root = parseSvg(icon(body), true, undefined, floatPrecision);
+        return paths({ type: 'root', children: root.children } as XastElement)
+            .map((p) => p.attributes?.d)
+            .find((d) => d !== 'M0 0h24v24H0z');
+    };
+    const clipped = (transform: string): string =>
+        `<defs><clipPath id="c"><rect width="24" height="24"/></clipPath></defs>` +
+        `<g transform="${transform}" clip-path="url(#c)"><path d="M0.123456789 1h1z"/></g>`;
+
+    it('adds ceil(log10(scale)) decimals, multiplying the scales of the document', () => {
+        expect(pathData(clipped('scale(1000)'))).toBe('M.123457 1h1z');
+        expect(pathData(clipped('scale(2)'))).toBe('M.1235 1h1z');
+        expect(pathData(clipped('matrix(0 50 -50 0 0 0)'))).toBe('M.12346 1h1z');
+        expect(pathData(`<g transform="scale(10)">${clipped('scale(10)')}</g>`)).toBe('M.12346 1h1z');
+        expect(pathData(clipped('scale(1000)'), 5)).toBe('M.12345679 1h1z');
+    });
+
+    it('leaves svgo at floatPrecision when no transform scales up', () => {
+        for (const transform of ['scale(0.5)', 'rotate(45)', 'translate(1000 1000)', 'scale(1)'])
+            expect(pathData(clipped(transform)), transform).toBe('M.123 1h1z');
+        expect(pathData('<path d="M0.123456789 1h1z"/>')).toBe('M.123 1h1z');
+        expect(pathData('<g style="transform:rotate(30)"><path d="M0.123456789 1h1z"/></g>')).toBe('M.123 1h1z');
+    });
+});
+
+describe('normalize: an ellipse sized from CSS is not turned into a circle (svgo convertEllipseToCircle)', () => {
+    // convertEllipseToCircle reads the rx / ry attributes alone; a <circle> has no rx, so the CSS rx
+    // was lost (drawn with r=2) in optimize: true only.
+    const doc = (attrs: string, head = '', radii = 'rx="2" ry="2"'): string =>
+        `<svg xmlns="http://www.w3.org/2000/svg" viewBox="-12 -12 24 24">${head}<ellipse cx="1" cy="1" ${radii} fill="green" ${attrs}/></svg>`;
+    // The reference renderer does not read CSS geometry: compare with the attributes it resolves to.
+    const CASES: Record<string, [string, string]> = {
+        'style rx': [doc('style="rx:10"'), doc('', '', 'rx="10" ry="2"')],
+        'style rx / ry': [doc('style="rx:10px;ry:5px"'), doc('', '', 'rx="10" ry="5"')],
+        '<style> rule': [doc('', '<style>ellipse{rx:10px}</style>'), doc('', '', 'rx="10" ry="2"')],
+    };
+    for (const optimize of [true, false])
+        for (const [name, [input, reference]] of Object.entries(CASES))
+            // optimize: false does not apply <style> (it warns): only the inline cases there.
+            it.skipIf(!optimize && name === '<style> rule')(
+                `${name} renders like the source (optimize: ${optimize})`,
+                () => {
+                    const { xml, warnings } = convert(input, { optimize });
+                    expect(warnings).toEqual([]);
+                    const result = compareSvgs(reference, vdToSvg(xml));
+                    expect(result.inked).toBeGreaterThan(0);
+                    expect(result.mismatch).toBeLessThan(DEFAULT_MAX_MISMATCH);
+                },
+            );
+
+    it('still converts an ellipse with equal radii and no CSS to a circle', () => {
+        const json = JSON.stringify(parseSvg(doc('stroke-dasharray="1"'), true));
+        expect(json).toContain('"name":"circle"');
+    });
+});
+
+describe('normalize: a <use> in a <clipPath> keeps referencing a <g> (svgo collapseGroups)', () => {
+    // collapseGroups moves the id of a one-child <g> onto that child: the clip <use> would then
+    // reference a shape and clip, whereas a <use> of a <g> in a <clipPath> contributes nothing.
+    const G = '<g id="t"><rect width="12" height="12"/></g>';
+    const doc = (body: string): string => icon(`<defs>${G}</defs>${body}<rect width="24" height="24" fill="red"/>`);
+    const targetName = (input: string): string | undefined => {
+        let name: string | undefined;
+        const walk = (node: { children?: XastElement[] }): void => {
+            for (const child of node.children ?? []) {
+                if (child.type !== 'element') continue;
+                if (child.attributes?.id === 't') name = child.name;
+                walk(child);
+            }
+        };
+        walk(parseSvg(input, true));
+        return name;
+    };
+
+    it('keeps the <g> when a <clipPath> holds a <use>', () => {
+        expect(targetName(doc('<clipPath id="c"><use href="#t"/></clipPath>'))).toBe('g');
+        expect(targetName(doc('<clipPath id="c"><rect width="2" height="2"/><use href="#t"></use></clipPath>'))).toBe(
+            'g',
+        );
+    });
+
+    it('still collapses the <g> when no <use> is inside a <clipPath>', () => {
+        expect(targetName(doc('<clipPath id="c"><rect width="2" height="2"/></clipPath><use href="#t"/>'))).toBe(
+            'path',
+        );
+        expect(targetName(doc('<use href="#t"/>'))).toBe('path');
+    });
+});
+
+/** The browser-lite entry as its bundle sees it: `svgo` replaced by svgo-lite (see browser-lite.test.ts). */
+let lite: typeof import('../src/browser-lite.js');
+beforeAll(async () => {
+    vi.resetModules();
+    vi.doMock('svgo', () => import('../src/svgo-lite.js'));
+    lite = await import('../src/browser-lite.js');
+    vi.doUnmock('svgo');
+});
+
+describe('normalize: numeric character references do not count as entities (T-163)', () => {
+    const accented = (n: number): string =>
+        icon(`<desc>${'&#xe9;'.repeat(n)}</desc><path aria-label="caf&#233;" d="M2 2h20v20H2z" fill="red"/>`);
+    const plain = icon('<path d="M2 2h20v20H2z" fill="red"/>');
+
+    it.each([600, 5000])('%i references convert like the same icon without them, both modes and browser-lite', (n) => {
+        for (const optimize of MODES) {
+            const { xml, warnings } = convert(accented(n), { optimize, strict: true });
+            expect(warnings).toEqual([]);
+            expect(xml).toBe(convert(plain, { optimize }).xml);
+        }
+        expect(lite.convert(accented(n), { strict: true }).xml).toBe(lite.convert(plain).xml);
+    });
+
+    it('a document with many declared entities is still rejected, both modes and browser-lite', () => {
+        const bomb =
+            '<!DOCTYPE svg [<!ENTITY a "x">]>' +
+            `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><desc>${'&a;'.repeat(600)}</desc></svg>`;
+        for (const optimize of MODES) expect(() => convert(bomb, { optimize })).toThrow(/max entity count/);
+        expect(() => lite.convert(bomb)).toThrow(/max entity count/);
+    });
+
+    it('parses to the same tree as the encoded source', () => {
+        const source =
+            '<svg xmlns="http://www.w3.org/2000/svg"><!-- &#xe9; --><style><![CDATA[ /* &#xe9; */ ]]></style>' +
+            '<text x="&#49;" title="a&#38;b &#x22; &#60; &#xe9; &#10;">&#xe9;&#38;lt;&#xD800;&#X41;</text></svg>';
+        const prepared = prepareSource(source);
+        expect(prepared).toContain('<!-- &#xe9; -->');
+        expect(prepared).toContain('/* &#xe9; */');
+        expect(prepared).toContain('title="a&#38;b &#x22; &#60; é &#10;"');
+        expect(prepared).toContain('>é&#38;lt;&#xD800;A</text>');
+        // the invalid &#xD800; is left for the parser to reject, as before
+        expect(() => parseSvg(source, false)).toThrow(/Invalid character entity/);
+        const valid = source.replace('&#xD800;', '');
+        expect(parseSvg(valid, false)).toEqual(parseSvg(prepareSource(valid), false));
+    });
+
+    it('returns a source without references nor prefixes unchanged', () => {
+        const source = icon('<path d="M2 2h20v20H2z"/>');
+        expect(prepareSource(source)).toBe(source);
+    });
+});
+
+describe('normalize: an id targeted by a <style> rule and referenced survives inlineStyles (T-168)', () => {
+    const STYLE = '<style>#t{fill:red}</style>';
+    const RECT = '<rect id="t" width="12" height="12"/>';
+    const red = icon(`<rect width="12" height="12" fill="red"/>`);
+
+    it('a <use> of the styled element draws it red with optimize: true, like the browser', () => {
+        const doc = icon(`${STYLE}<defs>${RECT}</defs><use href="#t"/>`);
+        const { xml, warnings } = convert(doc, { optimize: true, strict: true });
+        expect(warnings).toEqual([]);
+        expect(xml).toBe(convert(red, { optimize: true }).xml);
+        expect(compareSvgs(red, vdToSvg(xml)).mismatch).toBeLessThan(DEFAULT_MAX_MISMATCH);
+        // optimize: false does not apply <style>: the rect is drawn, the rule reported
+        const unoptimized = convert(doc, { optimize: false });
+        expect(unoptimized.warnings.map((w) => w.code)).toEqual(['unsupported-style']);
+        expect(countPaths(unoptimized.xml)).toBe(1);
+    });
+
+    it('xlink:href and preserveIds too', () => {
+        const doc = icon(
+            `${STYLE}<defs>${RECT}</defs><use xmlns:xlink="http://www.w3.org/1999/xlink" xlink:href="#t"/>`,
+        );
+        expect(convert(doc, { optimize: true }).xml).toBe(convert(red, { optimize: true }).xml);
+        const named = convert(doc, { optimize: true, preserveIds: true });
+        expect(named.warnings).toEqual([]);
+        expect(named.xml).toContain('android:name="t"');
+        expect(named.xml).toContain('#FFFF0000');
+    });
+
+    it('a <use> of it in a <clipPath> still clips, both modes', () => {
+        const clipped = (defs: string): string =>
+            icon(
+                `${STYLE}<defs>${defs}<clipPath id="c"><use href="#t"/></clipPath></defs><rect width="24" height="24" clip-path="url(#c)"/>`,
+            );
+        for (const optimize of MODES) {
+            const { xml, warnings } = convert(clipped(RECT), { optimize });
+            expect(warnings.map((w) => w.code)).toEqual(optimize ? [] : ['unsupported-style']);
+            expect(xml).toContain('<clip-path');
+            const reference = icon('<rect width="12" height="12"/>');
+            expect(compareSvgs(reference, vdToSvg(xml)).mismatch).toBeLessThan(DEFAULT_MAX_MISMATCH);
+        }
+    });
+
+    it('leaves the output unchanged when the styled id is not referenced', () => {
+        const unreferenced = icon(`${STYLE}${RECT}<defs><path id="u" d="M0 0h1v1z"/></defs><use href="#u"/>`);
+        const without = icon(`${STYLE}${RECT}`);
+        // a reference to another id: the same pipeline as a document without any reference
+        expect(convert(unreferenced, { optimize: true }).xml).toBe(
+            convert(icon(`${STYLE}${RECT}<path d="M0 0h1v1z"/>`), { optimize: true }).xml,
+        );
+        expect(convert(without, { optimize: true }).xml).toBe(convert(red, { optimize: true }).xml);
     });
 });

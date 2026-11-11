@@ -1,23 +1,23 @@
 import type { BBox } from './ast.js';
-import { clipPathElement, wrapClip } from './clip.js';
+import { clipPathElement, clipsEverything, wrapClip } from './clip.js';
 import type { ConvertContext } from './context.js';
 import {
     ANIMATIONS,
-    foreignElements,
     GROUPS,
     isNotRendered,
     pathDataOf,
     switchChild,
+    systemLanguageIgnored,
     UNSUPPORTED,
     UNSUPPORTED_ATTRS,
 } from './elements.js';
-import { formatNumber } from './format.js';
+import { escapeXml, formatNumber } from './format.js';
 import type { XastElement } from './ast.js';
 import { contextGradient, type RawGradient } from './gradient.js';
 import { checkGroupOpacity } from './groupOpacity.js';
 import { type ContextElement, type ContextServer, isHidden, resolveStyle, type Inherited } from './inherited.js';
-import { renderPath } from './paint.js';
-import { pathBBox, transformPathData } from './pathData.js';
+import { claimName, renderPath, warnOnce, warnUnresolvedLength } from './paint.js';
+import { matrixScale, pathBBox, scaledPrecision, transformPathData } from './pathData.js';
 import { isNone, parseStyle, presentation } from './style.js';
 import {
     decompose,
@@ -25,28 +25,16 @@ import {
     type Decomposed,
     IDENTITY,
     isIdentity,
+    isInvalidTransform,
     multiply,
     parseTransform,
     type Matrix,
 } from './transform.js';
-import { SHAPE_NAMES } from './shapes.js';
-import { nestedLayout, type Viewport } from './viewport.js';
+import { SHAPE_NAMES, unresolvedShapeLengths } from './shapes.js';
+import { nestedLayout, unresolvedNestedLengths, type Viewport } from './viewport.js';
 
 /** Nested `<svg>` attributes consumed by its viewport mapping (not inherited by its content). */
 const VIEWPORT_ATTRS = new Set(['x', 'y', 'width', 'height', 'viewBox', 'preserveAspectRatio']);
-
-/**
- * Elements outside the SVG namespace, per conversion: computed on the first `walk` of a context,
- * which receives the root `<svg>` (namespace scoping needs the whole tree). Synthetic copies made
- * while walking are copies of SVG elements; their children are the original, classified, nodes.
- */
-const foreignByContext = new WeakMap<ConvertContext, WeakSet<XastElement>>();
-
-function foreignOf(ctx: ConvertContext, root: XastElement): WeakSet<XastElement> {
-    let foreign = foreignByContext.get(ctx);
-    if (!foreign) foreignByContext.set(ctx, (foreign = foreignElements(root)));
-    return foreign;
-}
 
 /** A synthetic container holding `children`, walked like an element's content. */
 const fragment = (...children: XastElement[]): XastElement => ({ type: 'element', children });
@@ -61,6 +49,8 @@ function nestedSvg(
     el: XastElement,
     parentVp: Viewport,
 ): { group: XastElement; viewport: Viewport } | null {
+    for (const u of unresolvedNestedLengths(el, parentVp))
+        warnUnresolvedLength(ctx, u.attr, u.value, 'svg', u.fallback);
     const layout = nestedLayout(el, parentVp);
     if (!layout) return null;
     const { x, y, width, height, matrix: m } = layout;
@@ -83,10 +73,6 @@ function nestedSvg(
     return { group, viewport: layout.viewport };
 }
 
-/** Warning message for a non-empty `systemLanguage` on `<name>` (the root `<svg>` included). */
-export const systemLanguageIgnored = (name: string): string =>
-    `systemLanguage on <${name}> depends on the device language, which a VectorDrawable cannot test; ignored.`;
-
 /**
  * Reports the unsupported presentation attributes of an element (once per source element).
  * `maskReason` says why its mask is not clip-equivalent (see `ClipPaths.resolveMask`).
@@ -98,6 +84,12 @@ function reportUnsupportedAttrs(ctx: ConvertContext, el: XastElement, name: stri
         ctx.warn({
             code: 'unsupported-attribute',
             message: systemLanguageIgnored(name),
+            node: name,
+        });
+    if (isInvalidTransform(el.attributes?.transform))
+        ctx.warn({
+            code: 'unsupported-attribute',
+            message: `transform="${el.attributes!.transform}" on <${name}> is not a valid transform list; ignored.`,
             node: name,
         });
     for (const attr of UNSUPPORTED_ATTRS) {
@@ -149,7 +141,7 @@ function maskAsClips(el: XastElement, clipIds: readonly string[], opacity: numbe
  * here, once, so the picked child's `systemLanguage` is dropped (not reported again).
  */
 function switchAsGroup(ctx: ConvertContext, sw: XastElement): XastElement {
-    const { child, languageDependent } = switchChild(sw, foreignOf(ctx, sw));
+    const { child, languageDependent } = switchChild(sw, ctx.foreign);
     if (languageDependent) {
         const picked = child?.attributes?.systemLanguage === undefined ? 'the child without it' : 'the first child';
         ctx.warn({
@@ -163,18 +155,82 @@ function switchAsGroup(ctx: ConvertContext, sw: XastElement): XastElement {
     return { ...sw, children: [{ ...child, attributes }] };
 }
 
+/**
+ * True when rendered VectorDrawable XML holds a `<path>` whose stroke paints (a gradient or a
+ * non-transparent color, non-zero alpha and width), as `PathBuilder.paints` judges it.
+ */
+function paintsStroke(xml: string): boolean {
+    return xml.split('<path').some((path) => {
+        const value = (name: string): string | undefined => new RegExp(`\\sandroid:${name}="([^"]*)"`).exec(path)?.[1];
+        const color = value('strokeColor');
+        const paint =
+            path.includes('<aapt:attr name="android:strokeColor"') || (color !== undefined && !/^#00/.test(color));
+        return paint && parseFloat(value('strokeAlpha') ?? '1') > 0 && parseFloat(value('strokeWidth') ?? '1') !== 0;
+    });
+}
+
+/**
+ * Formats a group scale factor. A scale multiplies the whole content, so it keeps at least
+ * `max(precision, 1)` significant digits: `scale(0.0001)` would otherwise round to 0 (nothing drawn).
+ * Scales of 0.1 and more keep `precision` decimals, as other numbers.
+ */
+function formatScale(v: number, precision: number): string {
+    if (v === 0) return '0';
+    const digits = Math.max(precision, 1) - 1 - Math.floor(Math.log10(Math.abs(v)));
+    return formatNumber(v, Math.min(Math.max(precision, digits), 20));
+}
+
+/**
+ * Precision of the content of a group scaled by `dec`. Its coordinates are multiplied by the scale on
+ * screen, so they keep `ceil(log10(scale))` more decimals: under `scale(1000)`, `0.0021` stays `0.0021`
+ * instead of rounding to `0.002` (2 instead of 2.1 once drawn). Unchanged under a scale of 1 or less.
+ */
+function scaledContentPrecision(precision: number, dec: Decomposed): number {
+    return scaledPrecision(precision, Math.max(Math.abs(dec.scaleX), Math.abs(dec.scaleY)));
+}
+
+/** Precision of geometry drawn at `precision` once `bake` (if any) maps it: more under a scale above 1. */
+function bakedPrecision(precision: number, bake: Matrix | undefined): number {
+    return bake ? scaledPrecision(precision, matrixScale(bake)) : precision;
+}
+
+/**
+ * Precision of the clips a mask on `el` becomes: they live in its user space (after its own
+ * transform, baked or carried by a group, see `maskAsClips`), drawn like its content.
+ */
+function maskPrecision(ctx: ConvertContext, el: XastElement, bake: Matrix | undefined): number {
+    const own = parseTransform(el.attributes?.transform);
+    return bakedPrecision(ctx.precision, own ? multiply(bake ?? IDENTITY, own) : bake);
+}
+
 /** Android `<group>` transform attributes of a decomposed matrix (identity parts omitted). */
 function groupTransformAttrs(ctx: ConvertContext, dec: Decomposed, pad: string): string[] {
-    const parts: [string, number, number][] = [
-        ['translateX', dec.translateX, 0],
-        ['translateY', dec.translateY, 0],
-        ['rotation', dec.rotation, 0],
-        ['scaleX', dec.scaleX, 1],
-        ['scaleY', dec.scaleY, 1],
+    const parts: [string, number, number, typeof formatNumber][] = [
+        ['translateX', dec.translateX, 0, formatNumber],
+        ['translateY', dec.translateY, 0, formatNumber],
+        ['rotation', dec.rotation, 0, formatNumber],
+        ['scaleX', dec.scaleX, 1, formatScale],
+        ['scaleY', dec.scaleY, 1, formatScale],
     ];
     return parts
         .filter(([, v, neutral]) => Math.abs(v - neutral) > 1e-6)
-        .map(([name, v]) => `${pad}${ctx.step}android:${name}="${formatNumber(v, ctx.precision)}"`);
+        .map(([name, v, , format]) => `${pad}${ctx.step}android:${name}="${format(v, ctx.precision)}"`);
+}
+
+/**
+ * Records what rendering content adds to `ctx` (gradient use, names claimed under `preserveIds`)
+ * and returns how to undo it, for content a clip then drops: no unused `xmlns:aapt`, and the names
+ * stay free for the elements actually drawn.
+ */
+function checkpoint(ctx: ConvertContext): () => void {
+    const usedGradient = ctx.usesGradient;
+    // Names are only added meanwhile (a group frees only the name it just claimed): the ones claimed
+    // since come last, in insertion order.
+    const claimed = ctx.names?.size ?? 0;
+    return () => {
+        ctx.usesGradient = usedGradient;
+        if (ctx.names) for (const name of [...ctx.names].slice(claimed)) ctx.names.delete(name);
+    };
 }
 
 /**
@@ -193,28 +249,54 @@ function renderGroup(
     checkGroupOpacity(ctx, el, parent);
     const matrix = parseTransform(el.attributes?.transform);
     const dec = matrix ? decompose(matrix) : null;
-    // clipPathUnits="userSpaceOnUse" lives in the group's own user space (after its transform).
-    const clipD = ctx.clips.resolve(el, style);
     // A sheared transform (or any transform nested under a baked one) can't be an
     // Android <group>; bake the matrix into descendant geometry instead.
-    if (matrix && dec && !bake && !dec.hasSkew) {
-        const inner = walk(ctx, el, style, pad + step);
-        if (!inner.trim()) return null;
-        const attrs = groupTransformAttrs(ctx, dec, pad);
+    const asGroup = !!(matrix && dec && !bake && !dec.hasSkew);
+    const precision = asGroup ? scaledContentPrecision(ctx.precision, dec!) : ctx.precision;
+    // The matrix baked into the content: none under a group that carries the transform.
+    const nextBake = asGroup ? undefined : matrix ? multiply(bake ?? IDENTITY, matrix) : bake;
+    // clipPathUnits="userSpaceOnUse" lives in the group's own user space (after its transform), drawn
+    // at the precision of the group's content, or more when a matrix with a large scale is baked into it.
+    const clipD = ctx.clips.resolve(el, style, bakedPrecision(precision, nextBake));
+    // Baking is exact for fills; only a stroke (width scaled uniformly, not sheared) is approximated.
+    const reportSkew = (inner: string): void => {
+        if (dec?.hasSkew && !bake && paintsStroke(inner))
+            ctx.warn({
+                code: 'group-skew',
+                message: 'A <g> uses skew/shear; baking the transform into path geometry.',
+                node: 'g',
+            });
+    };
+    const rollback = checkpoint(ctx);
+    // Claimed before the content, so that the group wins over a descendant with the same id.
+    const name = claimName(ctx, el);
+    if (asGroup || name !== undefined) {
+        // A named group stays a <group> (preserveIds); a matrix it cannot carry is baked into its content.
+        const innerCtx = precision === ctx.precision ? ctx : { ...ctx, precision };
+        const inner = walk(innerCtx, el, style, pad + step, nextBake);
+        ctx.usesGradient = innerCtx.usesGradient; // the scoped copy, if any, holds the flag
+        reportSkew(inner);
+        const clip = clipD && nextBake ? transformPathData(clipD, nextBake) : clipD;
+        // Nothing drawn (empty content, or a clip that clips everything, as in wrapClip): no group.
+        if (!inner.trim() || (clip && clipsEverything(clip))) {
+            rollback();
+            return null;
+        }
+        const attrs = [
+            ...(name === undefined ? [] : [`${pad}${step}android:name="${escapeXml(name)}"`]),
+            ...(asGroup ? groupTransformAttrs(ctx, dec!, pad) : []),
+        ];
         const head = attrs.length ? `${pad}<group\n${attrs.join('\n')}>` : `${pad}<group>`;
-        const clipLine = clipD ? `${clipPathElement(clipD, pad + step)}\n` : '';
+        const clipLine = clip ? `${clipPathElement(clip, pad + step)}\n` : '';
         return `${head}\n${clipLine}${inner}\n${pad}</group>`;
     }
-    if (dec?.hasSkew && !bake)
-        ctx.warn({
-            code: 'group-skew',
-            message: 'A <g> uses skew/shear; baking the transform into path geometry.',
-            node: 'g',
-        });
-    const nextBake = matrix ? multiply(bake ?? IDENTITY, matrix) : bake;
     const inner = walk(ctx, el, style, pad, nextBake);
+    reportSkew(inner);
     if (!inner.trim()) return null;
-    return clipD ? wrapClip(nextBake ? transformPathData(clipD, nextBake) : clipD, inner, pad, step) : inner;
+    if (!clipD) return inner;
+    const wrapped = wrapClip(nextBake ? transformPathData(clipD, nextBake) : clipD, inner, pad, step);
+    if (!wrapped) rollback(); // a clip that clips everything
+    return wrapped;
 }
 
 /** Corners of a bounding box being accumulated. */
@@ -226,7 +308,7 @@ type Extent = { x0: number; y0: number; x1: number; y1: number };
  * images).
  */
 function measureContent(ctx: ConvertContext, el: XastElement, m: Matrix, viewport: Viewport, extent: Extent): boolean {
-    const foreign = foreignOf(ctx, el);
+    const { foreign } = ctx;
     for (const child of el.children ?? []) {
         if (child.type !== 'element' || isNotRendered(child, foreign)) continue;
         const name = child.name!;
@@ -272,10 +354,9 @@ const URL_ID = /^url\(\s*['"]?#([^'")\s]+)['"]?\s*\)/i;
  * Lays out the paint servers `style` takes from a context element (`context-fill` /
  * `context-stroke` naming a gradient) over that element, as synthetic `userSpaceOnUse` gradients
  * of the shape, looked up through a scoped copy of `ctx`. A pattern, or a gradient that cannot be
- * laid out (see `contextGradient`; `userSpaceOnUse` needs the use's user space, see
- * `ContextElement.userSpace`), becomes the keyword again, which paint.ts reports. Any other
- * reference (unknown or invalid gradient) is left to paint.ts, whose handling does not depend on
- * the space.
+ * laid out (see `contextGradient`), becomes the keyword again, which paint.ts reports. Any other
+ * reference (unknown or invalid gradient, or one without stops) is left to paint.ts, whose handling
+ * does not depend on the space and whose warnings then name the author's id.
  */
 function contextPaints(ctx: ConvertContext, style: Inherited): { ctx: ConvertContext; style: Inherited } {
     let gradients: Map<string, RawGradient> | undefined;
@@ -285,18 +366,18 @@ function contextPaints(ctx: ConvertContext, style: Inherited): { ctx: ConvertCon
         const ref = server && URL_ID.exec(style[prop]?.trim() ?? '')?.[1];
         if (!server || ref === undefined) continue;
         const raw = ctx.gradients.get(ref);
-        if (!raw && !ctx.patternIds.has(ref)) continue;
+        // A gradient without stops paints none wherever it is laid out.
+        if (raw?.stops.length === 0 || (!raw && !ctx.patternIds.has(ref))) continue;
         const { context } = server;
-        const mapped =
-            raw && (raw.objectBox || context.userSpace)
-                ? contextGradient(
-                      raw,
-                      context.ctm,
-                      style.ctm ?? IDENTITY,
-                      raw.objectBox ? contextBBox(ctx, context) : null,
-                      context.viewport,
-                  )
-                : null;
+        const mapped = raw
+            ? contextGradient(
+                  raw,
+                  context.ctm,
+                  style.ctm ?? IDENTITY,
+                  raw.objectBox ? contextBBox(ctx, context) : null,
+                  context.viewport,
+              )
+            : null;
         if (!mapped) {
             next = { ...next, [prop]: server.keyword };
             continue;
@@ -320,25 +401,34 @@ function renderLeaf(
     bake: Matrix | undefined,
 ): string | null {
     // A leaf's children are never walked: an animation of the leaf would otherwise vanish silently.
-    const foreign = foreignOf(ctx, el);
+    // Once per name, as walk reports it (same message): <set> in a <g> and in a <rect> is one warning.
+    const { foreign } = ctx;
     for (const child of el.children ?? [])
         if (child.type === 'element' && ANIMATIONS.has(child.name ?? '') && !isNotRendered(child, foreign))
-            ctx.warn({
+            warnOnce(ctx, {
                 code: 'unsupported-element',
                 message: `<${child.name}> cannot be represented in a VectorDrawable; skipped.`,
                 node: child.name!,
             });
+    if (SHAPE_NAMES.has(name) && !isHidden(style))
+        for (const u of unresolvedShapeLengths(name, el.attributes ?? {}, style.viewport))
+            warnUnresolvedLength(ctx, u.attr, u.value, name, u.fallback);
     const d = pathDataOf(el, style.viewport, ctx.precision);
     if (d) {
         if (isHidden(style)) return null;
+        const rollback = checkpoint(ctx);
         const painted = contextPaints(ctx, style);
         const body = renderPath(painted.ctx, d, el, painted.style, pad, bake);
         ctx.usesGradient = painted.ctx.usesGradient; // the scoped copy, if any, holds the flag
         // painted.style: a context-stroke resolved from the <use> decides the stroke-box too.
-        const clipD = ctx.clips.resolve(el, painted.style); // reports an unusable clip even when unpainted
+        // Reports an unusable clip even when unpainted.
+        const clipD = ctx.clips.resolve(el, painted.style, bakedPrecision(ctx.precision, bake));
         if (!body) return null; // paints nothing: no clip wrapper either
         const clip = clipD && bake ? transformPathData(clipD, bake) : clipD;
-        return clip ? wrapClip(clip, body, pad, ctx.step) : body;
+        if (!clip) return body;
+        const wrapped = wrapClip(clip, body, pad, ctx.step);
+        if (!wrapped) rollback(); // a clip that clips everything
+        return wrapped;
     }
     if (name !== 'use')
         ctx.warn({ code: 'empty-path', message: `<${name}> produced no drawable geometry; skipped.`, node: name });
@@ -352,6 +442,33 @@ function renderLeaf(
 }
 
 /**
+ * Renders a `<text>` as the `<path>` of its glyph outlines (`ctx.text`, the `fonts` option), painted
+ * like a shape. Glyph outlines are filled nonzero, whatever `fill-rule` says (as browsers draw
+ * text). Text it cannot lay out is reported (once per reason) and skipped, as without the option.
+ */
+function renderText(
+    ctx: ConvertContext,
+    el: XastElement,
+    style: Inherited,
+    pad: string,
+    bake: Matrix | undefined,
+): string | null {
+    const layout = ctx.text!(el, style);
+    if ('reason' in layout) {
+        // Once per reason: every <text> in an unsupported font would otherwise repeat it.
+        warnOnce(ctx, {
+            code: 'unsupported-element',
+            message: `<text> cannot be represented in a VectorDrawable (${layout.reason}); skipped.`,
+            node: 'text',
+        });
+        return null;
+    }
+    if (!layout.d) return null; // no glyph to draw (whitespace only, font-size 0)
+    const path: XastElement = { type: 'element', name: 'path', attributes: { ...el.attributes, d: layout.d } };
+    return renderLeaf(ctx, path, 'path', { ...style, fillRule: 'nonzero' }, pad, bake);
+}
+
+/**
  * Renders the children of `el` as VectorDrawable XML at indentation `pad`. `bake` is the
  * transform (from skewed ancestors) baked into descendant geometry instead of a `<group>`.
  */
@@ -360,13 +477,16 @@ export function walk(ctx: ConvertContext, el: XastElement, parent: Inherited, pa
     const push = (xml: string | null): void => {
         if (xml?.trim()) out.push(xml);
     };
-    const foreign = foreignOf(ctx, el);
+    const { foreign } = ctx;
     for (const child of el.children ?? []) {
         if (child.type !== 'element' || !child.name) continue;
         const name = child.name;
         if (isNotRendered(child, foreign)) continue; // nor its subtree
-        if (UNSUPPORTED.has(name)) {
-            ctx.warn({
+        // With the fonts option, a <text> is drawn as glyph outlines (renderText), or reported there.
+        if (UNSUPPORTED.has(name) && !(name === 'text' && ctx.text)) {
+            // Once per element name: a document full of labels (or images, animations) would otherwise
+            // repeat it per element. Strict still rejects the same files: the first one is reported.
+            warnOnce(ctx, {
                 code: 'unsupported-element',
                 message: `<${name}> cannot be represented in a VectorDrawable; skipped.`,
                 node: name,
@@ -377,7 +497,7 @@ export function walk(ctx: ConvertContext, el: XastElement, parent: Inherited, pa
         // A mask made of opaque shapes is a clip in disguise: render it as one.
         let maskReason: string | undefined;
         if (name !== 'svg' && !ctx.reported.has(child) && !isNone(presentation(child, 'mask'))) {
-            const mask = ctx.clips.resolveMask(child, parent.viewport);
+            const mask = ctx.clips.resolveMask(child, parent.viewport, maskPrecision(ctx, child, bake));
             if ('clipIds' in mask) {
                 push(walk(ctx, fragment(maskAsClips(child, mask.clipIds, mask.opacity)), parent, pad, bake));
                 continue;
@@ -398,6 +518,7 @@ export function walk(ctx: ConvertContext, el: XastElement, parent: Inherited, pa
                 attributes: { transform },
                 children: [untransformed],
             };
+            ctx.reported.add(wrapper); // its transform was reported on `child`
             push(walk(ctx, fragment(wrapper), parent, pad, bake));
             continue;
         }
@@ -411,6 +532,7 @@ export function walk(ctx: ConvertContext, el: XastElement, parent: Inherited, pa
         const style = resolveStyle(child, parent);
         if (name === 'switch') push(renderGroup(ctx, switchAsGroup(ctx, child), parent, style, pad, bake));
         else if (GROUPS.has(name)) push(renderGroup(ctx, child, parent, style, pad, bake));
+        else if (name === 'text') push(renderText(ctx, child, style, pad, bake));
         else push(renderLeaf(ctx, child, name, style, pad, bake));
     }
     return out.join('\n');

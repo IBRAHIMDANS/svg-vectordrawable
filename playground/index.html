@@ -13,38 +13,104 @@
             name="description"
             content="Convert SVG to Android VectorDrawable XML in your browser: gradients, clip-path, groups, and a warning for everything Android cannot draw. Your file is never uploaded."
         />
-        <link rel="icon" href="data:," />
+        <meta property="og:type" content="website" />
+        <meta property="og:title" content="SVG to Android VectorDrawable converter" />
+        <meta
+            property="og:description"
+            content="Paste or drop an SVG, get the VectorDrawable XML, a side-by-side preview and a warning for everything Android cannot draw. Runs in your browser."
+        />
+        <link rel="icon" type="image/svg+xml" href="favicon.svg" />
         <link rel="stylesheet" href="style.css" />
         <script type="module" src="app.js"></script>
     </head>
     <body>
-        <header class="site-header">
-            <h1>SVG to Android VectorDrawable</h1>
-            <p class="lede">
-                Paste or drop an SVG to get its VectorDrawable XML, the list of what Android cannot represent, and the
-                drawable rendered back next to the source. Everything runs in your browser: nothing is uploaded.
-            </p>
+        <div id="drop-overlay" class="drop-overlay" hidden>
+            <p>Drop your SVG to convert it</p>
+        </div>
+
+        <header class="topbar">
+            <a class="brand" href="./">
+                <svg class="brand-mark" viewBox="0 0 32 32" aria-hidden="true">
+                    <rect width="32" height="32" rx="8" fill="#12B76A" />
+                    <path
+                        d="M8 22C8 13 24 19 24 10"
+                        fill="none"
+                        stroke="#FFFFFF"
+                        stroke-width="2.5"
+                        stroke-linecap="round"
+                    />
+                    <rect x="5.5" y="19.5" width="5" height="5" rx="1.2" fill="#FFFFFF" />
+                    <rect x="21.5" y="7.5" width="5" height="5" rx="1.2" fill="#FFFFFF" />
+                </svg>
+                <span>svg-vectordrawable</span>
+            </a>
             <nav aria-label="Project links">
+                <a href="https://github.com/IBRAHIMDANS/svg-vectordrawable#readme">Docs</a>
                 <a href="https://github.com/IBRAHIMDANS/svg-vectordrawable">GitHub</a>
                 <a href="https://www.npmjs.com/package/svg-vectordrawable">npm</a>
             </nav>
         </header>
 
-        <main class="layout">
-            <section class="panel" aria-labelledby="input-title">
-                <h2 id="input-title">SVG input</h2>
-                <div id="drop-zone" class="drop-zone">
-                    <label for="svg-input">Paste SVG markup, or drop a .svg file here</label>
-                    <textarea id="svg-input" spellcheck="false" autocomplete="off" rows="12"></textarea>
-                </div>
-                <div class="actions">
-                    <label class="button" for="file-input">Open a file…</label>
-                    <input id="file-input" class="visually-hidden" type="file" accept=".svg,image/svg+xml" />
-                    <button id="example-button" type="button" class="button">Load example</button>
-                    <button id="clear-button" type="button" class="button">Clear</button>
-                </div>
+        <main>
+            <section class="hero">
+                <h1>SVG to Android <span class="hero-accent">VectorDrawable</span></h1>
+                <p class="lede">
+                    Paste or drop an SVG. Get the drawable XML, a side-by-side preview, and a warning for everything
+                    Android cannot draw.
+                </p>
+                <ul class="trust">
+                    <li>Runs in your browser, nothing is uploaded</li>
+                    <li>Gradients, clip-path and groups</li>
+                    <li>Free and open source</li>
+                </ul>
+            </section>
 
-                <fieldset id="settings" class="settings">
+            <div class="workbench">
+                <section class="pane pane-input" aria-labelledby="input-title">
+                    <header class="pane-head">
+                        <h2 id="input-title">SVG</h2>
+                        <span id="input-meta" class="meta"></span>
+                        <div class="pane-actions">
+                            <label class="button" for="file-input">Open file</label>
+                            <input id="file-input" class="visually-hidden" type="file" accept=".svg,image/svg+xml" />
+                            <button id="clear-button" type="button" class="button">Clear</button>
+                        </div>
+                    </header>
+                    <textarea
+                        id="svg-input"
+                        class="code-area"
+                        spellcheck="false"
+                        autocomplete="off"
+                        aria-labelledby="input-title"
+                        placeholder="Paste SVG markup here, or drop a .svg file anywhere on the page"
+                    ></textarea>
+                    <div class="pane-foot">
+                        <span id="examples-label" class="foot-label">Try</span>
+                        <div id="examples" class="chips" role="group" aria-labelledby="examples-label"></div>
+                    </div>
+                </section>
+
+                <section class="pane pane-output" aria-labelledby="output-title">
+                    <header class="pane-head">
+                        <h2 id="output-title">VectorDrawable XML</h2>
+                        <span id="output-meta" class="meta"></span>
+                        <div class="pane-actions">
+                            <button id="copy-button" type="button" class="button" disabled>Copy</button>
+                            <button id="download-button" type="button" class="button primary" disabled>Download</button>
+                        </div>
+                    </header>
+                    <pre
+                        id="xml-output"
+                        class="code-area"
+                        tabindex="0"
+                        aria-labelledby="output-title"
+                    ><code id="xml-code"></code></pre>
+                    <div class="pane-foot">
+                        <p id="status" class="status" role="status" aria-live="polite"></p>
+                    </div>
+                </section>
+
+                <fieldset id="settings" class="options">
                     <legend>Options</legend>
                     <div class="field">
                         <label for="opt-strict">Strict mode</label>
@@ -56,7 +122,32 @@
                     </div>
                     <div class="field">
                         <label for="opt-current-color">currentColor</label>
-                        <input id="opt-current-color" name="currentColor" type="text" placeholder="#000000" />
+                        <input
+                            id="opt-current-color"
+                            name="currentColor"
+                            type="text"
+                            placeholder="#000000 or ?attr/colorOnSurface"
+                        />
+                    </div>
+                    <div class="field">
+                        <label for="opt-tint">Tint</label>
+                        <input id="opt-tint" name="tint" type="text" placeholder="none, e.g. #FF6200EE" />
+                    </div>
+                    <div class="field">
+                        <label for="opt-preview-colors">Preview colors</label>
+                        <input
+                            id="opt-preview-colors"
+                            name="previewColors"
+                            type="text"
+                            spellcheck="false"
+                            autocomplete="off"
+                            aria-describedby="opt-preview-colors-hint"
+                            placeholder="?attr/colorPrimary=#6750A4"
+                        />
+                        <span id="opt-preview-colors-hint" class="visually-hidden"
+                            >Values used by the preview only, for the color references of the drawable: pairs
+                            reference=color separated by commas</span
+                        >
                     </div>
                     <div class="field">
                         <label for="opt-float-precision">Float precision</label>
@@ -83,50 +174,104 @@
                             placeholder="not checked"
                         />
                     </div>
-                    <div class="field">
-                        <label for="opt-tint">Tint</label>
-                        <input id="opt-tint" name="tint" type="text" placeholder="none, e.g. #FF6200EE" />
-                    </div>
                 </fieldset>
-            </section>
 
-            <section class="panel" aria-labelledby="output-title">
-                <h2 id="output-title">VectorDrawable XML</h2>
-                <p id="status" class="status" role="status" aria-live="polite"></p>
-                <textarea
-                    id="xml-output"
-                    readonly
-                    spellcheck="false"
-                    rows="12"
-                    aria-labelledby="output-title"
-                ></textarea>
-                <div class="actions">
-                    <button id="copy-button" type="button" class="button primary" disabled>Copy XML</button>
-                </div>
+                <section class="pane pane-preview" aria-labelledby="preview-title">
+                    <header class="pane-head">
+                        <h2 id="preview-title">Preview</h2>
+                        <div class="pane-actions segmented" role="radiogroup" aria-label="Preview background">
+                            <label
+                                ><input type="radio" name="preview-bg" value="checker" checked /><span
+                                    >Grid</span
+                                ></label
+                            >
+                            <label><input type="radio" name="preview-bg" value="light" /><span>Light</span></label>
+                            <label><input type="radio" name="preview-bg" value="dark" /><span>Dark</span></label>
+                        </div>
+                    </header>
+                    <div id="previews" class="previews" data-bg="checker">
+                        <figure>
+                            <div id="source-preview" class="preview"></div>
+                            <figcaption>Source SVG</figcaption>
+                        </figure>
+                        <figure>
+                            <div id="vd-preview" class="preview"></div>
+                            <figcaption>VectorDrawable result</figcaption>
+                        </figure>
+                    </div>
+                </section>
 
-                <h3 id="warnings-title">Warnings</h3>
-                <ul id="warnings" class="warnings" aria-labelledby="warnings-title"></ul>
+                <section class="pane pane-warnings" aria-labelledby="warnings-title">
+                    <header class="pane-head">
+                        <h2 id="warnings-title">Warnings</h2>
+                        <span id="warnings-count" class="count" hidden></span>
+                    </header>
+                    <ul id="warnings" class="warnings" aria-labelledby="warnings-title"></ul>
+                </section>
+            </div>
 
-                <h3>Preview</h3>
-                <div class="previews">
-                    <figure>
-                        <div id="source-preview" class="preview"></div>
-                        <figcaption>Source SVG</figcaption>
-                    </figure>
-                    <figure>
-                        <div id="vd-preview" class="preview"></div>
-                        <figcaption>VectorDrawable, rendered back to SVG</figcaption>
-                    </figure>
+            <section class="more" aria-labelledby="more-title">
+                <h2 id="more-title">Use it in your build</h2>
+                <p class="more-lede">
+                    This page runs the lightweight browser build. The package adds svgo normalization (inline
+                    <code>&lt;style&gt;</code> CSS, shape merging), batch conversion, a watch mode and PNG fallbacks.
+                </p>
+                <div class="cards">
+                    <article class="card">
+                        <h3>Command line</h3>
+                        <div class="snippet">
+                            <pre><code>npm i -D svg-vectordrawable
+npx svgvd icons/ -o app/src/main/res/drawable</code></pre>
+                            <button type="button" class="button copy-snippet">Copy</button>
+                        </div>
+                        <p>Add <code>--strict</code> to fail the build on anything Android cannot represent.</p>
+                    </article>
+                    <article class="card">
+                        <h3>Node API</h3>
+                        <div class="snippet">
+                            <pre><code>import { convert } from 'svg-vectordrawable';
+
+const { xml, warnings, minSdk } = convert(svg);</code></pre>
+                            <button type="button" class="button copy-snippet">Copy</button>
+                        </div>
+                        <p>Synchronous, typed, ESM and CommonJS. Also ships a browser build.</p>
+                    </article>
+                    <article class="card">
+                        <h3>Go further</h3>
+                        <ul class="links">
+                            <li>
+                                <a
+                                    href="https://github.com/IBRAHIMDANS/svg-vectordrawable/blob/main/docs/integrations.md"
+                                    >Gradle, Vite, Figma and MCP integrations</a
+                                >
+                            </li>
+                            <li>
+                                <a
+                                    href="https://github.com/IBRAHIMDANS/svg-vectordrawable/blob/main/docs/migration-from-svg2vectordrawable.md"
+                                    >Migrating from svg2vectordrawable</a
+                                >
+                            </li>
+                            <li>
+                                <a href="https://github.com/IBRAHIMDANS/svg-vectordrawable/blob/main/docs/comparison.md"
+                                    >How it compares to other converters</a
+                                >
+                            </li>
+                            <li>
+                                <a href="https://github.com/IBRAHIMDANS/svg-vectordrawable/issues"
+                                    >Report a wrong conversion</a
+                                >
+                            </li>
+                        </ul>
+                    </article>
                 </div>
             </section>
         </main>
 
         <footer class="site-footer">
             <p>
-                Uses the lightweight browser build of
-                <a href="https://github.com/IBRAHIMDANS/svg-vectordrawable">svg-vectordrawable</a>, without svgo
-                normalization: inline <code>&lt;style&gt;</code> CSS is not applied. For that, install the package and
-                use its CLI (<code>svgvd icon.svg</code>) or its Node API.
+                <a href="https://github.com/IBRAHIMDANS/svg-vectordrawable">svg-vectordrawable</a> is MIT licensed. The
+                preview renders the generated drawable back to SVG: it shows what the XML describes, not a capture from
+                an Android device.
             </p>
         </footer>
     </body>

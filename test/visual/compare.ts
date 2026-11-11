@@ -87,7 +87,18 @@ export function compareRasters(a: Raster, b: Raster, tolerance = DEFAULT_CHANNEL
     return { mismatch: inked ? mismatched / inked : 0, mismatched, inked, maxDelta, sizeMismatch: null };
 }
 
-/** Renders both SVGs at the same width and compares them. */
+/**
+ * Renders both SVGs at the same width and compares them.
+ *
+ * Limits of resvg (2.6) that make a correct conversion measure as a mismatch, so these cases have
+ * to be checked on the output text instead (measured 2026-11-11):
+ * - A `transform` whose scale is below about 1/4096 (≈ 2.44e-4) on one axis renders nothing, source
+ *   included: `<g transform="scale(0.0001)"><rect width="100000" height="100000"/></g>` is empty,
+ *   `scale(0.000245)` still draws. The size of the geometry, the viewBox and the render width do not
+ *   matter; the same factor split over nested groups (`scale(0.01)` twice) draws.
+ * - The CSS `scale` property is ignored: `<g style="scale:1000">` renders unscaled (~98 % mismatch in
+ *   both optimize modes) while the VectorDrawable output (`scaleX` / `scaleY="1000"`) is right.
+ */
 export function compareSvgs(expected: string, actual: string, tolerance = DEFAULT_CHANNEL_TOLERANCE): CompareResult {
     return compareRasters(renderSvg(expected), renderSvg(actual), tolerance);
 }

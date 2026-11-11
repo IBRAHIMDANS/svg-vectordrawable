@@ -74,4 +74,24 @@ describe('findNameCollisions', () => {
             ]),
         ).toEqual([{ name: 'arrow_left', inputs: ['Arrow-Left.svg', 'arrow_left.svg'] }]);
     });
+
+    it('groups names differing only by case, naming each one as written', () => {
+        expect(
+            findNameCollisions([
+                { input: 'A.svg', name: 'out/A.xml' },
+                { input: 'b.svg', name: 'out/b.xml' },
+                { input: 'a.svg', name: 'out/a.xml' },
+                { input: 'x/a.svg', name: 'out/a.xml' },
+            ]),
+        ).toEqual([{ name: 'out/A.xml, out/a.xml', inputs: ['A.svg', 'a.svg', 'x/a.svg'] }]);
+    });
+
+    it('folds the whole path, not only the base name', () => {
+        expect(
+            findNameCollisions([
+                { input: 'a.svg', name: 'Out/a.xml' },
+                { input: 'b.svg', name: 'out/A.xml' },
+            ]),
+        ).toEqual([{ name: 'Out/a.xml, out/A.xml', inputs: ['a.svg', 'b.svg'] }]);
+    });
 });

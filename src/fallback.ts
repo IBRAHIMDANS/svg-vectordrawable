@@ -1,8 +1,11 @@
 import { createRequire } from 'node:module';
 import type { XastElement, XastRoot } from './ast.js';
 import { vectorSize } from './convert.js';
+import { prepareSource } from './normalize.js';
+import { styleDeclarations } from './style.js';
 import { optimize } from './svgo.js';
-import { rootLayout } from './viewport.js';
+import { formatMatrix } from './transform.js';
+import { disablingViewBox, rootLayout, rootTransform } from './viewport.js';
 
 /**
  * Android density buckets and their scale from dp to px (mdpi = 160 dpi = 1 px per dp).
@@ -63,18 +66,50 @@ function checkDp(name: string, value: number | undefined): void {
  * Sets the root `<svg>` to `scale` px per dp of the drawable's size, its viewBox to the viewport the
  * `<vector>` would have (rootLayout: grown or shrunk for preserveAspectRatio, aligned) stretched
  * onto it with `preserveAspectRatio="none"`, as Android stretches a vector's viewport. The size is
- * the drawable's, `width` / `height` overrides included (`convert`'s `vectorSize`).
+ * the drawable's, `width` / `height` overrides included (`convert`'s `vectorSize`). A root
+ * transform (attribute or CSS, `rootTransform`) is moved onto a `<g>` around the content, with the
+ * browser semantics `convert` uses. A viewBox that disables rendering gives an empty image.
  */
 function sizeRoot(root: XastRoot, scale: number, width?: number, height?: number): void {
     const svg = root.children.find((c): c is XastElement => c.type === 'element' && c.name === 'svg');
     if (!svg) throw new Error('No <svg> root element found');
     const attrs = (svg.attributes ??= {});
+    // resvg reads namespaces, svgo and convert do not: a root whose SVG prefix prepareSource dropped
+    // (`<ns0:svg xmlns:ns0=…>`) needs the default namespace back to be found.
+    attrs.xmlns ??= 'http://www.w3.org/2000/svg';
+    // A zero or negative viewBox width or height disables rendering (SVG 2 §8.6): as convert does, an
+    // empty image sized as if the viewBox were absent.
+    if (disablingViewBox(attrs) !== undefined) {
+        delete attrs.viewBox;
+        svg.children = [];
+    }
     const layout = rootLayout(attrs);
     const size = vectorSize(layout, width, height);
     attrs.width = String(Math.max(1, Math.round(size.width * scale)));
     attrs.height = String(Math.max(1, Math.round(size.height * scale)));
-    attrs.viewBox = `${-layout.offsetX} ${-layout.offsetY} ${layout.viewportWidth} ${layout.viewportHeight}`;
     attrs.preserveAspectRatio = 'none';
+    // Browsers and convert apply a root transform (CSS property over attribute) in px of the CSS box
+    // around transform-origin; resvg would apply the attribute in user units around (0,0), and a CSS
+    // one written in the attribute syntax (`translate(3)`, invalid CSS). Drop both and wrap the
+    // content in the matrix convert uses (it carries the layout offset, so the viewBox starts at 0,0;
+    // null when nothing applies, e.g. `transform: none` over the attribute).
+    const matrix = rootTransform(attrs, layout);
+    delete attrs.transform;
+    delete attrs['transform-origin'];
+    const declarations = styleDeclarations(attrs.style);
+    const kept = declarations.filter(([name]) => name !== 'transform' && name !== 'transform-origin');
+    if (kept.length !== declarations.length) {
+        if (kept.length) attrs.style = kept.map(([k, v, i]) => `${k}:${v}${i ? '!important' : ''}`).join(';');
+        else delete attrs.style;
+    }
+    if (!matrix) {
+        attrs.viewBox = `${-layout.offsetX} ${-layout.offsetY} ${layout.viewportWidth} ${layout.viewportHeight}`;
+        return;
+    }
+    attrs.viewBox = `0 0 ${layout.viewportWidth} ${layout.viewportHeight}`;
+    svg.children = [
+        { type: 'element', name: 'g', attributes: { transform: formatMatrix(matrix) }, children: svg.children ?? [] },
+    ];
 }
 
 /** Whether the SVG has text, the only content needing fonts (loading the system ones is slow). */
@@ -96,7 +131,9 @@ export function renderFallbackPng(svg: string, options: FallbackPngOptions = {})
         );
     checkDp('width', width);
     checkDp('height', height);
-    // svgo as a plain parser / serializer: only this plugin runs, nothing is optimized.
+    // svgo as a plain parser / serializer: only this plugin runs, nothing is optimized. The source is
+    // prepared as convert does: numeric references decoded (svgo's parser caps them at 512) and an
+    // SVG-namespace prefix dropped (`<ns0:svg>`, otherwise no `<svg>` root is found).
     const plugin = {
         name: 'svgvd-fallback-size',
         fn: (root: unknown) => {
@@ -106,7 +143,7 @@ export function renderFallbackPng(svg: string, options: FallbackPngOptions = {})
     };
     let sized: string;
     try {
-        sized = optimize(svg, { plugins: [plugin] }).data;
+        sized = optimize(prepareSource(svg), { plugins: [plugin] }).data;
     } catch (err) {
         throw new Error(`Invalid SVG: ${(err as Error).message}`, { cause: err });
     }

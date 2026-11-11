@@ -77,6 +77,14 @@ describe('browser-lite entry', () => {
         expect(lite.WARNING_CODES).toEqual(main.WARNING_CODES);
     });
 
+    it('exports UNRESOLVED_COLOR from every entry', async () => {
+        const { UNRESOLVED_COLOR } = await import('../src/preview.js');
+        const main = await import('../src/browser.js');
+        const node = await import('../src/index.js');
+        expect(UNRESOLVED_COLOR).toBe('#FF808080');
+        for (const entry of [lite, main, node]) expect(entry.UNRESOLVED_COLOR).toBe(UNRESOLVED_COLOR);
+    });
+
     it('fails loud on malformed XML', () => {
         for (const svg of [
             '<svg><g></svg>',

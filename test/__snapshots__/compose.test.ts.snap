@@ -1,0 +1,1395 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`toImageVector: fixture snapshots (optimize:false, deterministic) > clip-path.svg 1`] = `
+{
+  "kotlin": "package com.example.icons
+
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.graphics.vector.PathData
+import androidx.compose.ui.graphics.vector.group
+import androidx.compose.ui.graphics.vector.path
+import androidx.compose.ui.unit.dp
+
+val ClipPath: ImageVector by lazy {
+    ImageVector.Builder(
+        name = "ClipPath",
+        defaultWidth = 24.dp,
+        defaultHeight = 24.dp,
+        viewportWidth = 24f,
+        viewportHeight = 24f,
+    ).apply {
+        group {
+            group(
+                clipPathData = PathData {
+                    moveTo(6f, 2f)
+                    horizontalLineToRelative(12f)
+                    arcToRelative(4f, 4f, 0f, false, true, 4f, 4f)
+                    verticalLineToRelative(12f)
+                    arcToRelative(4f, 4f, 0f, false, true, -4f, 4f)
+                    horizontalLineToRelative(-12f)
+                    arcToRelative(4f, 4f, 0f, false, true, -4f, -4f)
+                    verticalLineToRelative(-12f)
+                    arcToRelative(4f, 4f, 0f, false, true, 4f, -4f)
+                    close()
+                },
+            ) {
+                path(
+                    fill = SolidColor(Color(0xFFFF0000)),
+                ) {
+                    moveTo(0f, 0f)
+                    horizontalLineToRelative(24f)
+                    verticalLineToRelative(24f)
+                    horizontalLineTo(0f)
+                    close()
+                }
+            }
+        }
+    }.build()
+}
+",
+  "warnings": [],
+}
+`;
+
+exports[`toImageVector: fixture snapshots (optimize:false, deterministic) > element-transform.svg 1`] = `
+{
+  "kotlin": "package com.example.icons
+
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.graphics.vector.group
+import androidx.compose.ui.graphics.vector.path
+import androidx.compose.ui.unit.dp
+
+val ElementTransform: ImageVector by lazy {
+    ImageVector.Builder(
+        name = "ElementTransform",
+        defaultWidth = 16.dp,
+        defaultHeight = 16.dp,
+        viewportWidth = 16f,
+        viewportHeight = 16f,
+    ).apply {
+        group(
+            scaleY = -1f,
+            translationX = 6f,
+            translationY = 15f,
+        ) {
+            path(
+                fill = SolidColor(Color(0xFF000000)),
+            ) {
+                moveTo(1f, 0f)
+                horizontalLineToRelative(2f)
+                arcToRelative(1f, 1f, 0f, false, true, 1f, 1f)
+                verticalLineToRelative(10f)
+                arcToRelative(1f, 1f, 0f, false, true, -1f, 1f)
+                horizontalLineToRelative(-2f)
+                arcToRelative(1f, 1f, 0f, false, true, -1f, -1f)
+                verticalLineToRelative(-10f)
+                arcToRelative(1f, 1f, 0f, false, true, 1f, -1f)
+                close()
+            }
+        }
+        path(
+            fill = SolidColor(Color(0xFF000000)),
+        ) {
+            moveTo(1.5f, 2f)
+            arcToRelative(0.5f, 0.5f, 0f, false, true, 0f, -1f)
+            close()
+            moveToRelative(13f, -1f)
+            arcToRelative(0.5f, 0.5f, 0f, false, true, 0f, 1f)
+            close()
+            moveToRelative(-13f, 0f)
+            horizontalLineToRelative(13f)
+            verticalLineToRelative(1f)
+            horizontalLineToRelative(-13f)
+            close()
+        }
+    }.build()
+}
+",
+  "warnings": [],
+}
+`;
+
+exports[`toImageVector: fixture snapshots (optimize:false, deterministic) > issue-1-react-logo.svg 1`] = `
+{
+  "kotlin": "package com.example.icons
+
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.graphics.vector.PathData
+import androidx.compose.ui.graphics.vector.group
+import androidx.compose.ui.graphics.vector.path
+import androidx.compose.ui.unit.dp
+
+val Issue1ReactLogo: ImageVector by lazy {
+    ImageVector.Builder(
+        name = "Issue1ReactLogo",
+        defaultWidth = 108.dp,
+        defaultHeight = 108.dp,
+        viewportWidth = 208f,
+        viewportHeight = 208f,
+    ).apply {
+        group(
+            translationX = 54f,
+            translationY = 54f,
+        ) {
+            path(
+                stroke = SolidColor(Color(0xFFFFB13B)),
+                strokeLineWidth = 1.5f,
+                strokeLineCap = StrokeCap.Round,
+            ) {
+                moveTo(96.5f, 50f)
+                curveTo(96.5f, 51.607f, 95.962f, 53.208f, 94.899f, 54.76f)
+                moveTo(91.338f, 58.38f)
+                curveTo(90.099f, 59.327f, 88.653f, 60.229f, 87.016f, 61.076f)
+                moveTo(82.356f, 63.143f)
+                curveTo(80.838f, 63.722f, 79.222f, 64.259f, 77.518f, 64.751f)
+                moveTo(72.574f, 65.999f)
+                curveTo(70.953f, 66.353f, 69.28f, 66.669f, 67.563f, 66.944f)
+                moveTo(62.509f, 67.625f)
+                curveTo(60.838f, 67.809f, 59.142f, 67.956f, 57.429f, 68.065f)
+                moveTo(52.333f, 68.277f)
+                curveTo(51.556f, 68.292f, 50.778f, 68.3f, 50f, 68.3f)
+                curveTo(49.077f, 68.3f, 48.154f, 68.289f, 47.233f, 68.268f)
+                moveTo(42.139f, 68.037f)
+                curveTo(40.426f, 67.921f, 38.73f, 67.768f, 37.06f, 67.577f)
+                moveTo(32.009f, 66.875f)
+                curveTo(30.293f, 66.591f, 28.621f, 66.268f, 27.003f, 65.905f)
+                moveTo(22.066f, 64.63f)
+                curveTo(20.363f, 64.126f, 18.751f, 63.578f, 17.239f, 62.987f)
+                moveTo(12.601f, 60.875f)
+                curveTo(10.97f, 60.006f, 9.538f, 59.082f, 8.321f, 58.114f)
+                moveTo(4.863f, 54.398f)
+                curveTo(3.958f, 52.959f, 3.5f, 51.482f, 3.5f, 50f)
+                curveTo(3.5f, 49.856f, 3.504f, 49.712f, 3.513f, 49.568f)
+                moveTo(5.352f, 44.887f)
+                curveTo(6.256f, 43.664f, 7.482f, 42.482f, 9.009f, 41.36f)
+                moveTo(13.37f, 38.727f)
+                curveTo(14.799f, 38.008f, 16.363f, 37.332f, 18.049f, 36.704f)
+                moveTo(22.898f, 35.13f)
+                curveTo(24.482f, 34.683f, 26.136f, 34.275f, 27.849f, 33.91f)
+                moveTo(32.865f, 32.988f)
+                curveTo(34.517f, 32.73f, 36.205f, 32.51f, 37.921f, 32.328f)
+                moveTo(43.004f, 31.908f)
+                curveTo(44.692f, 31.807f, 46.393f, 31.743f, 48.1f, 31.715f)
+                moveTo(53.2f, 31.743f)
+                curveTo(54.908f, 31.79f, 56.609f, 31.873f, 58.293f, 31.993f)
+                moveTo(63.37f, 32.473f)
+                curveTo(65.087f, 32.676f, 66.772f, 32.917f, 68.418f, 33.197f)
+                moveTo(73.419f, 34.19f)
+                curveTo(75.131f, 34.583f, 76.778f, 35.019f, 78.349f, 35.494f)
+                moveTo(83.163f, 37.172f)
+                curveTo(84.841f, 37.844f, 86.385f, 38.566f, 87.78f, 39.331f)
+                moveTo(92.015f, 42.159f)
+                curveTo(93.484f, 43.378f, 94.606f, 44.657f, 95.36f, 45.973f)
+            }
+            group(
+                rotate = 120f,
+                translationX = 118.301f,
+                translationY = 31.699f,
+            ) {
+                path(
+                    stroke = SolidColor(Color(0xFFFFB13B)),
+                    strokeLineWidth = 1.5f,
+                    strokeLineCap = StrokeCap.Round,
+                ) {
+                    moveTo(96.5f, 50f)
+                    curveTo(96.5f, 51.607f, 95.962f, 53.208f, 94.899f, 54.76f)
+                    moveTo(91.338f, 58.38f)
+                    curveTo(90.099f, 59.327f, 88.653f, 60.229f, 87.016f, 61.076f)
+                    moveTo(82.356f, 63.143f)
+                    curveTo(80.838f, 63.722f, 79.222f, 64.259f, 77.518f, 64.751f)
+                    moveTo(72.574f, 65.999f)
+                    curveTo(70.953f, 66.353f, 69.28f, 66.669f, 67.563f, 66.944f)
+                    moveTo(62.509f, 67.625f)
+                    curveTo(60.838f, 67.809f, 59.142f, 67.956f, 57.429f, 68.065f)
+                    moveTo(52.333f, 68.277f)
+                    curveTo(51.556f, 68.292f, 50.778f, 68.3f, 50f, 68.3f)
+                    curveTo(49.077f, 68.3f, 48.154f, 68.289f, 47.233f, 68.268f)
+                    moveTo(42.139f, 68.037f)
+                    curveTo(40.426f, 67.921f, 38.73f, 67.768f, 37.06f, 67.577f)
+                    moveTo(32.009f, 66.875f)
+                    curveTo(30.293f, 66.591f, 28.621f, 66.268f, 27.003f, 65.905f)
+                    moveTo(22.066f, 64.63f)
+                    curveTo(20.363f, 64.126f, 18.751f, 63.578f, 17.239f, 62.987f)
+                    moveTo(12.601f, 60.875f)
+                    curveTo(10.97f, 60.006f, 9.538f, 59.082f, 8.321f, 58.114f)
+                    moveTo(4.863f, 54.398f)
+                    curveTo(3.958f, 52.959f, 3.5f, 51.482f, 3.5f, 50f)
+                    curveTo(3.5f, 49.856f, 3.504f, 49.712f, 3.513f, 49.568f)
+                    moveTo(5.352f, 44.887f)
+                    curveTo(6.256f, 43.664f, 7.482f, 42.482f, 9.009f, 41.36f)
+                    moveTo(13.37f, 38.727f)
+                    curveTo(14.799f, 38.008f, 16.363f, 37.332f, 18.049f, 36.704f)
+                    moveTo(22.898f, 35.13f)
+                    curveTo(24.482f, 34.683f, 26.136f, 34.275f, 27.849f, 33.91f)
+                    moveTo(32.865f, 32.988f)
+                    curveTo(34.517f, 32.73f, 36.205f, 32.51f, 37.921f, 32.328f)
+                    moveTo(43.004f, 31.908f)
+                    curveTo(44.692f, 31.807f, 46.393f, 31.743f, 48.1f, 31.715f)
+                    moveTo(53.2f, 31.743f)
+                    curveTo(54.908f, 31.79f, 56.609f, 31.873f, 58.293f, 31.993f)
+                    moveTo(63.37f, 32.473f)
+                    curveTo(65.087f, 32.676f, 66.772f, 32.917f, 68.418f, 33.197f)
+                    moveTo(73.419f, 34.19f)
+                    curveTo(75.131f, 34.583f, 76.778f, 35.019f, 78.349f, 35.494f)
+                    moveTo(83.163f, 37.172f)
+                    curveTo(84.841f, 37.844f, 86.385f, 38.566f, 87.78f, 39.331f)
+                    moveTo(92.015f, 42.159f)
+                    curveTo(93.484f, 43.378f, 94.606f, 44.657f, 95.36f, 45.973f)
+                }
+            }
+            group(
+                rotate = -120f,
+                translationX = 31.699f,
+                translationY = 118.301f,
+            ) {
+                path(
+                    stroke = SolidColor(Color(0xFFFFB13B)),
+                    strokeLineWidth = 1.5f,
+                    strokeLineCap = StrokeCap.Round,
+                ) {
+                    moveTo(96.5f, 50f)
+                    curveTo(96.5f, 51.607f, 95.962f, 53.208f, 94.899f, 54.76f)
+                    moveTo(91.338f, 58.38f)
+                    curveTo(90.099f, 59.327f, 88.653f, 60.229f, 87.016f, 61.076f)
+                    moveTo(82.356f, 63.143f)
+                    curveTo(80.838f, 63.722f, 79.222f, 64.259f, 77.518f, 64.751f)
+                    moveTo(72.574f, 65.999f)
+                    curveTo(70.953f, 66.353f, 69.28f, 66.669f, 67.563f, 66.944f)
+                    moveTo(62.509f, 67.625f)
+                    curveTo(60.838f, 67.809f, 59.142f, 67.956f, 57.429f, 68.065f)
+                    moveTo(52.333f, 68.277f)
+                    curveTo(51.556f, 68.292f, 50.778f, 68.3f, 50f, 68.3f)
+                    curveTo(49.077f, 68.3f, 48.154f, 68.289f, 47.233f, 68.268f)
+                    moveTo(42.139f, 68.037f)
+                    curveTo(40.426f, 67.921f, 38.73f, 67.768f, 37.06f, 67.577f)
+                    moveTo(32.009f, 66.875f)
+                    curveTo(30.293f, 66.591f, 28.621f, 66.268f, 27.003f, 65.905f)
+                    moveTo(22.066f, 64.63f)
+                    curveTo(20.363f, 64.126f, 18.751f, 63.578f, 17.239f, 62.987f)
+                    moveTo(12.601f, 60.875f)
+                    curveTo(10.97f, 60.006f, 9.538f, 59.082f, 8.321f, 58.114f)
+                    moveTo(4.863f, 54.398f)
+                    curveTo(3.958f, 52.959f, 3.5f, 51.482f, 3.5f, 50f)
+                    curveTo(3.5f, 49.856f, 3.504f, 49.712f, 3.513f, 49.568f)
+                    moveTo(5.352f, 44.887f)
+                    curveTo(6.256f, 43.664f, 7.482f, 42.482f, 9.009f, 41.36f)
+                    moveTo(13.37f, 38.727f)
+                    curveTo(14.799f, 38.008f, 16.363f, 37.332f, 18.049f, 36.704f)
+                    moveTo(22.898f, 35.13f)
+                    curveTo(24.482f, 34.683f, 26.136f, 34.275f, 27.849f, 33.91f)
+                    moveTo(32.865f, 32.988f)
+                    curveTo(34.517f, 32.73f, 36.205f, 32.51f, 37.921f, 32.328f)
+                    moveTo(43.004f, 31.908f)
+                    curveTo(44.692f, 31.807f, 46.393f, 31.743f, 48.1f, 31.715f)
+                    moveTo(53.2f, 31.743f)
+                    curveTo(54.908f, 31.79f, 56.609f, 31.873f, 58.293f, 31.993f)
+                    moveTo(63.37f, 32.473f)
+                    curveTo(65.087f, 32.676f, 66.772f, 32.917f, 68.418f, 33.197f)
+                    moveTo(73.419f, 34.19f)
+                    curveTo(75.131f, 34.583f, 76.778f, 35.019f, 78.349f, 35.494f)
+                    moveTo(83.163f, 37.172f)
+                    curveTo(84.841f, 37.844f, 86.385f, 38.566f, 87.78f, 39.331f)
+                    moveTo(92.015f, 42.159f)
+                    curveTo(93.484f, 43.378f, 94.606f, 44.657f, 95.36f, 45.973f)
+                }
+            }
+            path(
+                stroke = SolidColor(Color(0xFFFFB13B)),
+                strokeLineWidth = 1.5f,
+                strokeLineCap = StrokeCap.Round,
+            ) {
+                moveTo(58f, 50f)
+                curveTo(58f, 51.715f, 57.449f, 53.384f, 56.429f, 54.762f)
+                moveTo(52.332f, 57.653f)
+                curveTo(51.576f, 57.883f, 50.79f, 58f, 50f, 58f)
+                curveTo(49.087f, 58f, 48.18f, 57.844f, 47.319f, 57.537f)
+                moveTo(43.36f, 54.461f)
+                curveTo(42.473f, 53.142f, 42f, 51.589f, 42f, 50f)
+                curveTo(42f, 49.878f, 42.003f, 49.755f, 42.008f, 49.633f)
+                moveTo(43.797f, 44.948f)
+                curveTo(44.879f, 43.619f, 46.36f, 42.672f, 48.022f, 42.248f)
+                moveTo(53.024f, 42.593f)
+                curveTo(54.611f, 43.242f, 55.948f, 44.382f, 56.838f, 45.848f)
+            }
+            path(
+                stroke = SolidColor(Color(0xFFFFB13B)),
+                strokeAlpha = 0.2f,
+                strokeLineWidth = 4.5f,
+            ) {
+                moveTo(3.5f, 50f)
+                arcToRelative(46.5f, 18.3f, 0f, true, false, 93f, 0f)
+                arcToRelative(46.5f, 18.3f, 0f, true, false, -93f, 0f)
+                close()
+            }
+            group(
+                rotate = 120f,
+                translationX = 118.301f,
+                translationY = 31.699f,
+            ) {
+                path(
+                    stroke = SolidColor(Color(0xFFFFB13B)),
+                    strokeAlpha = 0.2f,
+                    strokeLineWidth = 4.5f,
+                ) {
+                    moveTo(3.5f, 50f)
+                    arcToRelative(46.5f, 18.3f, 0f, true, false, 93f, 0f)
+                    arcToRelative(46.5f, 18.3f, 0f, true, false, -93f, 0f)
+                    close()
+                }
+            }
+            group(
+                rotate = -120f,
+                translationX = 31.699f,
+                translationY = 118.301f,
+            ) {
+                path(
+                    stroke = SolidColor(Color(0xFFFFB13B)),
+                    strokeAlpha = 0.2f,
+                    strokeLineWidth = 4.5f,
+                ) {
+                    moveTo(3.5f, 50f)
+                    arcToRelative(46.5f, 18.3f, 0f, true, false, 93f, 0f)
+                    arcToRelative(46.5f, 18.3f, 0f, true, false, -93f, 0f)
+                    close()
+                }
+            }
+            path(
+                fill = SolidColor(Color(0xFFFFB13B)),
+                fillAlpha = 0.2f,
+            ) {
+                moveTo(41f, 50f)
+                arcToRelative(9f, 9f, 0f, true, false, 18f, 0f)
+                arcToRelative(9f, 9f, 0f, true, false, -18f, 0f)
+                close()
+            }
+            group {
+                group(
+                    clipPathData = PathData {
+                        moveTo(30f, 100f)
+                        lineTo(80f, 0f)
+                        lineTo(0f, 0f)
+                        lineTo(0f, 100f)
+                        close()
+                    },
+                ) {
+                    path(
+                        stroke = SolidColor(Color(0xFF61DAFB)),
+                        strokeLineWidth = 4.5f,
+                    ) {
+                        moveTo(3.5f, 50f)
+                        arcToRelative(46.5f, 18.3f, 0f, true, false, 93f, 0f)
+                        arcToRelative(46.5f, 18.3f, 0f, true, false, -93f, 0f)
+                        close()
+                    }
+                    group(
+                        rotate = 120f,
+                        translationX = 118.301f,
+                        translationY = 31.699f,
+                    ) {
+                        path(
+                            stroke = SolidColor(Color(0xFF61DAFB)),
+                            strokeLineWidth = 4.5f,
+                        ) {
+                            moveTo(3.5f, 50f)
+                            arcToRelative(46.5f, 18.3f, 0f, true, false, 93f, 0f)
+                            arcToRelative(46.5f, 18.3f, 0f, true, false, -93f, 0f)
+                            close()
+                        }
+                    }
+                    group(
+                        rotate = -120f,
+                        translationX = 31.699f,
+                        translationY = 118.301f,
+                    ) {
+                        path(
+                            stroke = SolidColor(Color(0xFF61DAFB)),
+                            strokeLineWidth = 4.5f,
+                        ) {
+                            moveTo(3.5f, 50f)
+                            arcToRelative(46.5f, 18.3f, 0f, true, false, 93f, 0f)
+                            arcToRelative(46.5f, 18.3f, 0f, true, false, -93f, 0f)
+                            close()
+                        }
+                    }
+                    path(
+                        fill = SolidColor(Color(0xFF61DAFB)),
+                    ) {
+                        moveTo(41f, 50f)
+                        arcToRelative(9f, 9f, 0f, true, false, 18f, 0f)
+                        arcToRelative(9f, 9f, 0f, true, false, -18f, 0f)
+                        close()
+                    }
+                }
+            }
+            path(
+                stroke = SolidColor(Color(0xFF2E2E2E)),
+                strokeLineWidth = 4f,
+                strokeLineCap = StrokeCap.Round,
+            ) {
+                moveTo(30.447f, 99.106f)
+                lineTo(77.405f, 5.191f)
+            }
+        }
+    }.build()
+}
+",
+  "warnings": [
+    "opacity-approximated",
+  ],
+}
+`;
+
+exports[`toImageVector: fixture snapshots (optimize:false, deterministic) > linear-gradient.svg 1`] = `
+{
+  "kotlin": "package com.example.icons
+
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.graphics.vector.path
+import androidx.compose.ui.unit.dp
+
+val LinearGradient: ImageVector by lazy {
+    ImageVector.Builder(
+        name = "LinearGradient",
+        defaultWidth = 24.dp,
+        defaultHeight = 24.dp,
+        viewportWidth = 24f,
+        viewportHeight = 24f,
+    ).apply {
+        path(
+            fill = Brush.linearGradient(
+                0f to Color(0xFF504E9C),
+                1f to Color(0xFF07B8D8),
+                start = Offset(0f, 0f),
+                end = Offset(24f, 0f),
+            ),
+        ) {
+            moveTo(0f, 0f)
+            horizontalLineToRelative(24f)
+            verticalLineToRelative(24f)
+            horizontalLineTo(0f)
+            close()
+        }
+    }.build()
+}
+",
+  "warnings": [],
+}
+`;
+
+exports[`toImageVector: fixture snapshots (optimize:false, deterministic) > objectbox-gradient.svg 1`] = `
+{
+  "kotlin": "package com.example.icons
+
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.graphics.vector.path
+import androidx.compose.ui.unit.dp
+
+val ObjectboxGradient: ImageVector by lazy {
+    ImageVector.Builder(
+        name = "ObjectboxGradient",
+        defaultWidth = 24.dp,
+        defaultHeight = 24.dp,
+        viewportWidth = 24f,
+        viewportHeight = 24f,
+    ).apply {
+        path(
+            fill = Brush.linearGradient(
+                0f to Color(0xFFFF0000),
+                1f to Color(0xFF0000FF),
+                start = Offset(2f, 2f),
+                end = Offset(12f, 2f),
+            ),
+        ) {
+            moveTo(2f, 2f)
+            horizontalLineToRelative(10f)
+            verticalLineToRelative(10f)
+            horizontalLineToRelative(-10f)
+            close()
+        }
+    }.build()
+}
+",
+  "warnings": [],
+}
+`;
+
+exports[`toImageVector: fixture snapshots (optimize:false, deterministic) > radial-gradient-transform.svg 1`] = `
+{
+  "kotlin": "package com.example.icons
+
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.graphics.vector.path
+import androidx.compose.ui.unit.dp
+
+val RadialGradientTransform: ImageVector by lazy {
+    ImageVector.Builder(
+        name = "RadialGradientTransform",
+        defaultWidth = 24.dp,
+        defaultHeight = 24.dp,
+        viewportWidth = 24f,
+        viewportHeight = 24f,
+    ).apply {
+        path(
+            fill = Brush.radialGradient(
+                0f to Color(0xFFFFFFFF),
+                1f to Color(0x00000000),
+                center = Offset(12f, 12f),
+                radius = 12f,
+            ),
+        ) {
+            moveTo(0f, 0f)
+            horizontalLineToRelative(24f)
+            verticalLineToRelative(24f)
+            horizontalLineTo(0f)
+            close()
+        }
+    }.build()
+}
+",
+  "warnings": [],
+}
+`;
+
+exports[`toImageVector: fixture snapshots (optimize:false, deterministic) > skew-group.svg 1`] = `
+{
+  "kotlin": "package com.example.icons
+
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.graphics.vector.path
+import androidx.compose.ui.unit.dp
+
+val SkewGroup: ImageVector by lazy {
+    ImageVector.Builder(
+        name = "SkewGroup",
+        defaultWidth = 24.dp,
+        defaultHeight = 24.dp,
+        viewportWidth = 24f,
+        viewportHeight = 24f,
+    ).apply {
+        path(
+            fill = SolidColor(Color(0xFF0000FF)),
+        ) {
+            moveTo(0f, 0f)
+            lineTo(5f, 10f)
+            lineTo(15f, 10f)
+            close()
+        }
+    }.build()
+}
+",
+  "warnings": [],
+}
+`;
+
+exports[`toImageVector: fixture snapshots (optimize:false, deterministic) > stroke-icon.svg 1`] = `
+{
+  "kotlin": "package com.example.icons
+
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.StrokeJoin
+import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.graphics.vector.path
+import androidx.compose.ui.unit.dp
+
+val StrokeIcon: ImageVector by lazy {
+    ImageVector.Builder(
+        name = "StrokeIcon",
+        defaultWidth = 24.dp,
+        defaultHeight = 24.dp,
+        viewportWidth = 24f,
+        viewportHeight = 24f,
+    ).apply {
+        path(
+            stroke = SolidColor(Color(0xFF000000)),
+            strokeLineWidth = 2f,
+            strokeLineCap = StrokeCap.Round,
+            strokeLineJoin = StrokeJoin.Round,
+        ) {
+            moveTo(5f, 12f)
+            horizontalLineToRelative(14f)
+            moveTo(12f, 5f)
+            verticalLineToRelative(14f)
+        }
+    }.build()
+}
+",
+  "warnings": [],
+}
+`;
+
+exports[`toImageVector: fixture snapshots (optimize:false, deterministic) > svgo-cubic-smooth.svg 1`] = `
+{
+  "kotlin": "package com.example.icons
+
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.graphics.vector.path
+import androidx.compose.ui.unit.dp
+
+val SvgoCubicSmooth: ImageVector by lazy {
+    ImageVector.Builder(
+        name = "SvgoCubicSmooth",
+        defaultWidth = 24.dp,
+        defaultHeight = 24.dp,
+        viewportWidth = 24f,
+        viewportHeight = 24f,
+    ).apply {
+        path(
+            stroke = SolidColor(Color(0xFF000000)),
+            strokeLineWidth = 2f,
+        ) {
+            moveTo(3f, 7f)
+            curveToRelative(3f, -2f, 6f, -2f, 9f, 0f)
+            reflectiveCurveToRelative(6f, 2f, 9f, 0f)
+        }
+        path(
+            stroke = SolidColor(Color(0xFF000000)),
+            strokeLineWidth = 2f,
+        ) {
+            moveTo(3f, 15f)
+            curveToRelative(3f, -2f, 6f, -2f, 9f, 0f)
+            reflectiveCurveToRelative(6f, 2f, 9f, 0f)
+        }
+    }.build()
+}
+",
+  "warnings": [],
+}
+`;
+
+exports[`toImageVector: fixture snapshots (optimize:false, deterministic) > tool-figma-clip.svg 1`] = `
+{
+  "kotlin": "package com.example.icons
+
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.PathFillType
+import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.graphics.vector.PathData
+import androidx.compose.ui.graphics.vector.group
+import androidx.compose.ui.graphics.vector.path
+import androidx.compose.ui.unit.dp
+
+val ToolFigmaClip: ImageVector by lazy {
+    ImageVector.Builder(
+        name = "ToolFigmaClip",
+        defaultWidth = 24.dp,
+        defaultHeight = 24.dp,
+        viewportWidth = 24f,
+        viewportHeight = 24f,
+    ).apply {
+        group {
+            group(
+                clipPathData = PathData {
+                    moveTo(2f, 2f)
+                    lineTo(22f, 2f)
+                    lineTo(22f, 22f)
+                    lineTo(2f, 22f)
+                    close()
+                },
+            ) {
+                path(
+                    fill = SolidColor(Color(0xFF0D99FF)),
+                ) {
+                    moveTo(12f, 2f)
+                    curveTo(6.477f, 2f, 2f, 6.477f, 2f, 12f)
+                    curveTo(2f, 17.523f, 6.477f, 22f, 12f, 22f)
+                    curveTo(17.523f, 22f, 22f, 17.523f, 22f, 12f)
+                    curveTo(22f, 6.477f, 17.523f, 2f, 12f, 2f)
+                    close()
+                }
+                path(
+                    fill = SolidColor(Color(0xFFFFFFFF)),
+                    pathFillType = PathFillType.EvenOdd,
+                ) {
+                    moveTo(7f, 7f)
+                    horizontalLineTo(17f)
+                    verticalLineTo(17f)
+                    horizontalLineTo(7f)
+                    verticalLineTo(7f)
+                    close()
+                    moveTo(9f, 9f)
+                    verticalLineTo(15f)
+                    horizontalLineTo(15f)
+                    verticalLineTo(9f)
+                    horizontalLineTo(9f)
+                    close()
+                }
+                path(
+                    stroke = SolidColor(Color(0xFF1E1E1E)),
+                    strokeLineWidth = 2f,
+                    strokeLineCap = StrokeCap.Round,
+                ) {
+                    moveTo(-2f, 18f)
+                    lineTo(26f, 18f)
+                }
+            }
+        }
+    }.build()
+}
+",
+  "warnings": [],
+}
+`;
+
+exports[`toImageVector: fixture snapshots (optimize:false, deterministic) > tool-figma-gradient-stroke.svg 1`] = `
+{
+  "kotlin": "package com.example.icons
+
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.StrokeJoin
+import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.graphics.vector.path
+import androidx.compose.ui.unit.dp
+
+val ToolFigmaGradientStroke: ImageVector by lazy {
+    ImageVector.Builder(
+        name = "ToolFigmaGradientStroke",
+        defaultWidth = 32.dp,
+        defaultHeight = 32.dp,
+        viewportWidth = 32f,
+        viewportHeight = 32f,
+    ).apply {
+        path(
+            fill = Brush.linearGradient(
+                0f to Color(0xFF7B61FF),
+                1f to Color(0xFF4A2FD6),
+                start = Offset(16f, 0f),
+                end = Offset(16f, 32f),
+            ),
+        ) {
+            moveTo(8f, 0.5f)
+            horizontalLineToRelative(16f)
+            arcToRelative(7.5f, 7.5f, 0f, false, true, 7.5f, 7.5f)
+            verticalLineToRelative(16f)
+            arcToRelative(7.5f, 7.5f, 0f, false, true, -7.5f, 7.5f)
+            horizontalLineToRelative(-16f)
+            arcToRelative(7.5f, 7.5f, 0f, false, true, -7.5f, -7.5f)
+            verticalLineToRelative(-16f)
+            arcToRelative(7.5f, 7.5f, 0f, false, true, 7.5f, -7.5f)
+            close()
+        }
+        path(
+            stroke = SolidColor(Color(0xFF000000)),
+            strokeAlpha = 0.1f,
+            strokeLineWidth = 1f,
+        ) {
+            moveTo(8f, 0.5f)
+            horizontalLineToRelative(16f)
+            arcToRelative(7.5f, 7.5f, 0f, false, true, 7.5f, 7.5f)
+            verticalLineToRelative(16f)
+            arcToRelative(7.5f, 7.5f, 0f, false, true, -7.5f, 7.5f)
+            horizontalLineToRelative(-16f)
+            arcToRelative(7.5f, 7.5f, 0f, false, true, -7.5f, -7.5f)
+            verticalLineToRelative(-16f)
+            arcToRelative(7.5f, 7.5f, 0f, false, true, 7.5f, -7.5f)
+            close()
+        }
+        path(
+            stroke = SolidColor(Color(0xFFFFFFFF)),
+            strokeLineWidth = 2.5f,
+            strokeLineCap = StrokeCap.Round,
+            strokeLineJoin = StrokeJoin.Round,
+        ) {
+            moveTo(10f, 16.5f)
+            lineTo(14f, 20.5f)
+            lineTo(22f, 11.5f)
+        }
+        path(
+            fill = Brush.radialGradient(
+                0f to Color(0xFFFFFFFF),
+                1f to Color(0x00FFFFFF),
+                center = Offset(24f, 8f),
+                radius = 3f,
+            ),
+            fillAlpha = 0.6f,
+        ) {
+            moveTo(21f, 8f)
+            arcToRelative(3f, 3f, 0f, true, false, 6f, 0f)
+            arcToRelative(3f, 3f, 0f, true, false, -6f, 0f)
+            close()
+        }
+    }.build()
+}
+",
+  "warnings": [],
+}
+`;
+
+exports[`toImageVector: fixture snapshots (optimize:false, deterministic) > tool-illustrator-gradient.svg 1`] = `
+{
+  "kotlin": "package com.example.icons
+
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.graphics.vector.path
+import androidx.compose.ui.unit.dp
+
+val ToolIllustratorGradient: ImageVector by lazy {
+    ImageVector.Builder(
+        name = "ToolIllustratorGradient",
+        defaultWidth = 48.dp,
+        defaultHeight = 48.dp,
+        viewportWidth = 48f,
+        viewportHeight = 48f,
+    ).apply {
+        path(
+            fill = Brush.linearGradient(
+                0f to Color(0xFFFF7A00),
+                0.5f to Color(0xFFFF3D6E),
+                1f to Color(0xFF8A2BE2),
+                start = Offset(4f, 24f),
+                end = Offset(44f, 24f),
+            ),
+        ) {
+            moveTo(10f, 4f)
+            horizontalLineToRelative(28f)
+            curveToRelative(3.3f, 0f, 6f, 2.7f, 6f, 6f)
+            verticalLineToRelative(28f)
+            curveToRelative(0f, 3.3f, -2.7f, 6f, -6f, 6f)
+            horizontalLineTo(10f)
+            curveToRelative(-3.3f, 0f, -6f, -2.7f, -6f, -6f)
+            verticalLineTo(10f)
+            curveTo(4f, 6.7f, 6.7f, 4f, 10f, 4f)
+            close()
+        }
+        path(
+            fill = Brush.radialGradient(
+                0f to Color(0xFFFFFFFF),
+                1f to Color(0x00FFFFFF),
+                center = Offset(24f, 24f),
+                radius = 12f,
+            ),
+        ) {
+            moveTo(12f, 24f)
+            arcToRelative(12f, 12f, 0f, true, false, 24f, 0f)
+            arcToRelative(12f, 12f, 0f, true, false, -24f, 0f)
+            close()
+        }
+    }.build()
+}
+",
+  "warnings": [],
+}
+`;
+
+exports[`toImageVector: fixture snapshots (optimize:false, deterministic) > tool-illustrator-style-classes.svg 1`] = `
+{
+  "kotlin": "package com.example.icons
+
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.graphics.vector.path
+import androidx.compose.ui.unit.dp
+
+val ToolIllustratorStyleClasses: ImageVector by lazy {
+    ImageVector.Builder(
+        name = "ToolIllustratorStyleClasses",
+        defaultWidth = 48.dp,
+        defaultHeight = 48.dp,
+        viewportWidth = 48f,
+        viewportHeight = 48f,
+    ).apply {
+        path(
+            fill = SolidColor(Color(0xFF000000)),
+        ) {
+            moveTo(6f, 24f)
+            arcToRelative(18f, 18f, 0f, true, false, 36f, 0f)
+            arcToRelative(18f, 18f, 0f, true, false, -36f, 0f)
+            close()
+        }
+        path(
+            fill = SolidColor(Color(0xFF000000)),
+        ) {
+            moveTo(14f, 24.5f)
+            lineToRelative(6.2f, 6.2f)
+            lineTo(34f, 17f)
+        }
+        path(
+            fill = SolidColor(Color(0xFF000000)),
+        ) {
+            moveTo(24f, 9.5f)
+            lineTo(26.1f, 13.8f)
+            lineTo(30.8f, 14.4f)
+            lineTo(27.4f, 17.7f)
+            lineTo(28.2f, 22.4f)
+            lineTo(24f, 20.2f)
+            lineTo(19.8f, 22.4f)
+            lineTo(20.6f, 17.7f)
+            lineTo(17.2f, 14.4f)
+            lineTo(21.9f, 13.8f)
+            close()
+        }
+        path(
+            fill = SolidColor(Color(0xFF000000)),
+        ) {
+            moveTo(6f, 38f)
+            horizontalLineToRelative(36f)
+            verticalLineToRelative(4f)
+            horizontalLineToRelative(-36f)
+            close()
+        }
+    }.build()
+}
+",
+  "warnings": [
+    "unsupported-style",
+  ],
+}
+`;
+
+exports[`toImageVector: fixture snapshots (optimize:false, deterministic) > tool-illustrator-svgid-clip.svg 1`] = `
+{
+  "kotlin": "package com.example.icons
+
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.graphics.vector.PathData
+import androidx.compose.ui.graphics.vector.group
+import androidx.compose.ui.graphics.vector.path
+import androidx.compose.ui.unit.dp
+
+val ToolIllustratorSvgidClip: ImageVector by lazy {
+    ImageVector.Builder(
+        name = "ToolIllustratorSvgidClip",
+        defaultWidth = 64.dp,
+        defaultHeight = 64.dp,
+        viewportWidth = 64f,
+        viewportHeight = 64f,
+    ).apply {
+        group {
+            group(
+                clipPathData = PathData {
+                    moveTo(18f, 8f)
+                    horizontalLineToRelative(28f)
+                    arcToRelative(10f, 10f, 0f, false, true, 10f, 10f)
+                    verticalLineToRelative(28f)
+                    arcToRelative(10f, 10f, 0f, false, true, -10f, 10f)
+                    horizontalLineToRelative(-28f)
+                    arcToRelative(10f, 10f, 0f, false, true, -10f, -10f)
+                    verticalLineToRelative(-28f)
+                    arcToRelative(10f, 10f, 0f, false, true, 10f, -10f)
+                    close()
+                },
+            ) {
+                path(
+                    fill = SolidColor(Color(0xFF2B7BB9)),
+                ) {
+                    moveTo(0f, 0f)
+                    horizontalLineToRelative(64f)
+                    verticalLineToRelative(64f)
+                    horizontalLineToRelative(-64f)
+                    close()
+                }
+                path(
+                    fill = SolidColor(Color(0xFFF5C400)),
+                ) {
+                    moveTo(32f, 52f)
+                    arcToRelative(20f, 20f, 0f, true, false, 40f, 0f)
+                    arcToRelative(20f, 20f, 0f, true, false, -40f, 0f)
+                    close()
+                }
+            }
+        }
+    }.build()
+}
+",
+  "warnings": [],
+}
+`;
+
+exports[`toImageVector: fixture snapshots (optimize:false, deterministic) > tool-inkscape-layers.svg 1`] = `
+{
+  "kotlin": "package com.example.icons
+
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.StrokeJoin
+import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.graphics.vector.group
+import androidx.compose.ui.graphics.vector.path
+import androidx.compose.ui.unit.dp
+
+val ToolInkscapeLayers: ImageVector by lazy {
+    ImageVector.Builder(
+        name = "ToolInkscapeLayers",
+        defaultWidth = 48.dp,
+        defaultHeight = 48.dp,
+        viewportWidth = 12.7f,
+        viewportHeight = 12.7f,
+    ).apply {
+        group(
+            translationX = -48.5f,
+            translationY = -72.25f,
+        ) {
+            path(
+                fill = SolidColor(Color(0xFFFF6600)),
+                stroke = SolidColor(Color(0xFF2B0000)),
+                strokeLineWidth = 0.529f,
+                strokeLineCap = StrokeCap.Round,
+                strokeLineJoin = StrokeJoin.Round,
+            ) {
+                moveTo(49.35f, 78.6f)
+                arcToRelative(5.5f, 5.5f, 0f, true, false, 11f, 0f)
+                arcToRelative(5.5f, 5.5f, 0f, true, false, -11f, 0f)
+                close()
+            }
+            group(
+                rotate = 45f,
+            ) {
+                path(
+                    fill = SolidColor(Color(0xFFFFFFFF)),
+                ) {
+                    moveTo(91.86f, 16f)
+                    horizontalLineToRelative(5f)
+                    verticalLineToRelative(1.6f)
+                    horizontalLineToRelative(-5f)
+                    close()
+                }
+            }
+        }
+    }.build()
+}
+",
+  "warnings": [],
+}
+`;
+
+exports[`toImageVector: fixture snapshots (optimize:false, deterministic) > tool-inkscape-metadata-matrix.svg 1`] = `
+{
+  "kotlin": "package com.example.icons
+
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.graphics.vector.group
+import androidx.compose.ui.graphics.vector.path
+import androidx.compose.ui.unit.dp
+
+val ToolInkscapeMetadataMatrix: ImageVector by lazy {
+    ImageVector.Builder(
+        name = "ToolInkscapeMetadataMatrix",
+        defaultWidth = 48.dp,
+        defaultHeight = 48.dp,
+        viewportWidth = 48f,
+        viewportHeight = 48f,
+    ).apply {
+        group(
+            translationY = -1004.362f,
+        ) {
+            group(
+                translationY = 1004.362f,
+            ) {
+                path(
+                    fill = Brush.linearGradient(
+                        0f to Color(0xFF00AA88),
+                        1f to Color(0xFF0055D4),
+                        start = Offset(4f, 4f),
+                        end = Offset(44f, 44f),
+                    ),
+                ) {
+                    moveTo(10f, 4f)
+                    horizontalLineToRelative(28f)
+                    arcToRelative(6f, 6f, 0f, false, true, 6f, 6f)
+                    verticalLineToRelative(28f)
+                    arcToRelative(6f, 6f, 0f, false, true, -6f, 6f)
+                    horizontalLineToRelative(-28f)
+                    arcToRelative(6f, 6f, 0f, false, true, -6f, -6f)
+                    verticalLineToRelative(-28f)
+                    arcToRelative(6f, 6f, 0f, false, true, 6f, -6f)
+                    close()
+                }
+            }
+            group(
+                rotate = -30f,
+                translationX = -8.785f,
+                translationY = 1019.578f,
+            ) {
+                path(
+                    stroke = SolidColor(Color(0xFFFFFFFF)),
+                    strokeLineWidth = 3f,
+                    strokeLineCap = StrokeCap.Round,
+                ) {
+                    moveToRelative(14f, 24f)
+                    horizontalLineToRelative(18f)
+                    moveToRelative(-6f, -6f)
+                    lineToRelative(6f, 6f)
+                    lineToRelative(-6f, 6f)
+                }
+            }
+            group(
+                translationY = 1004.362f,
+            ) {
+                path(
+                    fill = SolidColor(Color(0xFFFFCC00)),
+                ) {
+                    moveTo(42f, 10f)
+                    lineTo(39.131f, 11.131f)
+                    lineTo(38f, 14f)
+                    lineTo(36.869f, 11.131f)
+                    lineTo(34f, 10f)
+                    lineTo(36.869f, 8.869f)
+                    lineTo(38f, 6f)
+                    lineTo(39.131f, 8.869f)
+                    close()
+                }
+            }
+        }
+    }.build()
+}
+",
+  "warnings": [],
+}
+`;
+
+exports[`toImageVector: fixture snapshots (optimize:false, deterministic) > tool-sketch-artboard.svg 1`] = `
+{
+  "kotlin": "package com.example.icons
+
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.PathFillType
+import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.graphics.vector.group
+import androidx.compose.ui.graphics.vector.path
+import androidx.compose.ui.unit.dp
+
+val ToolSketchArtboard: ImageVector by lazy {
+    ImageVector.Builder(
+        name = "ToolSketchArtboard",
+        defaultWidth = 24.dp,
+        defaultHeight = 24.dp,
+        viewportWidth = 24f,
+        viewportHeight = 24f,
+    ).apply {
+        group {
+            path(
+                fill = SolidColor(Color(0xFF34C759)),
+                pathFillType = PathFillType.EvenOdd,
+            ) {
+                moveTo(2f, 12f)
+                arcToRelative(10f, 10f, 0f, true, false, 20f, 0f)
+                arcToRelative(10f, 10f, 0f, true, false, -20f, 0f)
+                close()
+            }
+            group(
+                rotate = 45f,
+                translationX = 12f,
+                translationY = 4.929f,
+            ) {
+                path(
+                    fill = SolidColor(Color(0xFFFFFFFF)),
+                    pathFillType = PathFillType.EvenOdd,
+                ) {
+                    moveTo(5f, 0f)
+                    horizontalLineToRelative(0f)
+                    arcToRelative(1f, 1f, 0f, false, true, 1f, 1f)
+                    verticalLineToRelative(8f)
+                    arcToRelative(1f, 1f, 0f, false, true, -1f, 1f)
+                    horizontalLineToRelative(0f)
+                    arcToRelative(1f, 1f, 0f, false, true, -1f, -1f)
+                    verticalLineToRelative(-8f)
+                    arcToRelative(1f, 1f, 0f, false, true, 1f, -1f)
+                    close()
+                }
+                group(
+                    rotate = 90f,
+                    translationX = 10f,
+                ) {
+                    path(
+                        fill = SolidColor(Color(0xFFFFFFFF)),
+                        pathFillType = PathFillType.EvenOdd,
+                    ) {
+                        moveTo(5f, 0f)
+                        horizontalLineToRelative(0f)
+                        arcToRelative(1f, 1f, 0f, false, true, 1f, 1f)
+                        verticalLineToRelative(8f)
+                        arcToRelative(1f, 1f, 0f, false, true, -1f, 1f)
+                        horizontalLineToRelative(0f)
+                        arcToRelative(1f, 1f, 0f, false, true, -1f, -1f)
+                        verticalLineToRelative(-8f)
+                        arcToRelative(1f, 1f, 0f, false, true, 1f, -1f)
+                        close()
+                    }
+                }
+            }
+            path(
+                stroke = SolidColor(Color(0xFF1C1C1E)),
+                strokeAlpha = 0.4f,
+                strokeLineWidth = 1f,
+                strokeLineCap = StrokeCap.Round,
+            ) {
+                moveTo(3f, 20.5f)
+                lineTo(21f, 20.5f)
+            }
+        }
+    }.build()
+}
+",
+  "warnings": [],
+}
+`;
+
+exports[`toImageVector: fixture snapshots (optimize:false, deterministic) > tool-sketch-mask.svg 1`] = `
+{
+  "kotlin": "package com.example.icons
+
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.PathFillType
+import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.graphics.vector.PathData
+import androidx.compose.ui.graphics.vector.group
+import androidx.compose.ui.graphics.vector.path
+import androidx.compose.ui.unit.dp
+
+val ToolSketchMask: ImageVector by lazy {
+    ImageVector.Builder(
+        name = "ToolSketchMask",
+        defaultWidth = 24.dp,
+        defaultHeight = 24.dp,
+        viewportWidth = 24f,
+        viewportHeight = 24f,
+    ).apply {
+        path(
+            fill = SolidColor(Color(0xFF000000)),
+        ) {
+            moveTo(12f, 22f)
+            curveTo(13.1f, 22f, 14f, 21.1f, 14f, 20f)
+            lineTo(10f, 20f)
+            curveTo(10f, 21.1f, 10.9f, 22f, 12f, 22f)
+            close()
+            moveTo(18f, 16f)
+            lineTo(18f, 11f)
+            curveTo(18f, 7.93f, 16.37f, 5.36f, 13.5f, 4.68f)
+            lineTo(13.5f, 4f)
+            curveTo(13.5f, 3.17f, 12.83f, 2.5f, 12f, 2.5f)
+            curveTo(11.17f, 2.5f, 10.5f, 3.17f, 10.5f, 4f)
+            lineTo(10.5f, 4.68f)
+            curveTo(7.64f, 5.36f, 6f, 7.92f, 6f, 11f)
+            lineTo(6f, 16f)
+            lineTo(4f, 18f)
+            lineTo(4f, 19f)
+            lineTo(20f, 19f)
+            lineTo(20f, 18f)
+            lineTo(18f, 16f)
+            close()
+        }
+        group {
+            group(
+                clipPathData = PathData {
+                    moveTo(12f, 22f)
+                    curveToRelative(-1.1f, 0f, -2f, -0.9f, -2f, -2f)
+                    horizontalLineToRelative(4f)
+                    curveToRelative(0f, 1.1f, -0.9f, 2f, -2f, 2f)
+                    close()
+                    moveTo(18f, 16f)
+                    lineToRelative(2f, 2f)
+                    verticalLineToRelative(1f)
+                    horizontalLineTo(4f)
+                    verticalLineTo(18f)
+                    lineToRelative(2f, -2f)
+                    verticalLineTo(11f)
+                    curveToRelative(0f, -3.08f, 1.64f, -5.64f, 4.5f, -6.32f)
+                    verticalLineTo(4f)
+                    curveToRelative(0f, -0.83f, 0.67f, -1.5f, 1.5f, -1.5f)
+                    curveToRelative(0.83f, 0f, 1.5f, 0.67f, 1.5f, 1.5f)
+                    verticalLineToRelative(0.68f)
+                    curveTo(16.37f, 5.36f, 18f, 7.93f, 18f, 11f)
+                    close()
+                },
+            ) {
+                path(
+                    fill = SolidColor(Color(0xFFE8341A)),
+                    pathFillType = PathFillType.EvenOdd,
+                ) {
+                    moveTo(0f, 0f)
+                    horizontalLineToRelative(24f)
+                    verticalLineToRelative(24f)
+                    horizontalLineToRelative(-24f)
+                    close()
+                }
+            }
+        }
+    }.build()
+}
+",
+  "warnings": [],
+}
+`;
+
+exports[`toImageVector: fixture snapshots (optimize:false, deterministic) > use-ref.svg 1`] = `
+{
+  "kotlin": "package com.example.icons
+
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.graphics.vector.group
+import androidx.compose.ui.graphics.vector.path
+import androidx.compose.ui.unit.dp
+
+val UseRef: ImageVector by lazy {
+    ImageVector.Builder(
+        name = "UseRef",
+        defaultWidth = 24.dp,
+        defaultHeight = 24.dp,
+        viewportWidth = 24f,
+        viewportHeight = 24f,
+    ).apply {
+        group(
+            translationX = 2f,
+            translationY = 2f,
+        ) {
+            path(
+                fill = SolidColor(Color(0xFF00AA00)),
+            ) {
+                moveTo(0f, 0f)
+                horizontalLineToRelative(12f)
+                verticalLineToRelative(12f)
+                horizontalLineTo(0f)
+                close()
+            }
+        }
+    }.build()
+}
+",
+  "warnings": [],
+}
+`;

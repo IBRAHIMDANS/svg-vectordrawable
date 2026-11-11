@@ -1,0 +1,233 @@
+name: Release integrations
+
+# Publishes one integration per run: the MCP server and the Vite plugin to npm, the Gradle plugin to the
+# Gradle Plugin Portal. Each integration has its own version and its own tag prefix:
+#   mcp-vX.Y.Z    -> integrations/mcp-server    (npm: svg-vectordrawable-mcp)
+#   vite-vX.Y.Z   -> integrations/vite-plugin   (npm: vite-plugin-svg-vectordrawable)
+#   gradle-vX.Y.Z -> integrations/gradle-plugin (Plugin Portal: io.github.ibrahimdans.svg-vectordrawable)
+# The library itself is released by release.yml (tags vX.Y.Z), which these tags do not match.
+on:
+    push:
+        tags: ['mcp-v*.*.*', 'vite-v*.*.*', 'gradle-v*.*.*']
+    # Dry run by default: `npm publish --dry-run` / `publishPlugins --validate-only`. A real publish from
+    # here must run on the integration's tag ("Use workflow from: <tag>").
+    workflow_dispatch:
+        inputs:
+            integration:
+                description: Integration to release
+                type: choice
+                options: [mcp, vite, gradle]
+                required: true
+            dry-run:
+                description: Dry run (build, test and validate, publish nothing)
+                type: boolean
+                default: true
+
+concurrency:
+    group: release-integrations-${{ github.ref }}-${{ inputs.integration }}
+    cancel-in-progress: false
+
+permissions:
+    contents: read
+
+jobs:
+    mcp-server:
+        if: ${{ startsWith(github.ref, 'refs/tags/mcp-v') || inputs.integration == 'mcp' }}
+        runs-on: ubuntu-latest
+        permissions:
+            contents: read
+            id-token: write # npm provenance (OIDC)
+        defaults:
+            run:
+                working-directory: integrations/mcp-server
+        steps:
+            - uses: actions/checkout@v4
+            - name: Check the tag matches package.json
+              env:
+                  PREFIX: mcp-v
+                  DRY_RUN: ${{ inputs.dry-run }}
+              run: |
+                  VERSION=$(jq -r .version package.json)
+                  if [[ "$GITHUB_REF" == refs/tags/* ]]; then
+                      if [[ "$GITHUB_REF_NAME" != "${PREFIX}${VERSION}" ]]; then
+                          echo "::error::Tag ${GITHUB_REF_NAME} does not match package.json version ${VERSION} (expected ${PREFIX}${VERSION})."
+                          exit 1
+                      fi
+                  elif [[ "$DRY_RUN" != "true" ]]; then
+                      echo "::error::A real publish must run on a ${PREFIX}X.Y.Z tag, not on ${GITHUB_REF}."
+                      exit 1
+                  fi
+                  echo "Releasing svg-vectordrawable-mcp ${VERSION} (dry run: ${DRY_RUN:-false})"
+            - uses: pnpm/action-setup@v6
+            - uses: actions/setup-node@v4
+              with:
+                  node-version: 24
+                  cache: pnpm
+                  cache-dependency-path: integrations/mcp-server/pnpm-lock.yaml
+                  registry-url: https://registry.npmjs.org
+            # Same pin as release.yml: npm 12 requires Node >= 22.22 and broke the library's v0.2.0 release.
+            - run: npm install -g npm@^11.5.1
+            - run: pnpm install --frozen-lockfile
+            - run: pnpm run typecheck
+            # Builds dist/, then drives the server over stdio with the MCP SDK client.
+            - run: pnpm test
+            # npm CLI (not pnpm) for provenance; `prepublishOnly` rebuilds dist/.
+            # NPM_TOKEN, not Trusted Publishing: a Trusted Publisher can only be configured on a package
+            # that already exists on npmjs.com. Once the first release is out, configure it for this
+            # workflow and drop NODE_AUTH_TOKEN (see docs/integrations.md, "Publishing the integrations").
+            - name: Require an npm token
+              if: ${{ inputs.dry-run != true }}
+              env:
+                  NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+              run: |
+                  if [[ -z "$NODE_AUTH_TOKEN" ]]; then
+                      echo "::error::The NPM_TOKEN repository secret is empty or missing: set an npm automation (or granular, publish) token."
+                      exit 1
+                  fi
+            - name: Publish to npm
+              env:
+                  NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+                  DRY_RUN: ${{ inputs.dry-run }}
+              run: |
+                  if [[ "$DRY_RUN" == "true" ]]; then
+                      npm publish --provenance --access public --dry-run
+                  else
+                      npm publish --provenance --access public
+                  fi
+
+    vite-plugin:
+        if: ${{ startsWith(github.ref, 'refs/tags/vite-v') || inputs.integration == 'vite' }}
+        runs-on: ubuntu-latest
+        permissions:
+            contents: read
+            id-token: write # npm provenance (OIDC)
+        defaults:
+            run:
+                working-directory: integrations/vite-plugin
+        steps:
+            - uses: actions/checkout@v4
+            - name: Check the tag matches package.json
+              env:
+                  PREFIX: vite-v
+                  DRY_RUN: ${{ inputs.dry-run }}
+              run: |
+                  VERSION=$(jq -r .version package.json)
+                  if [[ "$GITHUB_REF" == refs/tags/* ]]; then
+                      if [[ "$GITHUB_REF_NAME" != "${PREFIX}${VERSION}" ]]; then
+                          echo "::error::Tag ${GITHUB_REF_NAME} does not match package.json version ${VERSION} (expected ${PREFIX}${VERSION})."
+                          exit 1
+                      fi
+                  elif [[ "$DRY_RUN" != "true" ]]; then
+                      echo "::error::A real publish must run on a ${PREFIX}X.Y.Z tag, not on ${GITHUB_REF}."
+                      exit 1
+                  fi
+                  echo "Releasing vite-plugin-svg-vectordrawable ${VERSION} (dry run: ${DRY_RUN:-false})"
+            - uses: pnpm/action-setup@v6
+            - uses: actions/setup-node@v4
+              with:
+                  node-version: 24
+                  cache: pnpm
+                  cache-dependency-path: integrations/vite-plugin/pnpm-lock.yaml
+                  registry-url: https://registry.npmjs.org
+            # Same pin as release.yml: npm 12 requires Node >= 22.22 and broke the library's v0.2.0 release.
+            - run: npm install -g npm@^11.5.1
+            - run: pnpm install --frozen-lockfile
+            - run: pnpm run typecheck
+            # node:test: incremental builds, watch mode, dev server, warnings and strict errors.
+            - run: pnpm test
+            # npm CLI (not pnpm) for provenance; `prepublishOnly` rebuilds dist/.
+            # NPM_TOKEN, not Trusted Publishing: a Trusted Publisher can only be configured on a package
+            # that already exists on npmjs.com. Once the first release is out, configure it for this
+            # workflow and drop NODE_AUTH_TOKEN (see docs/integrations.md, "Publishing the integrations").
+            - name: Require an npm token
+              if: ${{ inputs.dry-run != true }}
+              env:
+                  NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+              run: |
+                  if [[ -z "$NODE_AUTH_TOKEN" ]]; then
+                      echo "::error::The NPM_TOKEN repository secret is empty or missing: set an npm automation (or granular, publish) token."
+                      exit 1
+                  fi
+            - name: Publish to npm
+              env:
+                  NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+                  DRY_RUN: ${{ inputs.dry-run }}
+              run: |
+                  if [[ "$DRY_RUN" == "true" ]]; then
+                      npm publish --provenance --access public --dry-run
+                  else
+                      npm publish --provenance --access public
+                  fi
+
+    gradle-plugin:
+        if: ${{ startsWith(github.ref, 'refs/tags/gradle-v') || inputs.integration == 'gradle' }}
+        runs-on: ubuntu-latest
+        permissions:
+            contents: read
+        defaults:
+            run:
+                working-directory: integrations/gradle-plugin
+        steps:
+            - uses: actions/checkout@v4
+            - name: Check the tag matches build.gradle.kts
+              env:
+                  PREFIX: gradle-v
+                  DRY_RUN: ${{ inputs.dry-run }}
+              run: |
+                  VERSION=$(sed -n 's/^version = "\(.*\)"$/\1/p' build.gradle.kts)
+                  if [[ -z "$VERSION" ]]; then
+                      echo "::error::No 'version = \"X.Y.Z\"' line found in build.gradle.kts."
+                      exit 1
+                  fi
+                  if [[ "$GITHUB_REF" == refs/tags/* ]]; then
+                      if [[ "$GITHUB_REF_NAME" != "${PREFIX}${VERSION}" ]]; then
+                          echo "::error::Tag ${GITHUB_REF_NAME} does not match build.gradle.kts version ${VERSION} (expected ${PREFIX}${VERSION})."
+                          exit 1
+                      fi
+                  elif [[ "$DRY_RUN" != "true" ]]; then
+                      echo "::error::A real publish must run on a ${PREFIX}X.Y.Z tag, not on ${GITHUB_REF}."
+                      exit 1
+                  fi
+                  echo "Releasing io.github.ibrahimdans.svg-vectordrawable ${VERSION} (dry run: ${DRY_RUN:-false})"
+            # Node + pnpm: the TestKit tests drive the svgvd CLI installed in example/node_modules.
+            - uses: pnpm/action-setup@v6
+            - uses: actions/setup-node@v4
+              with:
+                  node-version: 24
+                  cache: pnpm
+                  cache-dependency-path: integrations/gradle-plugin/example/pnpm-lock.yaml
+            # A full JDK (javac), not a JRE.
+            - uses: actions/setup-java@v4
+              with:
+                  distribution: temurin
+                  java-version: 21
+            # The TestKit tests build an Android app.
+            - uses: android-actions/setup-android@v3
+              with:
+                  packages: 'platforms;android-36'
+            - uses: gradle/actions/setup-gradle@v4
+            - run: pnpm install --frozen-lockfile
+              working-directory: integrations/gradle-plugin/example
+            # validatePlugins + TestKit functional tests.
+            - run: ./gradlew build --console=plain
+            # Keys passed from the environment, never inlined in the command line of the workflow file.
+            # --no-configuration-cache: the -P values (the secrets) would otherwise be stored in the
+            # configuration cache entry, which setup-gradle may save to the Actions cache.
+            - name: Publish to the Gradle Plugin Portal
+              env:
+                  GRADLE_PUBLISH_KEY: ${{ secrets.GRADLE_PUBLISH_KEY }}
+                  GRADLE_PUBLISH_SECRET: ${{ secrets.GRADLE_PUBLISH_SECRET }}
+                  DRY_RUN: ${{ inputs.dry-run }}
+              run: |
+                  ARGS=(publishPlugins --console=plain --no-configuration-cache
+                      "-Pgradle.publish.key=${GRADLE_PUBLISH_KEY}"
+                      "-Pgradle.publish.secret=${GRADLE_PUBLISH_SECRET}")
+                  if [[ "$DRY_RUN" == "true" ]]; then
+                      ARGS+=(--validate-only)
+                  fi
+                  ./gradlew "${ARGS[@]}"
+            - if: failure()
+              uses: actions/upload-artifact@v4
+              with:
+                  name: gradle-plugin-reports
+                  path: integrations/gradle-plugin/build/reports

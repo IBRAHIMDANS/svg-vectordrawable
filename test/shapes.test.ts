@@ -44,6 +44,49 @@ describe('rect corner radii (SVG 2 used values)', () => {
     });
 });
 
+describe('ellipse radii (SVG 2: a missing or invalid radius is auto)', () => {
+    const ellipse = (attrs: Record<string, string>) =>
+        shapeToPathData('ellipse', { cx: '12', cy: '12', ...attrs }, { viewport: { width: 24, height: 24 } });
+    const circle = 'M7,12a5,5 0 1 0 10,0a5,5 0 1 0 -10,0z';
+
+    it('takes the other radius when one is missing, auto, negative, unparsable or empty', () => {
+        for (const ry of [undefined, 'auto', '-3', 'bogus', '', ' ']) {
+            expect(ellipse(ry === undefined ? { rx: '5' } : { rx: '5', ry }), `ry=${ry}`).toBe(circle);
+            expect(ellipse(ry === undefined ? { ry: '5' } : { ry: '5', rx: ry }), `rx=${ry}`).toBe(circle);
+        }
+    });
+
+    it('mirrors the absolute value of a percentage radius', () => {
+        // rx = 25 % of the 24-wide viewport = 6; ry (auto) takes 6.
+        expect(ellipse({ rx: '25%', ry: '-1' })).toBe(ellipse({ rx: '6', ry: '6' }));
+    });
+
+    it('draws nothing when both radii are auto, or for an explicit zero radius', () => {
+        expect(ellipse({})).toBeNull();
+        expect(ellipse({ rx: '-5', ry: 'auto' })).toBeNull();
+        expect(ellipse({ rx: '5', ry: '0' })).toBeNull();
+    });
+
+    const svgOf = (shape: string) => `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">${shape}</svg>`;
+    for (const optimize of [true, false]) {
+        it(`draws a circle of radius rx for <ellipse rx="5"> and ry="-3" (optimize: ${optimize})`, () => {
+            for (const shape of [
+                '<ellipse cx="12" cy="12" rx="5"/>',
+                '<ellipse cx="12" cy="12" rx="5" ry="-3"/>',
+                '<ellipse cx="12" cy="12" rx="5" ry=""/>',
+            ]) {
+                const { xml, warnings } = convert(svgOf(shape), { optimize, strict: true });
+                expect(warnings, shape).toEqual([]);
+                expect(xml, shape).toContain(`android:pathData="${circle}"`);
+            }
+            // An empty value counts as absent (svgo drops it); an unparsable one is reported.
+            const { xml, warnings } = convert(svgOf("<ellipse cx='12' cy='12' ry='5' rx='bogus'/>"), { optimize });
+            expect(warnings.map((w) => w.code)).toEqual(['unsupported-attribute']);
+            expect(xml).toContain(`android:pathData="${circle}"`);
+        });
+    }
+});
+
 describe('wpt-rect-negative-radius.svg renders like its source', () => {
     const file = fileURLToPath(new URL('wpt-repro/wpt-rect-negative-radius.svg', import.meta.url));
     const svg = readFileSync(file, 'utf8');
@@ -126,14 +169,46 @@ describe('geometry properties in CSS (SVG 2: the declaration wins over the attri
         });
 
         // svgo's convertShapeToPath turns a shape with complete attributes into a path from the
-        // attributes alone, before the style is read: with optimize: true the CSS is lost.
-        it.skipIf(optimize)(`lets style override a complete set of attributes (optimize: ${optimize})`, () => {
+        // attributes alone, ignoring the style: optimize: true keeps such shapes as elements.
+        it(`lets style override a complete set of attributes (optimize: ${optimize})`, () => {
             const circleOut = convert(svgOf('<circle cx="12" cy="12" r="5" style="r:8px"/>'), { optimize });
             expect(pathData(circleOut.xml)).toEqual(['M4,12a8,8 0 1 0 16,0a8,8 0 1 0 -16,0z']);
             const rectOut = convert(svgOf('<rect width="10" height="10" style="height:0"/>'), { optimize });
             expect(rectOut.warnings.map((w) => w.code)).toEqual(['empty-path']);
         });
     }
+
+    const shapesWith = (style: string) =>
+        svgOf(
+            `<circle cx="12" cy="12" r="5" style="${style}"/><rect x="1" y="1" width="4" height="4" style="${style}"/>`,
+        );
+
+    it('keeps shapes for the converter when any CSS geometry property may be set (optimize: true)', () => {
+        const declarations = ['cx:13px', 'cy:13px', 'r:6px', 'rx:1px', 'ry:1px', 'x:2px', 'y:2px'];
+        for (const style of [...declarations, 'width:3px', 'height:3px', 'fill:red; R : 6px', 'fill:red;Width:3px']) {
+            const svg = shapesWith(style);
+            expect(pathData(convert(svg, { optimize: true }).xml), style).toEqual(
+                pathData(convert(svg, { optimize: false }).xml),
+            );
+        }
+        const rule = svgOf('<style>rect { height: 0 }</style><rect width="10" height="10"/>');
+        expect(convert(rule, { optimize: true }).warnings.map((w) => w.code)).toEqual(['empty-path']);
+    });
+
+    it('still lets svgo convert shapes styled by ordinary icon properties (optimize: true)', () => {
+        const plain = pathData(convert(shapesWith(''), { optimize: true }).xml);
+        expect(plain).not.toEqual(pathData(convert(shapesWith(''), { optimize: false }).xml));
+        const ordinary = [
+            'fill:red;fill-opacity:.5;fill-rule:evenodd',
+            'stroke:#000;stroke-width:2;stroke-linecap:round;stroke-linejoin:round;stroke-miterlimit:4',
+            'opacity:.5;color:red;cursor:pointer;filter:none;display:inline',
+            'max-width:3px;min-height:2px;line-height:2;font-size:12px;letter-spacing:1px',
+            'box-sizing:border-box;overflow:visible;mix-blend-mode:normal',
+        ];
+        for (const style of ordinary) {
+            expect(pathData(convert(shapesWith(style), { optimize: true }).xml), style).toEqual(plain);
+        }
+    });
 
     it('applies <style> rules once svgo inlines them (wpt geometry/reftests/circle-001.svg)', () => {
         const svg =
@@ -143,4 +218,94 @@ describe('geometry properties in CSS (SVG 2: the declaration wins over the attri
         expect(warnings.map((w) => w.code)).toEqual(['large-vector']);
         expect(pathData(xml)).toEqual(['M139,56a65,65 0 1 0 130,0a65,65 0 1 0 -130,0z']);
     });
+});
+
+describe('CSS d property on <path> (SVG 2 §9.3.1: the declaration wins over the attribute)', () => {
+    const svgOf = (body: string) => `<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100">${body}</svg>`;
+    const pathsOf = (xml: string) => [...xml.matchAll(/android:pathData="([^"]*)"/g)].map((m) => m[1]);
+    const square = 'M0 0H100V100H0Z';
+
+    describe('wpt-path-d-property.svg renders like its reference (wpt path/property/priority-ref.svg)', () => {
+        const svg = readFileSync(fileURLToPath(new URL('wpt-repro/wpt-path-d-property.svg', import.meta.url)), 'utf8');
+        // resvg ignores the CSS d property: compare with the reference, not the source.
+        const reference = svgOf(
+            '<path d="M 20 10 h 70" stroke="blue" stroke-width="3"/><path d="M 20 80 h 70" stroke="blue" stroke-width="3"/>',
+        );
+
+        it('optimize: true (the <style> rule is inlined by svgo)', () => {
+            const { xml, warnings } = convert(svg, { optimize: true, strict: true });
+            expect(warnings).toEqual([]);
+            const result = compareSvgs(reference, vdToSvg(xml));
+            expect(result.sizeMismatch).toBeNull();
+            expect(result.mismatch).toBeLessThan(DEFAULT_MAX_MISMATCH);
+        });
+
+        it('optimize: false (the inline style applies; the <style> rule is reported)', () => {
+            const { xml, warnings } = convert(svg, { optimize: false });
+            expect(warnings.map((w) => w.code)).toEqual(['unsupported-style']);
+            expect(pathsOf(xml)[1]).toBe('M 20 80 h 70');
+            expect(() => convert(svg, { optimize: false, strict: true })).toThrow();
+        });
+    });
+
+    for (const optimize of [true, false]) {
+        describe(`optimize: ${optimize}`, () => {
+            const run = (body: string) => convert(svgOf(body), { optimize, strict: true });
+
+            it('draws a path whose only geometry is the CSS property', () => {
+                const { xml } = run(`<path style="d: path('M 20 80 h 70')" stroke="blue"/>`);
+                expect(pathsOf(xml)).toEqual(['M 20 80 h 70']);
+            });
+
+            it('draws nothing, silently, for d: none (wpt path/property/d-none.svg)', () => {
+                const { xml, warnings } = run(
+                    `<path d="${square}" fill="green"/><path d="${square}" fill="red" style="d: none"/>`,
+                );
+                expect(warnings).toEqual([]);
+                expect(pathsOf(xml)).toHaveLength(1);
+                expect(xml).not.toContain('#FF0000');
+                for (const none of ['NONE', 'initial', 'path("")'])
+                    expect(pathsOf(run(`<path d="${square}" style='d: ${none}'/>`).xml), none).toEqual([]);
+            });
+
+            it('keeps the last valid declaration, !important over normal ones', () => {
+                const pick = (style: string) => pathsOf(run(`<path d="${square}" style="${style}"/>`).xml);
+                expect(pick(`d:path('M1 1h5');d:path('M2 2h5')`)).toEqual(['M2 2h5']);
+                expect(pick(`d:path('M1 1h5') !important;d:path('M2 2h5')`)).toEqual(['M1 1h5']);
+                expect(pick(`D: PATH(&quot;M1 1h5&quot;)`)).toEqual(['M1 1h5']);
+                // Invalid declarations are ignored: the previous one, then the attribute, applies
+                // (with optimize: true, the cascade runs before svgo's minifyStyles merges them).
+                expect(pick(`d:path('M1 1h5');d:path('M2 2 L')`)).toEqual(['M1 1h5']);
+                expect(pick(`d:path('M1 1h5');d:bogus`)).toEqual(['M1 1h5']);
+                expect(pick(`d:url(#a)`).length).toBe(1);
+                expect(pick(`d:path(evenodd, 'M1 1h5')`).length).toBe(1);
+            });
+
+            it('leaves the property to <path>: a <rect> stays a rect (svgo convertShapeToPath kept off)', () => {
+                const { xml } = run(`<rect width="10" height="10" style="d:path('M50 50h10v10h-10z')"/>`);
+                expect(pathsOf(xml)).toEqual(['M0,0h10v10h-10z']);
+            });
+
+            it('draws two translucent paths sharing a CSS d twice (svgo mergePaths kept off)', () => {
+                // Disjoint attributes: svgo would merge them (it skips intersecting paths).
+                const twin = (d: string) => `<path d="${d}" fill-opacity=".5" style="d:path('M50 50h10v10h-10z')"/>`;
+                expect(pathsOf(run(twin('M0 0H10V10H0Z') + twin('M20 20H30V30H20Z')).xml)).toEqual([
+                    'M50 50h10v10h-10z',
+                    'M50 50h10v10h-10z',
+                ]);
+            });
+
+            it.each(['var(--d)', 'env(x)', 'attr(data-d)', 'inherit', 'revert'])(
+                'reports d: %s as unsupported-style, not empty-path (rejected in strict mode)',
+                (value) => {
+                    const svg = svgOf(`<path d="${square}" fill="red" style="d: ${value}"/><path d="${square}"/>`);
+                    expect(() => convert(svg, { optimize, strict: true })).toThrow(/d: .* cannot be resolved/);
+                    const { xml, warnings } = convert(svg, { optimize });
+                    expect(warnings.map((w) => w.code)).toEqual(['unsupported-style']);
+                    expect(pathsOf(xml)).toHaveLength(1);
+                    expect(xml).not.toContain('#FFFF0000');
+                },
+            );
+        });
+    }
 });

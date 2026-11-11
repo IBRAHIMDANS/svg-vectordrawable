@@ -1,6 +1,6 @@
 import type { Viewport, XastElement } from './ast.js';
 import { USE_INSTANCE_ATTR } from './inherited.js';
-import { presentation } from './style.js';
+import { isUnresolvableCssLength, presentation } from './style.js';
 import { formatMatrix } from './transform.js';
 import type { Warning } from './types.js';
 import { parseLength } from './units.js';
@@ -26,6 +26,9 @@ const USE_GEOMETRY_ATTRS = new Set(['href', 'xlink:href', 'x', 'y', 'width', 'he
 
 /** Symbol attributes consumed by the viewport mapping; they must not linger on the inlined group. */
 const SYMBOL_VIEWPORT_ATTRS = ['viewBox', 'preserveAspectRatio', 'width', 'height', 'overflow'] as const;
+
+/** Symbol attributes consumed by the instance offset (SVG 2 §5.6), whatever its viewport. */
+const SYMBOL_OFFSET_ATTRS = ['x', 'y'] as const;
 
 /** Prefix of the generated viewport clip ids (distinct from clip.ts's `svgvd-viewport-`). */
 const CLIP_ID_PREFIX = 'svgvd-symbol-viewport-';
@@ -187,6 +190,35 @@ function symbolViewport(
 /** Reports a warning; a no-op where nothing is rendered (expansion inside a bare `<symbol>`). */
 type Report = (w: Warning) => void;
 
+/**
+ * Resolves an `x` / `y` offset of a `<use>` or of the `<symbol>` it instances into user units: a
+ * percentage against `ref` (the matching size of the nearest viewport of the `<use>`). Absent is 0,
+ * and so is a value that is not a length (`""`, `foo`): a browser uses the initial value. A length
+ * the converter cannot resolve (`ex`, `ch`, `calc()`, `%` of an unknown viewport…) is reported and
+ * taken as 0.
+ */
+function offsetOf(
+    value: string | undefined,
+    ref: number | undefined,
+    attr: string,
+    node: string,
+    id: string,
+    report: Report,
+): number {
+    if (value === undefined) return 0;
+    const parsed = parseLength(value, ref);
+    if (!Number.isNaN(parsed)) return parsed;
+    const trimmed = value.trim();
+    // Any reference: only whether the value is a length matters here.
+    if (Number.isNaN(parseLength(trimmed, 1)) && !isUnresolvableCssLength(trimmed, false)) return 0;
+    report({
+        code: 'unsupported-attribute',
+        message: `<use href="#${id}">: ${attr}="${trimmed}" on <${node}> is not a length the converter can resolve (ex, ch, calc(), a percentage of a viewport of unknown size…); it is taken as 0.`,
+        node: 'use',
+    });
+    return 0;
+}
+
 /** True when an unresolved symbol viewport changes nothing: no viewBox to scale, no clip. */
 function viewportIrrelevant(symbol: XastElement): boolean {
     if (parseViewBox(symbol.attributes?.viewBox) !== undefined) return false;
@@ -196,13 +228,14 @@ function viewportIrrelevant(symbol: XastElement): boolean {
 
 /**
  * Builds the inlined replacement for a `<use>`: a deep clone of the target wrapped in a `<g>` that
- * carries the use's `x`/`y` translation (composed after any `transform` on the use), its
- * presentation attributes and the `USE_INSTANCE_ATTR` mark (context element, see inherited.ts). A
- * `<symbol>` target is treated as a group (cloned, then renamed to `g`), clipped to its viewport
- * and, with a `viewBox`, scaled into it (see `symbolViewport`); when that viewport cannot be
- * resolved, it is neither (reported). On an `<svg>` target, the use's width/height override the
- * svg's own (the nested-svg walker does the rest). Also returns the viewport of the replacement's
- * content: the symbol's, else `parent` (the nearest viewport of the `<use>`).
+ * carries the use's `x`/`y` translation (composed after any `transform` on the use; lengths
+ * resolved against `parent`), its presentation attributes and the `USE_INSTANCE_ATTR` mark (context
+ * element, see inherited.ts). A `<symbol>` target is treated as a group (cloned, then renamed to
+ * `g`), clipped to its viewport and, with a `viewBox`, scaled into it (see `symbolViewport`); when
+ * that viewport cannot be resolved, it is neither (reported). The symbol's own `x`/`y` translate
+ * all that inside the wrapper, like a nested `<svg>`. On an `<svg>` target, the use's width/height
+ * override the svg's own (the nested-svg walker does the rest). Also returns the viewport of the
+ * replacement's content: the symbol's, else `parent` (the nearest viewport of the `<use>`).
  */
 function buildReplacement(
     use: XastElement,
@@ -213,10 +246,13 @@ function buildReplacement(
     report: Report,
 ): { replacement: XastElement; viewport: Viewport | undefined } {
     const clone = cloneElement(target, spend);
+    const id = target.attributes?.id ?? '';
+    const useAttrs = use.attributes ?? {};
     let children: XastElement[] = [clone];
     let viewport = parent;
     if (clone.name === 'symbol') {
         clone.name = 'g';
+        for (const attr of SYMBOL_OFFSET_ATTRS) delete clone.attributes?.[attr];
         const instance = symbolViewport(use, target, clone, nextId, parent);
         if (instance !== undefined) ({ children, viewport } = instance);
         else {
@@ -224,7 +260,7 @@ function buildReplacement(
             if (!viewportIrrelevant(target))
                 report({
                     code: 'unsupported-attribute',
-                    message: `<use href="#${target.attributes?.id ?? ''}">: the <symbol> viewport size (a percentage or absent width / height against a viewport of unknown size, or an unsupported unit) cannot be resolved; the symbol is neither clipped nor scaled to it. Give the <use> or the <symbol> an absolute width and height.`,
+                    message: `<use href="#${id}">: the <symbol> viewport size (a percentage or absent width / height against a viewport of unknown size, or an unsupported unit) cannot be resolved; the symbol is neither clipped nor scaled to it. Give the <use> or the <symbol> an absolute width and height.`,
                     node: 'use',
                 });
         }
@@ -235,13 +271,24 @@ function buildReplacement(
         }
     }
 
+    // A symbol acts as a nested <svg> inside the use: its x / y offset its viewport (clip, viewBox)
+    // within the use's space, so they go on an inner group, not on the wrapper (where the use's own
+    // clip-path / mask apply). Numbers only: parseTransform cannot read units nor percentages.
+    const offset = (attrs: Record<string, string>, node: string): string | undefined => {
+        if (attrs.x === undefined && attrs.y === undefined) return undefined;
+        const x = offsetOf(attrs.x, parent?.width, 'x', node, id, report);
+        const y = offsetOf(attrs.y, parent?.height, 'y', node, id, report);
+        return `translate(${x} ${y})`;
+    };
+    const symbolOffset =
+        target.name === 'symbol' && children.length > 0 ? offset(target.attributes ?? {}, 'symbol') : undefined;
+    if (symbolOffset !== undefined)
+        children = [{ type: 'element', name: 'g', attributes: { transform: symbolOffset }, children }];
+
     const attributes: Record<string, string> = {};
 
-    const useAttrs = use.attributes ?? {};
-    const x = useAttrs.x;
-    const y = useAttrs.y;
     const baseTransform = useAttrs.transform;
-    const translate = x !== undefined || y !== undefined ? `translate(${x ?? '0'} ${y ?? '0'})` : undefined;
+    const translate = offset(useAttrs, 'use');
     // SVG applies the use's own transform first, then the x/y offset — keep that order.
     const transform = [baseTransform, translate].filter((t): t is string => t !== undefined).join(' ');
     if (transform.length > 0) attributes.transform = transform;
@@ -271,13 +318,18 @@ function bareSymbolViewport(symbol: XastElement): Viewport | undefined {
  * still live there). Throws when the expansion clones more than `MAX_EXPANDED_NODES` nodes.
  *
  * The percentages of an instanced `<symbol>` resolve against the nearest viewport of its `<use>`
- * (root `<svg>`, nested `<svg>` or instanced `<symbol>`), tracked along the walk. The content of a
- * bare `<symbol>` (rendered only through a `<use>`) is expanded after the walk, once its instances
- * have been cloned from the unexpanded original, and silently: it is never rendered as such.
- * `warn` receives the instanced symbols whose viewport cannot be resolved.
+ * (root `<svg>`, nested `<svg>` or instanced `<symbol>`), tracked along the walk; every instance is
+ * cloned from the unexpanded target, then expanded under its own viewport. The content of a
+ * bare `<symbol>` (rendered only through a `<use>`) is expanded after the walk, silently: it is
+ * never rendered as such. `warn` receives the instanced symbols whose viewport cannot be resolved
+ * and the `x` / `y` offsets that cannot be resolved, each message once (a symbol instanced by
+ * several `<use>` is reported once).
  */
 export function resolveUses(root: XastElement, warn: Report = () => undefined): void {
-    const byId = indexById(root);
+    // Instances are cloned from an unexpanded copy: a target expanded in place (a <use> in <defs>,
+    // or a rendered group) resolved its percentages against its own location's viewport, not the
+    // one it is instanced in. The copy is the input's size, so it does not spend the budget.
+    const byId = indexById(cloneElement(root, () => undefined));
     const nextId = idAllocator(new Set(byId.keys()));
     const spend = cloneBudget();
 
@@ -316,7 +368,13 @@ export function resolveUses(root: XastElement, warn: Report = () => undefined): 
         }
     };
 
-    resolveChildren(root, MAX_DEPTH, undefined, warn, true);
+    const reported = new Set<string>();
+    const report: Report = (w) => {
+        if (reported.has(w.message)) return;
+        reported.add(w.message);
+        warn(w);
+    };
+    resolveChildren(root, MAX_DEPTH, undefined, report, true);
 
     // Bare symbols last: an element inside one (a clipPath…) may still be referenced by id.
     const silent: Report = () => undefined;

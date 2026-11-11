@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // Converts a corpus of real-world icon sets (Feather, Bootstrap Icons, Heroicons, Tabler) through the
-// BUILT library (`dist/index.js`), with `optimize` both on and off, and fails on any exception or on
-// any warning whose code is not explicitly allowed below.
+// BUILT library (`dist/index.js`), with `optimize` both on and off, default `minSdk` then `minSdk: 21`,
+// and fails on any exception or on any warning whose code is not explicitly allowed below.
 //
 // The icon packages are installed into a cache directory OUTSIDE the project (never in package.json):
 // `${os.tmpdir()}/svgvd-corpus` by default, overridable with SVGVD_CORPUS_DIR. They are installed only
@@ -15,6 +15,12 @@ import { execFileSync } from 'node:child_process';
 
 /** Warning codes tolerated on this corpus. Currently none: the corpus converts warning-free. */
 const ALLOWED_WARNINGS = new Set([]);
+
+/**
+ * Option sets each file is converted with, `optimize` on and off for each. `minSdk: 21` exercises the
+ * evenodd → nonzero rewrite: a `min-sdk-exceeded` there means an evenodd fill kept without a real crossing.
+ */
+const VARIANTS = [{}, { minSdk: 21 }];
 
 /**
  * npm packages to install, pinned so a new icon release can never break CI without a code change
@@ -82,9 +88,9 @@ async function main() {
     const started = Date.now();
     let totalFiles = 0;
     let totalConversions = 0;
-    const exceptions = []; // { file, optimize, message }
+    const exceptions = []; // { file, label, message }
     const warningsByCode = new Map(); // code -> count
-    const disallowed = []; // { file, optimize, code, message }
+    const disallowed = []; // { file, label, code, message }
     const perSet = [];
 
     for (const { pkg, dir } of SETS) {
@@ -107,31 +113,36 @@ async function main() {
         for (const f of files) {
             const svg = readFileSync(join(abs, f), 'utf8');
             const rel = `${dir}/${f}`;
-            for (const optimize of [true, false]) {
-                totalConversions++;
-                let result;
-                try {
-                    result = convert(svg, { optimize });
-                } catch (err) {
-                    stats.exceptions++;
-                    exceptions.push({ file: rel, optimize, message: formatError(err) });
-                    continue;
-                }
-                for (const w of result.warnings) {
-                    stats.warnings++;
-                    warningsByCode.set(w.code, (warningsByCode.get(w.code) ?? 0) + 1);
-                    if (!ALLOWED_WARNINGS.has(w.code)) {
-                        disallowed.push({ file: rel, optimize, code: w.code, message: w.message });
+            for (const variant of VARIANTS)
+                for (const optimize of [true, false]) {
+                    const options = { ...variant, optimize };
+                    const label = JSON.stringify(options);
+                    totalConversions++;
+                    let result;
+                    try {
+                        result = convert(svg, options);
+                    } catch (err) {
+                        stats.exceptions++;
+                        exceptions.push({ file: rel, label, message: formatError(err) });
+                        continue;
+                    }
+                    for (const w of result.warnings) {
+                        stats.warnings++;
+                        warningsByCode.set(w.code, (warningsByCode.get(w.code) ?? 0) + 1);
+                        if (!ALLOWED_WARNINGS.has(w.code)) {
+                            disallowed.push({ file: rel, label, code: w.code, message: w.message });
+                        }
                     }
                 }
-            }
         }
         totalFiles += files.length;
         perSet.push(stats);
     }
 
     const seconds = ((Date.now() - started) / 1000).toFixed(1);
-    console.log(`[corpus] ${totalFiles} files, ${totalConversions} conversions (optimize true + false) in ${seconds}s`);
+    console.log(
+        `[corpus] ${totalFiles} files, ${totalConversions} conversions (optimize true + false, minSdk default + 21) in ${seconds}s`,
+    );
     console.log('[corpus] Per icon set:');
     for (const s of perSet) {
         console.log(
@@ -148,10 +159,10 @@ async function main() {
     // Show a bounded sample so a regression is diagnosable without flooding the CI log.
     const SAMPLE = 20;
     for (const e of exceptions.slice(0, SAMPLE)) {
-        console.error(`    ✗ throw  ${e.file} (optimize=${e.optimize}): ${e.message}`);
+        console.error(`    ✗ throw  ${e.file} ${e.label}: ${e.message}`);
     }
     for (const d of disallowed.slice(0, SAMPLE)) {
-        console.error(`    ✗ ${d.code}  ${d.file} (optimize=${d.optimize}): ${d.message}`);
+        console.error(`    ✗ ${d.code}  ${d.file} ${d.label}: ${d.message}`);
     }
 
     if (exceptions.length > 0 || disallowed.length > 0) {

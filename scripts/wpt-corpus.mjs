@@ -4,11 +4,13 @@
 // the visual-test threshold (test/visual/compare.ts). A file that converts without error but renders
 // differently is a silent wrong render, i.e. a converter bug — unless listed in KNOWN_ARTEFACTS.
 //
-//   node scripts/wpt-corpus.mjs [--out <png-dir>]
+//   node scripts/wpt-corpus.mjs [--check] [--out <png-dir>]
 //
-// Report only: the exit code is 0 whatever the categories, non-zero only when the run itself fails
-// (missing build, git error, dead worker). `--out` writes the source / converted PNG pair of every
-// mismatch, for triage.
+// Report only by default: the exit code is 0 whatever the categories, 1 only when the run itself fails
+// (missing build, git error, dead worker). `--check` (CI) also exits 1 when a converted file mismatches
+// outside KNOWN_ARTEFACTS (converter bug), a file is rejected by an exception other than ConversionError
+// (converter crash) or a KNOWN_ARTEFACTS entry is stale; a source resvg cannot render stays informative.
+// `--out` writes the source / converted PNG pair of every mismatch, for triage.
 //
 // The wpt `svg/` directory is sparse-checked-out at a PINNED commit into a cache OUTSIDE the project:
 // `${os.tmpdir()}/svgvd-wpt` by default, overridable with SVGVD_WPT_DIR. It is fetched only when the
@@ -105,6 +107,18 @@ const KNOWN_ARTEFACTS = new Map([
         RESVG_CSS_GEOMETRY,
     ]),
     ['shapes/rect-rx-set-by-css.svg', RESVG_CSS_GEOMETRY],
+    ['geometry/reftests/ellipse-001.svg', RESVG_CSS_GEOMETRY],
+    ['geometry/reftests/ellipse-002.svg', RESVG_CSS_GEOMETRY],
+    ['geometry/reftests/ellipse-003.svg', RESVG_CSS_GEOMETRY],
+    ['geometry/reftests/percentage.svg', RESVG_CSS_GEOMETRY],
+    ['shapes/ellipse-01.svg', RESVG_CSS_GEOMETRY],
+    ['shapes/ellipse-02.svg', RESVG_CSS_GEOMETRY],
+    ['shapes/ellipse-03.svg', RESVG_CSS_GEOMETRY],
+    ['shapes/ellipse-05.svg', RESVG_CSS_GEOMETRY],
+    ['shapes/ellipse-06.svg', RESVG_CSS_GEOMETRY],
+    ['shapes/ellipse-07.svg', RESVG_CSS_GEOMETRY],
+    ['shapes/ellipse-08.svg', RESVG_CSS_GEOMETRY],
+    ['path/property/priority.svg', 'resvg ignores the CSS d property; the converter applies it like the reference'],
 ]);
 
 /**
@@ -370,11 +384,12 @@ function evaluateInWorkers(files, out) {
 // Report
 
 function parseArgs(argv) {
-    const opts = { out: undefined };
+    const opts = { out: undefined, check: false };
     for (let i = 0; i < argv.length; i++) {
         if (argv[i] === '--out' && argv[i + 1]) opts.out = resolve(argv[++i]);
+        else if (argv[i] === '--check') opts.check = true;
         else {
-            console.error('usage: node scripts/wpt-corpus.mjs [--out <png-dir>]');
+            console.error('usage: node scripts/wpt-corpus.mjs [--check] [--out <png-dir>]');
             process.exit(2);
         }
     }
@@ -401,6 +416,7 @@ function staleArtefacts(rows) {
     return stale;
 }
 
+/** Prints the report; returns what `--check` fails on (counts, and the rows rejected by a non-ConversionError). */
 function report({ total, selected, excluded }, rows, seconds) {
     const pct = (n) => `${(n * 100).toFixed(2)}%`;
     const count = (category, optimize) => rows.filter((r) => r.category === category && r.optimize === optimize).length;
@@ -453,6 +469,7 @@ function report({ total, selected, excluded }, rows, seconds) {
         console.log(`[wpt] Sources resvg cannot render (not judged): ${unrenderable.length}`);
         unrenderable.forEach((r) => console.log(`    ${r.file} (optimize=${r.optimize}): ${r.message}`));
     }
+    return { bugs: bugs.length, thrown, stale: stale.length };
 }
 
 async function main() {
@@ -471,8 +488,18 @@ async function main() {
     const started = Date.now();
     const selection = selectFiles();
     const rows = evaluateInWorkers(selection.selected, opts.out);
-    report(selection, rows, ((Date.now() - started) / 1000).toFixed(1));
+    const { bugs, thrown, stale } = report(selection, rows, ((Date.now() - started) / 1000).toFixed(1));
     if (opts.out) console.log(`[wpt] PNG pairs of the mismatches written to ${opts.out}`);
+    if (opts.check && (bugs > 0 || thrown.length > 0 || stale > 0)) {
+        thrown.forEach((r) =>
+            console.error(`[wpt] crash: ${r.file} (optimize=${r.optimize}): ${r.code}: ${r.message}`),
+        );
+        console.error(
+            `[wpt] --check failed: ${bugs} converter bug(s), ${thrown.length} exception(s) other than ` +
+                `ConversionError, ${stale} stale KNOWN_ARTEFACTS entry(ies)`,
+        );
+        process.exitCode = 1;
+    }
 }
 
 main().catch((err) => {

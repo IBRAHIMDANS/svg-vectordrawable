@@ -129,7 +129,7 @@ export function colorRefs(
             if (!reported.has(gradientId)) {
                 reported.add(gradientId);
                 warn({
-                    code: 'unsupported-paint',
+                    code: 'unsupported-color-reference',
                     message: `Gradient "${gradientId}" has a translucent stop mapped to ${ref}: a gradient <item> has no alpha, so the literal ${literal} is kept and does not follow the theme.`,
                     node: 'stop',
                 });

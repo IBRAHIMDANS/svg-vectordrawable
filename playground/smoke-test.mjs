@@ -6,7 +6,19 @@ import { existsSync, readFileSync } from 'node:fs';
 import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 import { Worker } from 'node:worker_threads';
-import { buildOptions, createConverter, describeError, describeUnresolvedColors, svgDataUrl } from './core.js';
+import {
+    buildOptions,
+    createConverter,
+    describeError,
+    describeSize,
+    describeUnresolvedColors,
+    formatBytes,
+    parsePreviewColors,
+    resourceFileName,
+    svgDataUrl,
+    tokenizeXml,
+} from './core.js';
+import { EXAMPLES } from './examples.js';
 
 const here = (path) => fileURLToPath(new URL(path, import.meta.url));
 const BUNDLE = here('../dist/browser-lite.global.js');
@@ -121,12 +133,52 @@ test('a color reference without a preview value is reported as drawn in gray', a
     assert.deepEqual(outcome.unresolvedColors, ['?attr/colorPrimary']);
     assert.equal(
         describeUnresolvedColors(outcome.unresolvedColors),
-        'Drawn in gray (no preview value): ?attr/colorPrimary',
+        'VectorDrawable result: drawn in gray (no preview value): ?attr/colorPrimary',
     );
 
     const literal = await converter.convert(svg, buildOptions({ currentColor: '#FF0000' }));
     assert.deepEqual(literal.unresolvedColors, []);
     assert.equal(describeUnresolvedColors(literal.unresolvedColors), '');
+});
+
+test('a reference given a preview color is drawn with it and no longer reported as gray', async (t) => {
+    const { converter } = trackedConverter([spawnPlaygroundWorker]);
+    t.after(converter.dispose);
+    const svg =
+        '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path fill="currentColor" d="M0 0h12v12z"/>' +
+        '<path fill="#00FF00" d="M12 12h12v12z"/></svg>';
+    const options = buildOptions({ currentColor: '?attr/colorPrimary' });
+    const covered = await converter.convert(svg, options, {
+        colors: parsePreviewColors('?attr/colorPrimary=#6750A4'),
+    });
+    assert.equal(covered.status, 'ok', covered.message);
+    assert.match(covered.xml, /android:fillColor="\?attr\/colorPrimary"/);
+    assert.match(covered.preview, /fill="#6750a4"/i);
+    assert.deepEqual(covered.unresolvedColors, []);
+    assert.equal(describeUnresolvedColors(covered.unresolvedColors), '');
+
+    // A pair for another reference leaves this one gray (the XML itself never changes).
+    const other = await converter.convert(svg, options, { colors: parsePreviewColors('@color/brand=#FF0000') });
+    assert.deepEqual(other.unresolvedColors, ['?attr/colorPrimary']);
+    assert.equal(other.xml, covered.xml);
+
+    // A malformed value is the library's preview error, shown as is; the conversion still succeeds.
+    const malformed = await converter.convert(svg, options, { colors: parsePreviewColors('?attr/colorPrimary=blue') });
+    assert.equal(malformed.status, 'ok');
+    assert.equal(malformed.preview, null);
+    assert.match(malformed.previewError, /^Invalid colors\["\?attr\/colorPrimary"\]: "blue"/);
+});
+
+test('parsePreviewColors reads reference=color pairs', () => {
+    assert.deepEqual(parsePreviewColors(), {});
+    assert.deepEqual(parsePreviewColors(' , ;\n'), {});
+    assert.deepEqual(parsePreviewColors(' ?attr/colorPrimary = #6750A4 , @color/brand=#F00;\n?attr/x=#1234'), {
+        '?attr/colorPrimary': '#6750A4',
+        '@color/brand': '#F00',
+        '?attr/x': '#1234',
+    });
+    // The last pair wins; a pair without `=` keeps an empty color, which the library rejects by name.
+    assert.deepEqual(parsePreviewColors('?attr/a=#000, ?attr/a=#FFF, ?attr/b'), { '?attr/a': '#FFF', '?attr/b': '' });
 });
 
 test('an invalid SVG reports the error and the worker keeps working', async (t) => {
@@ -197,8 +249,74 @@ test('buildOptions maps the form fields and leaves out empty ones', () => {
     assert.deepEqual(buildOptions({ strict: 'lossy' }), { strict: 'lossy' });
 });
 
+test('every example converts, and only the one meant to shows warnings', async (t) => {
+    const { converter } = trackedConverter([spawnPlaygroundWorker]);
+    t.after(converter.dispose);
+    const warnings = {};
+    for (const example of EXAMPLES) {
+        const outcome = await converter.convert(example.svg, buildOptions());
+        assert.equal(outcome.status, 'ok', `${example.id}: ${outcome.message}`);
+        assert.match(outcome.preview, /^<svg[^>]*>/, example.id);
+        warnings[example.id] = outcome.warnings.map((warning) => warning.code);
+    }
+    assert.deepEqual(warnings, {
+        gradient: [],
+        stroke: [],
+        clip: [],
+        unsupported: ['unsupported-attribute', 'unsupported-element'],
+    });
+});
+
+test('tokenizeXml colors tags, attributes and values without changing the text', async (t) => {
+    const { converter } = trackedConverter([spawnPlaygroundWorker]);
+    t.after(converter.dispose);
+    const { xml } = await converter.convert(fixture('linear-gradient.svg'), buildOptions());
+    const tokens = tokenizeXml(xml);
+    assert.equal(tokens.map((token) => token.text).join(''), xml);
+    assert.deepEqual(tokenizeXml('<!-- a="b" --><path\n    android:pathData="M0,0 L1,1" />'), [
+        { type: 'comment', text: '<!-- a="b" -->' },
+        { type: 'tag', text: '<path' },
+        { type: 'text', text: '\n    ' },
+        { type: 'attr', text: 'android:pathData' },
+        { type: 'text', text: '=' },
+        { type: 'value', text: '"M0,0 L1,1"' },
+        { type: 'text', text: ' ' },
+        { type: 'tag', text: '/>' },
+    ]);
+    assert.deepEqual(tokenizeXml(''), []);
+});
+
+test('the download name follows the library resource naming (src/resourceName.ts)', async () => {
+    const LIBRARY = here('../dist/index.js');
+    assert.ok(existsSync(LIBRARY), 'dist/index.js is missing: run `pnpm build` first');
+    const { androidResourceName } = await import(LIBRARY);
+    for (const name of ['new', 'class', 'XMLParser', '24-hours', 'café', 'Arrow-Left', 'icCloséState', 'true']) {
+        assert.equal(resourceFileName(`${name}.svg`), `${androidResourceName(name)}.xml`, name);
+    }
+    assert.equal(resourceFileName('new.svg'), 'new_.xml');
+    assert.equal(resourceFileName('XMLParser.svg'), 'xml_parser.xml');
+    // Only deliberate difference: an empty name falls back to ic_drawable, not the library's `ic`.
+    assert.equal(androidResourceName('__'), 'ic');
+    assert.equal(resourceFileName('__.svg'), 'ic_drawable.xml');
+});
+
+test('the download name is an Android resource name; sizes are readable', () => {
+    assert.equal(resourceFileName('Arrow-Left.svg'), 'arrow_left.xml');
+    assert.equal(resourceFileName('icCloséState.SVG'), 'ic_close_state.xml');
+    assert.equal(resourceFileName('24px.svg'), 'ic_24px.xml');
+    assert.equal(resourceFileName(''), 'ic_drawable.xml');
+    assert.equal(resourceFileName('---.svg'), 'ic_drawable.xml');
+    assert.equal(formatBytes(812), '812 B');
+    assert.equal(formatBytes(1488), '1.5 kB');
+    assert.equal(formatBytes(2_400_000), '2.4 MB');
+    assert.equal(describeSize('<vector android:width="24dp"\n android:height="12.5dp">'), '24 × 12.5 dp');
+    assert.equal(describeSize('<vector>'), '');
+});
+
 test('the page never parses markup as HTML and loads nothing from another origin', () => {
-    const scripts = ['app.js', 'core.js', 'worker.js'].map((name) => readFileSync(here(name), 'utf8')).join('\n');
+    const scripts = ['app.js', 'core.js', 'examples.js', 'worker.js']
+        .map((name) => readFileSync(here(name), 'utf8'))
+        .join('\n');
     assert.doesNotMatch(scripts, /innerHTML|outerHTML|insertAdjacentHTML|document\.write|DOMParser/);
     const html = readFileSync(here('index.html'), 'utf8');
     for (const [, url] of html.matchAll(/\b(?:src|href)="([^"]+)"/g)) {
@@ -207,4 +325,9 @@ test('the page never parses markup as HTML and loads nothing from another origin
     }
     const workflow = readFileSync(here('../.github/workflows/pages.yml'), 'utf8');
     assert.match(workflow, /cp dist\/browser-lite\.global\.js _site\//);
+    // Every file the page loads must be copied to the published site.
+    const loaded = [...html.matchAll(/\b(?:src|href)="([^":]+\.[a-z]+)"/g)].map(([, url]) => url);
+    for (const name of [...loaded, 'core.js', 'examples.js', 'worker.js']) {
+        assert.ok(workflow.includes(`playground/${name}`), `pages.yml does not publish ${name}`);
+    }
 });

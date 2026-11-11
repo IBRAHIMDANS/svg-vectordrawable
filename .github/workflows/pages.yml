@@ -34,7 +34,8 @@ jobs:
               # The page expects browser-lite.global.js next to it (see playground/README.md).
               run: |
                   mkdir _site
-                  cp playground/index.html playground/style.css playground/app.js playground/core.js playground/worker.js _site/
+                  cp playground/index.html playground/style.css playground/favicon.svg _site/
+                  cp playground/app.js playground/core.js playground/examples.js playground/worker.js _site/
                   cp dist/browser-lite.global.js _site/
             - uses: actions/upload-pages-artifact@v4
               with:

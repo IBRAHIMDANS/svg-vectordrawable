@@ -1,12 +1,14 @@
 import { describe, expect, it } from 'vitest';
 import { dashPathData, ellipseDashPath, MAX_DASHES, parseDasharray } from '../src/dash.js';
 import { convert } from '../src/index.js';
+import { compareSvgs, DEFAULT_MAX_MISMATCH } from './visual/compare.js';
+import { vdToSvg } from './visual/vdToSvg.js';
 
 type Point = [number, number];
 
 /** Sub-paths of an absolute M/L/Q/C/Z path: each a list of segments (start point + controls + end). */
 function subpaths(d: string): Point[][][] {
-    const tokens = d.match(/[MLQCZ]|-?\d*\.?\d+/g) ?? [];
+    const tokens = d.match(/[MLQCZ]|[+-]?(?:\d+\.?\d*|\.\d+)(?:[eE][+-]?\d+)?/g) ?? [];
     const out: Point[][][] = [];
     let pen: Point = [0, 0];
     let start: Point = [0, 0];
@@ -76,6 +78,45 @@ describe('parseDasharray', () => {
 
     it('is null (not resolvable) for font-relative units', () => {
         expect(parseDasharray('1ex 2', 10)).toBeNull();
+    });
+
+    it('splits after a `%` or a `)` as the CSS tokenizer (csso writes `10% 5` as `10%5`, T-156)', () => {
+        expect(parseDasharray('10%5', 50)).toEqual([5, 5]);
+        expect(parseDasharray('10%.5', 50)).toEqual([5, 0.5]);
+        expect(parseDasharray('10%5 10%5', 50)).toEqual([5, 5, 5, 5]);
+        expect(parseDasharray('10%,5', 50)).toEqual([5, 5]);
+        expect(parseDasharray('calc(1px)2', 50)).toBeNull();
+        expect(parseDasharray('calc(1px + 2px) 3', 50)).toBeNull();
+    });
+});
+
+describe('stroke-dasharray after a percentage, both modes (T-156)', () => {
+    const svg = (style: string): string =>
+        `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M2 12h20" stroke="#000" fill="none" style="${style}"/></svg>`;
+    const pathData = (xml: string): string => /android:pathData="([^"]*)"/.exec(xml)![1]!;
+    // 10% of the normalized diagonal (24) is 2.4.
+    for (const [style, dashes] of [
+        ['stroke-dasharray: 10% 5', [2.4, 2.4, 2.4]],
+        ['stroke-dasharray: 10% 0.5', Array(6).fill(2.4)],
+        ['stroke-dasharray: 10% 5 10% 5', [2.4, 2.4, 2.4]],
+    ] as const)
+        for (const optimize of [false, true])
+            it(`dashes ${style} under strict (optimize: ${optimize})`, () => {
+                const { xml, warnings } = convert(svg(style), { optimize, strict: true });
+                expect(warnings.filter((w) => w.code !== 'large-vector')).toEqual([]);
+                const lengths = dashLengths(pathData(xml));
+                expect(lengths.slice(0, dashes.length)).toHaveLength(dashes.length);
+                lengths.slice(0, dashes.length).forEach((l, i) => expect(l).toBeCloseTo(dashes[i]!, 3));
+            });
+
+    it('a calc() dash is reported in both modes (its csso form `calc(1px)2` is not dropped as invalid)', () => {
+        for (const optimize of [false, true]) {
+            const { warnings } = convert(svg('stroke-dasharray: calc(1px) 2'), { optimize });
+            expect(
+                warnings.map((w) => w.code).filter((c) => c !== 'large-vector'),
+                String(optimize),
+            ).toEqual(['unsupported-stroke-dasharray']);
+        }
     });
 });
 
@@ -153,6 +194,23 @@ describe('dashPathData', () => {
         expect(plain).toBe('M0 0L4 0M6 0L10 0');
         for (const pathLength of [-4, Number.NaN])
             expect(dashPathData('M0 0h10', [4, 2], 0, TOL, { pathLength })).toBe(plain);
+    });
+
+    it('draws a gapless pattern solid on a direct call (parseDasharray never passes one)', () => {
+        expect(parseDasharray('4 0', 10)).toEqual([]);
+        expect(dashPathData('M0 0h10', [4, 0], 0, TOL)).toBe('M0 0L10 0');
+        expect(dashPathData('M0 0h10v10h-10z', [1e-9, 0], 0, TOL)).toBe('M0 0L10 0L10 10L0 10Z');
+    });
+
+    it('draws solid, without warning, a gap that pathLength scaling underflows to 0', () => {
+        // 10 / 1e308 * 1e-30 underflows to 0 while the dash stays positive: the pattern has no gap.
+        expect(dashPathData('M0 0h10', [1, 1e-30], 0, TOL, { pathLength: 1e308 })).toBe('M0 0L10 0');
+        const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M2 12h20" stroke="#000" stroke-dasharray="1 1e-30" pathLength="1e308"/></svg>`;
+        for (const optimize of [false, true]) {
+            const { xml, warnings } = convert(svg, { optimize, strict: true });
+            expect(warnings).toEqual([]);
+            expect(xml).toMatch(/pathData="M2 12(?:L22 12|h20)"/);
+        }
     });
 
     it('returns null past MAX_DASHES (tiny dash on a huge path)', () => {
@@ -392,5 +450,74 @@ describe('pathLength="0" through convert', () => {
             optimize: false,
         }).xml;
         expect(pathData(neg)[0]!.match(/M/g)!.length).toBeGreaterThan(100);
+    });
+});
+
+describe('dash precision under a large group scale (T-133)', () => {
+    const SRC =
+        '<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24"><g transform="scale(1000)">' +
+        '<path d="M0.0021 0.0121h0.0204" stroke="green" stroke-width="0.0035" stroke-dasharray="0.0031 0.0021"/></g></svg>';
+
+    it('cuts at the output precision, not at 3 decimals', () => {
+        const d = dashPathData('M0.0021 0.0121h0.0204', [0.0031, 0.0021], 0, 1e-7, { precision: 4 })!;
+        expect(d).toBe(
+            'M0.0021 0.0121L0.0052 0.0121M0.0073 0.0121L0.0104 0.0121M0.0125 0.0121L0.0156 0.0121M0.0177 0.0121L0.0208 0.0121',
+        );
+    });
+
+    it('keeps the last dash within the end of the path', () => {
+        // Path ends at x = 0.0225; the 5th dash would start at 0.0229.
+        const d = dashPathData('M0.0021 0.0121h0.0204', [0.0031, 0.0019], 0, 1e-7, { precision: 4 })!;
+        const xs = [...d.matchAll(/[ML]([\d.]+) /g)].map((m) => Number(m[1]));
+        expect(Math.max(...xs)).toBeLessThanOrEqual(0.0225);
+        expect(xs.at(-1)).toBe(0.0225);
+    });
+
+    it('keeps the default output unchanged at 3 decimals', () => {
+        expect(dashPathData('M0 0h10', [3, 2], 0, 1e-3)).toBe('M0 0L3 0M5 0L8 0');
+    });
+
+    it.each([false, true])('renders like the source (optimize: %s)', (optimize) => {
+        const { xml, warnings } = convert(SRC, { optimize });
+        expect(warnings).toEqual([]);
+        const result = compareSvgs(SRC, vdToSvg(xml));
+        expect(result.sizeMismatch).toBeNull();
+        expect(result.inked).toBeGreaterThan(0);
+        expect(result.mismatch).toBeLessThan(DEFAULT_MAX_MISMATCH);
+    });
+});
+
+describe('solid fallback precision under a large group scale (T-153)', () => {
+    const D = 'M0.0011 0.0013 L0.0227 0.0019 L0.0201 0.0217';
+    const src = (transform: string, dash: string): string =>
+        `<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24"><g transform="${transform}">` +
+        `<path d="${D}" fill="none" stroke="green" stroke-width="0.001"${dash}/></g></svg>`;
+
+    it('writes both solid fallbacks at the output precision', () => {
+        const solid = 'M0.0011 0.0013L0.0227 0.0019L0.0201 0.0217';
+        expect(dashPathData(D, [0.001, 0.001], 0, 1e-7, { precision: 6, pathLength: 0 })).toBe(solid);
+        // A pattern without gap is the solid stroke.
+        expect(dashPathData(D, [0.001, 0], 0, 1e-7, { precision: 6 })).toBe(solid);
+    });
+
+    describe.each(['scale(1000)', 'scale(1000) skewX(1)'])('under %s', (transform) => {
+        const expected = src(transform, '');
+        it.each([false, true])('draws pathLength="0" like the solid stroke (optimize: %s)', (optimize) => {
+            const { xml, warnings } = convert(src(transform, ' stroke-dasharray="0.001 0.001" pathLength="0"'), {
+                optimize,
+            });
+            expect(warnings.filter((w) => w.code !== 'group-skew')).toEqual([]); // the skew is baked
+            const result = compareSvgs(expected, vdToSvg(xml));
+            expect(result.sizeMismatch).toBeNull();
+            expect(result.inked).toBeGreaterThan(0);
+            expect(result.mismatch).toBeLessThan(DEFAULT_MAX_MISMATCH);
+        });
+        it.each([false, true])('draws a gapless pattern like the solid stroke (optimize: %s)', (optimize) => {
+            const { xml, warnings } = convert(src(transform, ' stroke-dasharray="0.001 0"'), { optimize });
+            expect(warnings.filter((w) => w.code !== 'group-skew')).toEqual([]); // the skew is baked
+            const result = compareSvgs(expected, vdToSvg(xml));
+            expect(result.sizeMismatch).toBeNull();
+            expect(result.mismatch).toBeLessThan(DEFAULT_MAX_MISMATCH);
+        });
     });
 });

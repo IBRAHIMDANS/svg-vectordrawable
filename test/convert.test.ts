@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from 'vitest';
+import { beforeAll, describe, expect, it, vi } from 'vitest';
 import { convert, ConversionError, vectorDrawableToSvg } from '../src/index.js';
 import { compareSvgs, DEFAULT_MAX_MISMATCH } from './visual/compare.js';
 import { vdToSvg } from './visual/vdToSvg.js';
@@ -109,10 +109,10 @@ describe('gradients', () => {
         expect(xml).toContain('android:endX="10"');
     });
 
-    it('warns and falls back to black on a missing gradient', () => {
+    it('warns and paints nothing on a missing gradient', () => {
         const onWarn = vi.fn();
         const { xml } = convert(svg('<path d="M0 0z" fill="url(#nope)"/>'), { optimize: false, onWarn });
-        expect(xml).toContain('android:fillColor="#FF000000"');
+        expect(xml).not.toContain('fillColor');
         expect(onWarn).toHaveBeenCalledWith(expect.objectContaining({ code: 'missing-gradient' }));
     });
 });
@@ -299,7 +299,8 @@ describe('inheritance & groups', () => {
             optimize: false,
             onWarn,
         });
-        expect(onWarn).toHaveBeenCalledWith(expect.objectContaining({ code: 'group-skew' }));
+        // Baking a fill is exact: no group-skew (only a stroke is approximated).
+        expect(onWarn).not.toHaveBeenCalledWith(expect.objectContaining({ code: 'group-skew' }));
         expect(xml).not.toContain('<group');
         expect(xml).toMatch(/5[ ,]10/); // skewed endpoint baked into the path
     });
@@ -1005,7 +1006,6 @@ describe('elliptical radial fill rendered exactly in a transformed group', () =>
             svg(
                 `<defs>${figma('translate(12 12) scale(10 4)')}</defs><g transform="skewX(20)"><path d="M-4 0h24v24H-4z" fill="url(#r)"/></g>`,
             ),
-            ['group-skew'],
         );
     });
 
@@ -1015,7 +1015,6 @@ describe('elliptical radial fill rendered exactly in a transformed group', () =>
                 `<defs><radialGradient id="r" cx="12" cy="12" r="9" gradientUnits="userSpaceOnUse">${stops}</radialGradient></defs>` +
                     `<g transform="skewX(25)"><path d="M-6 0h24v24H-6z" fill="url(#r)"/></g>`,
             ),
-            ['group-skew'],
         );
     });
 
@@ -1195,7 +1194,6 @@ describe('clip-equivalent masks', () => {
                     '<g transform="skewX(15)" mask="url(#m)"><path d="M0 0h20v20H0z" fill="#f0f"/></g>',
             ),
             1,
-            ['group-skew'],
         );
     });
 
@@ -1275,11 +1273,6 @@ describe('clip-equivalent masks', () => {
             '<linearGradient id="g"><stop stop-color="#fff"/><stop offset="1" stop-color="#000"/></linearGradient><rect width="10" height="10" fill="url(#g)"/>',
             /gradient|pattern/,
         ],
-        [
-            'an evenodd fill rule with crossing contours',
-            '<path d="M0 0h10v10H0zM5 5h10v10H5z" fill="#fff" fill-rule="evenodd"/>',
-            /evenodd/,
-        ],
         ['a filter inside', '<rect width="10" height="10" fill="#fff" filter="url(#f)"/>', /filter/],
         ['text inside', '<rect width="10" height="10" fill="#fff"/><text>x</text>', /<text>/],
         ['currentColor (unknown root color)', '<rect width="10" height="10" fill="currentColor"/>', /solid color/],
@@ -1331,9 +1324,8 @@ describe('clip-equivalent masks', () => {
         }
     });
 
-    it('keeps the warning for an unknown mask and an empty mask', () => {
+    it('keeps the warning for an unknown mask', () => {
         expectRejected(svg(`<path d="M0 0h24v24H0z" fill="#f00" mask="url(#nope)"/>`), /unknown mask/);
-        expectRejected(svg(`<mask id="m"><rect width="0" height="5" fill="#fff"/></mask>${square}`), /empty/);
     });
 
     it('still throws in strict mode for a mask that is not clip-equivalent', () => {
@@ -1393,11 +1385,6 @@ describe('invalid options and sizes are rejected instead of producing broken XML
 
     it.each(['wat', 'none', 'currentColor', ''])('rejects currentColor %j', (currentColor) => {
         expect(() => convert(plain, { currentColor })).toThrow(TypeError);
-    });
-
-    it.each(['0 0 0 0', '0 0 24 0', '0 0 -24 24'])('rejects viewBox "%s"', (viewBox) => {
-        const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="${viewBox}"><path d="M0 0h9v9z"/></svg>`;
-        expect(() => convert(svg)).toThrow(/Invalid viewBox/);
     });
 
     it.each(['-5', '0'])('ignores width="%s" (falls back to the viewBox)', (width) => {
@@ -1647,9 +1634,26 @@ describe('Android color references (currentColor / colorMap)', () => {
             expect(xml).toContain('<item android:offset="0" android:color="#80FF0000" />');
             expect(xml).toContain('<item android:offset="0.5" android:color="#00000000" />'); // black stands in
             expect(xml).toContain('<item android:offset="1" android:color="@color/brand" />');
-            expect(warnings.map((w) => w.code)).toEqual(['unsupported-paint']);
+            expect(warnings.map((w) => w.code)).toEqual(['unsupported-color-reference']);
             expect(warnings[0]!.message).toContain('"g"');
             expect(() => convert(input, { ...options, strict: 'lossy' })).toThrow(ConversionError);
+            expect(() => convert(input, { ...options, strict: 'lossy' })).toThrow(/^\[unsupported-color-reference\]/);
+        });
+
+        it('silences unsupported-color-reference with rules, leaving unsupported-paint alone', () => {
+            const input = gradient(
+                '<stop offset="0" stop-color="#f00" stop-opacity="0.5"/><stop offset="1" stop-color="env(--x)"/>',
+            );
+            const options = { ...themed, colorMap: { red: '@color/brand' } };
+            expect(convert(input, options).warnings.map((w) => w.code)).toEqual([
+                'unsupported-color-reference',
+                'unsupported-paint',
+            ]);
+            const quiet = convert(input, { ...options, rules: { 'unsupported-color-reference': 'off' } });
+            expect(quiet.warnings.map((w) => w.code)).toEqual(['unsupported-paint']);
+            expect(() =>
+                convert(input, { ...options, strict: 'lossy', rules: { 'unsupported-paint': 'off' } }),
+            ).toThrow(/^\[unsupported-color-reference\]/);
         });
     });
 
@@ -1731,5 +1735,61 @@ describe('custom svgoConfig with a CSS transform', () => {
             plugins: ['convertColors', { name: 'convertPathData', params: { applyTransforms: false } }],
         };
         expect(codes(harmless)).toEqual([]);
+    });
+});
+
+describe('root and elements with a prefix bound to the SVG namespace (T-164)', () => {
+    /** The browser-lite entry as its bundle sees it: `svgo` replaced by svgo-lite (see browser-lite.test.ts). */
+    let lite: typeof import('../src/browser-lite.js');
+    beforeAll(async () => {
+        vi.resetModules();
+        vi.doMock('svgo', () => import('../src/svgo-lite.js'));
+        lite = await import('../src/browser-lite.js');
+        vi.doUnmock('svgo');
+    });
+
+    const SVG_NS = 'http://www.w3.org/2000/svg';
+    const reference = svg('<path d="M2 2h20v20H2z" fill="red"/>');
+    const expectLikeReference = (doc: string): void => {
+        for (const optimize of [true, false]) {
+            const { xml, warnings } = convert(doc, { optimize, strict: true });
+            expect(warnings).toEqual([]);
+            expect(xml).toBe(convert(reference, { optimize }).xml);
+            expect(compareSvgs(reference, vdToSvg(xml)).mismatch).toBeLessThan(DEFAULT_MAX_MISMATCH);
+        }
+        expect(lite.convert(doc, { strict: true }).xml).toBe(lite.convert(reference).xml);
+    };
+
+    it('converts the ElementTree root <ns0:svg> like the unprefixed source, both modes and browser-lite', () => {
+        expectLikeReference(
+            `<ns0:svg xmlns:ns0="${SVG_NS}" viewBox="0 0 24 24"><ns0:path d="M2 2h20v20H2z" fill="red"/></ns0:svg>`,
+        );
+    });
+
+    it('converts a prefixed child of an unprefixed root, nested groups and an XLink prefix renamed', () => {
+        expectLikeReference(
+            svg('<s:g><s:path d="M2 2h20v20H2z" fill="red"/></s:g>', `xmlns:s="${SVG_NS}" viewBox="0 0 24 24"`),
+        );
+        expectLikeReference(
+            `<svg:svg xmlns:svg="${SVG_NS}" xmlns:xl="http://www.w3.org/1999/xlink" viewBox="0 0 24 24">` +
+                '<svg:defs><svg:path id="p" d="M2 2h20v20H2z" fill="red"/></svg:defs><svg:use xl:href="#p"/></svg:svg>',
+        );
+    });
+
+    it('leaves a prefix bound to another namespace alone: the element stays foreign', () => {
+        const foreign = svg(
+            '<s:path d="M2 2h20v20H2z" fill="red"/>',
+            'xmlns:s="http://example.com/ns" viewBox="0 0 24 24"',
+        );
+        for (const optimize of [true, false])
+            expect(convert(foreign, { optimize, strict: true }).xml).not.toContain('<path');
+        expect(lite.convert(foreign).xml).not.toContain('<path');
+        const foreignRoot = '<ns0:svg xmlns:ns0="http://example.com/ns" viewBox="0 0 24 24"/>';
+        for (const optimize of [true, false]) expect(() => convert(foreignRoot, { optimize })).toThrow(/No <svg> root/);
+        // bound to SVG on one element, to another namespace on another: left alone everywhere
+        const rebound = svg(
+            `<g xmlns:s="${SVG_NS}"><s:path d="M2 2h20v20H2z"/></g><g xmlns:s="http://example.com/ns"><s:path d="M2 2h9v9H2z"/></g>`,
+        );
+        for (const optimize of [true, false]) expect(convert(rebound, { optimize }).xml).not.toContain('<path');
     });
 });

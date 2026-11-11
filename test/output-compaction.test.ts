@@ -158,3 +158,114 @@ describe('raw pathData is rounded to floatPrecision with optimize:false', () => 
         expect(result.mismatch).toBeLessThan(DEFAULT_MAX_MISMATCH);
     });
 });
+
+describe('evenodd rewritten to nonzero (minSdk < 24) stays compact', () => {
+    const pathData = (d: string, minSdk: number): { d: string; evenOdd: boolean } => {
+        const { xml } = convert(svg(`<path fill-rule="evenodd" d="${d}"/>`), { minSdk });
+        return { d: /android:pathData="([^"]*)"/.exec(xml)![1]!, evenOdd: xml.includes('evenOdd') };
+    };
+
+    it('keeps the path data of disjoint contours, whatever their orientations, and drops fillType', () => {
+        for (const d of ['M2 2h8v8H2zM14 14h8v8h-8z', 'M2 2h8v8H2zm12 12v8h8v-8z']) {
+            const low = pathData(d, 21);
+            expect(low.evenOdd, d).toBe(false);
+            expect(low.d, d).toBe(pathData(d, 24).d);
+        }
+    });
+
+    it('reverses an arc as an arc, its sweep flag inverted', () => {
+        const d = 'M12 2a10 10 0 1 0 0 20 10 10 0 1 0 0-20zm0 4a6 6 0 1 0 0 12 6 6 0 1 0 0-12z';
+        expect(pathData(d, 21)).toEqual({
+            d: 'M12 2a10 10 0 1 0 0 20A10 10 0 1 0 12 2ZM12 6a6 6 0 1 1 0 12A6 6 0 1 1 12 6Z',
+            evenOdd: false,
+        });
+    });
+
+    it('writes no leading zero and no repeated command letter', () => {
+        expect(pathData('M2 2h20v20H2zM6.5 6.25h11.5v.5H6.5z', 21).d).toBe('M2 2H22V22H2ZM6.5 6.25v.5H18v-.5Z');
+        expect(pathData('M2 2h20v20H2zM4 4h16v16H4z', 21).d).toBe('M2 2H22V22H2ZM4 4V20H20V4Z');
+        // Bootstrap Icons' arrow-down-circle: a ring around an arrow, the arrow reversed.
+        const arrow =
+            'M1 8a7 7 0 1 0 14 0A7 7 0 0 0 1 8m15 0A8 8 0 1 1 0 8a8 8 0 0 1 16 0M8.5 4.5a.5.5 0 0 0-1 0v5.793L5.354 ' +
+            '8.146a.5.5 0 1 0-.708.708l3 3a.5.5 0 0 0 .708 0l3-3a.5.5 0 0 0-.708-.708L8.5 10.293z';
+        const low = pathData(arrow, 21);
+        expect(low.evenOdd).toBe(false);
+        expect(low.d).not.toMatch(/[cC]|(^|[^\d])0\.\d/);
+        expect(low.d.length / pathData(arrow, 24).d.length).toBeLessThanOrEqual(1.1);
+    });
+
+    it('keeps arc flags separated from the next number', () => {
+        expect(pathData('M2 2h20v20H2zM15.25 12.25a3 3 0 1 1-6 0 3 3 0 1 1 6 0z', 21).d).toBe(
+            'M2 2H22V22H2ZM15.25 12.25a3 3 0 1 0 -6 0 3 3 0 1 0 6 0Z',
+        );
+    });
+
+    it('renders like the source (visual harness)', () => {
+        for (const d of [
+            'M12 2a10 10 0 1 0 0 20 10 10 0 1 0 0-20zm0 4a6 6 0 1 0 0 12 6 6 0 1 0 0-12z',
+            'M2 2h20v20H2zM6.5 6.25h11.5v.5H6.5zM15.25 12.25a3 3 0 1 1-6 0 3 3 0 1 1 6 0z',
+            'M2 2h8v8H2zm12 12v8h8v-8z',
+        ]) {
+            const source = svg(`<path fill-rule="evenodd" d="${d}"/>`);
+            const { xml } = convert(source, { minSdk: 21 });
+            expect(xml, d).not.toContain('evenOdd');
+            const result = compareSvgs(source, vdToSvg(xml));
+            expect(result.inked).toBeGreaterThan(0);
+            expect(result.mismatch, d).toBeLessThan(DEFAULT_MAX_MISMATCH);
+        }
+    });
+});
+
+describe('a mask converted to a clip writes a compact clip path', () => {
+    const masked = (mask: string, maskAttrs = ''): string =>
+        svg(`<defs><mask id="m"${maskAttrs}>${mask}</mask></defs><path mask="url(#m)" d="M0 0h24v24H0z" fill="#c00"/>`);
+    const clipPaths = (xml: string): string[] =>
+        [...xml.matchAll(/<clip-path[^>]*android:pathData="([^"]*)"/g)].map((m) => m[1]!);
+    const WHITE_RECT = '<rect width="10" height="10" fill="#fff"/>';
+    const REGION = [
+        '<rect width="20" height="20" fill="#fff"/>',
+        ' maskUnits="userSpaceOnUse" x="2" y="2" width="8" height="8"',
+    ] as const;
+    const HOLE = '<rect width="20" height="20" fill="#fff"/><rect x="4" y="4" width="4" height="4" fill="#000"/>';
+    const UNION = '<rect x="1" y="1" width="5" height="5" fill="#fff"/><circle cx="15" cy="15" r="4" fill="#fff"/>';
+
+    for (const optimize of both) {
+        describe(`optimize: ${optimize}`, () => {
+            it('writes a white rectangle with H / V (no L, no closing line)', () => {
+                expect(clipPaths(convert(masked(WHITE_RECT), { optimize }).xml)).toEqual(['M0 0H10V10H0Z']);
+            });
+
+            it('writes the mask region compactly', () => {
+                expect(clipPaths(convert(masked(...REGION), { optimize }).xml)).toEqual([
+                    'M0 0H20V20H0Z',
+                    'M2 2h8v8H2Z',
+                ]);
+            });
+
+            it('writes a rectangle with a hole compactly', () => {
+                expect(clipPaths(convert(masked(HOLE), { optimize }).xml)).toEqual(['M0 0H20V20H0ZM4 4V8H8V4Z']);
+            });
+
+            it('writes a union of pieces compactly, curves included', () => {
+                const [d] = clipPaths(convert(masked(UNION), { optimize }).xml);
+                expect(d).toMatch(/^M1 1H6V6H1ZM1[15] 1[15]c.*Z$/);
+                expect(d).not.toMatch(/[LC]/);
+            });
+
+            it('still hides an element whose mask draws nothing (empty clip left as is)', () => {
+                const { xml } = convert(masked('<rect width="0" height="5" fill="#fff"/>'), { optimize });
+                expect(xml).not.toContain('<path');
+                expect(xml).not.toContain('<clip-path');
+            });
+
+            it('renders like the source (visual harness)', () => {
+                for (const [mask, attrs] of [[WHITE_RECT], REGION, [HOLE], [UNION]]) {
+                    const source = masked(mask!, attrs);
+                    const result = compareSvgs(source, vdToSvg(convert(source, { optimize }).xml));
+                    expect(result.inked).toBeGreaterThan(0);
+                    expect(result.mismatch, mask).toBeLessThan(DEFAULT_MAX_MISMATCH);
+                }
+            });
+        });
+    }
+});

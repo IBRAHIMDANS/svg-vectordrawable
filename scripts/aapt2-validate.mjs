@@ -72,6 +72,8 @@ const MIN_SDK = 24;
 // `_themed` emits Android color references (`currentColor` and `colorMap` options) on fills, strokes
 // and gradient stops (`<item android:color>`); `link` resolves them, so the resources they name
 // are declared in VALUES_XML (framework ones, `@android:color/…` / `?android:attr/…`, come from android.jar).
+//
+// `_ids` keeps SVG ids as `android:name` (`preserveIds`), so the names it writes are proven valid too.
 const THEMED = {
     currentColor: '?attr/iconTint',
     colorMap: {
@@ -90,6 +92,7 @@ const VARIANTS = [
     { suffix: '_mirrored_w48', options: { autoMirrored: true, width: 48 } },
     { suffix: '_h13_5', options: { height: 13.5 } },
     { suffix: '_themed', label: 'themed (currentColor + colorMap references)', options: THEMED },
+    { suffix: '_ids', options: { preserveIds: true } },
 ];
 
 /** The app resources the `_themed` references point at (`res/values/themed.xml`). */

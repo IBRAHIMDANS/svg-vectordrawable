@@ -44,11 +44,30 @@ const convertInput = {
         .describe(
             'Fail instead of warning: true rejects lossy and approximated output, "lossy" only lossy output. Default false.',
         ),
+    rules: z
+        .partialRecord(z.enum(WARNING_CODES), z.enum(['off', 'warn', 'error']))
+        .optional()
+        .describe(
+            'Severity per warning code, overriding strict: "off" drops the warning, "warn" reports it, "error" fails. ' +
+                'E.g. {"strict": true, "rules": {"opacity-approximated": "warn"}}, or {"long-path-data": "warn"} to enable that hint.',
+        ),
+    // `currentColor` and `colorMap` are validated by the library (its TypeError becomes a tool error):
+    // a reference is emitted only when it matches @[package:]color/name or ?[package:]attr/name.
     currentColor: z
         .string()
-        .max(64)
+        .max(128)
         .optional()
-        .describe('CSS color substituted for currentColor (e.g. "#FF5722", "red"). Default #000000.'),
+        .describe(
+            'What currentColor stands for: a CSS color (e.g. "#FF5722", "red"), or an Android color reference ' +
+                'emitted as is so the icon follows the theme (?attr/colorControlNormal, @color/brand). Default #000000.',
+        ),
+    colorMap: z
+        .record(z.string().max(64), z.string().max(128))
+        .optional()
+        .describe(
+            'SVG colors to Android color references, e.g. {"#1A73E8": "@color/brand"}. Keys are CSS colors ' +
+                '(#f00, red and rgb(255,0,0) are one key); an opaque key also matches its translucent shades.',
+        ),
     floatPrecision: z
         .number()
         .int()
@@ -66,6 +85,20 @@ const convertInput = {
     tint: androidColor
         .optional()
         .describe('Adds android:tint to the <vector>, e.g. #FFFFFFFF or ?attr/colorControlNormal.'),
+    autoMirrored: z
+        .boolean()
+        .optional()
+        .describe('Adds android:autoMirrored="true": flipped in right-to-left layouts (arrows). Default false.'),
+    width: z
+        .number()
+        .positive()
+        .optional()
+        .describe('android:width in dp, replacing the SVG size. Alone, the height keeps the aspect ratio.'),
+    height: z
+        .number()
+        .positive()
+        .optional()
+        .describe('android:height in dp, replacing the SVG size. Alone, the width keeps the aspect ratio.'),
 };
 
 const convertOutput = {
@@ -84,7 +117,9 @@ const convertOutput = {
     minSdk: z
         .number()
         .int()
-        .describe('Lowest Android API level rendering the output natively (21, or 24 with gradients).'),
+        .describe(
+            'Lowest Android API level rendering the output natively: 24 when it uses gradients or android:fillType (evenodd fills), otherwise 21.',
+        ),
 };
 
 const previewInput = {

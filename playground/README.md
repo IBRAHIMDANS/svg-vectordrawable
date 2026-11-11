@@ -8,17 +8,19 @@ page.
 | File             | Role                                                                          |
 | ---------------- | ----------------------------------------------------------------------------- |
 | `index.html`     | Markup (strict CSP: same-origin scripts only, `data:` images for previews)    |
-| `app.js`         | DOM wiring: input, drag and drop, options, output, previews                   |
-| `core.js`        | DOM-free logic: worker with timeout and respawn, option parsing (Node-tested) |
+| `app.js`         | DOM wiring: input, drag and drop, options, highlighted output, previews       |
+| `core.js`        | DOM-free logic: worker with timeout and respawn, option parsing, XML tokens   |
+| `examples.js`    | Sample SVGs offered under the input (each one is converted by the smoke test) |
 | `worker.js`      | Classic worker: `importScripts('browser-lite.global.js')`, convert + preview  |
 | `style.css`      | Responsive layout, light / dark via `prefers-color-scheme`                    |
+| `favicon.svg`    | Tab icon, same mark as the header                                             |
 | `smoke-test.mjs` | `node --test` smoke test of the worker and `core.js` against `dist/`          |
 
 ## Convention
 
 `browser-lite.global.js` sits **next to** `index.html`. The Pages workflow
 (`.github/workflows/pages.yml`) copies the page files and `dist/browser-lite.global.js` into the same
-folder; locally, copy the build into `playground/` (git-ignored).
+folder (a new file must be added to its `cp` lines, which the smoke test checks); locally, copy the build into `playground/` (git-ignored).
 
 ## Run locally
 

@@ -14,8 +14,15 @@ export default tseslint.config(
             'android-render/build',
             'android-render/render/build',
             'android-render/.gradle',
+            // Gradle state and outputs of the Compose compile check.
+            'scripts/compose-check/build',
+            'scripts/compose-check/.gradle',
+            'scripts/compose-check/.kotlin',
             // Local copy of the IIFE build used to serve the playground (see playground/README.md).
             'playground/browser-lite.global.js',
+            // Agent worktrees (full copies of the repo) and local, unversioned drafts.
+            '.claude/**',
+            'docs/drafts/**',
         ],
     },
     // Integrations (integrations/*): build outputs and generated files. `dist` above is the root one only.

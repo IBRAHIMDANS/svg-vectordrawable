@@ -50,12 +50,17 @@ describe('svg-vectordrawable MCP server', () => {
         const byName = Object.fromEntries(tools.map((t) => [t.name, t]));
         assert.deepEqual(Object.keys(byName).sort(), ['convert', 'preview']);
         assert.deepEqual(Object.keys(byName.convert.inputSchema.properties).sort(), [
+            'autoMirrored',
+            'colorMap',
             'currentColor',
             'floatPrecision',
+            'height',
             'minSdk',
+            'rules',
             'strict',
             'svg',
             'tint',
+            'width',
         ]);
         assert.deepEqual(byName.convert.inputSchema.required, ['svg']);
         assert.equal(byName.convert.inputSchema.properties.svg.maxLength, MAX_INPUT_BYTES);
@@ -93,6 +98,34 @@ describe('svg-vectordrawable MCP server', () => {
         assert.deepEqual(warnings, []);
     });
 
+    test('convert applies autoMirrored, and width alone keeps the aspect ratio', async () => {
+        const svg = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 12"><path d="M2 2h20v8H2z"/></svg>';
+        const result = await client.callTool({ name: 'convert', arguments: { svg, autoMirrored: true, width: 48 } });
+        assert.notEqual(result.isError, true);
+        const { xml } = result.structuredContent;
+        assert.match(xml, /android:autoMirrored="true"/);
+        assert.match(xml, /android:width="48dp"/);
+        assert.match(xml, /android:height="24dp"/);
+        assert.match(xml, /android:viewportWidth="24"/);
+        const plain = await client.callTool({ name: 'convert', arguments: { svg, height: 6 } });
+        assert.doesNotMatch(plain.structuredContent.xml, /autoMirrored/);
+        assert.match(plain.structuredContent.xml, /android:width="12dp"/);
+    });
+
+    test('convert maps currentColor and colorMap to theme references', async () => {
+        const svg =
+            '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path fill="currentColor" d="M2 2h9v9H2z"/>' +
+            '<path fill="#1a73e8" d="M13 2h9v9h-9z"/></svg>';
+        const result = await client.callTool({
+            name: 'convert',
+            arguments: { svg, currentColor: '?attr/colorControlNormal', colorMap: { '#1A73E8': '@color/brand' } },
+        });
+        assert.notEqual(result.isError, true);
+        const { xml } = result.structuredContent;
+        assert.match(xml, /android:fillColor="\?attr\/colorControlNormal"/);
+        assert.match(xml, /android:fillColor="@color\/brand"/);
+    });
+
     test('convert reports a lossy warning, and rejects it under strict', async () => {
         const lenient = await client.callTool({ name: 'convert', arguments: { svg: TEXT_SVG } });
         assert.deepEqual(
@@ -101,6 +134,20 @@ describe('svg-vectordrawable MCP server', () => {
         );
         const strict = await client.callTool({ name: 'convert', arguments: { svg: TEXT_SVG, strict: 'lossy' } });
         assert.match(toolError(strict), /\[unsupported-element\]/);
+    });
+
+    test('convert applies rules: per-code severity overrides strict', async () => {
+        const off = await client.callTool({
+            name: 'convert',
+            arguments: { svg: TEXT_SVG, strict: 'lossy', rules: { 'unsupported-element': 'off' } },
+        });
+        assert.notEqual(off.isError, true);
+        assert.deepEqual(off.structuredContent.warnings, []);
+        const error = await client.callTool({
+            name: 'convert',
+            arguments: { svg: TEXT_SVG, rules: { 'unsupported-element': 'error' } },
+        });
+        assert.match(toolError(error), /\[unsupported-element\]/);
     });
 
     test('preview turns VectorDrawable XML into SVG (round trip)', async () => {
@@ -127,6 +174,15 @@ describe('svg-vectordrawable MCP server', () => {
             ['convert', { svg: GRADIENT_SVG, strict: 'yes' }, /strict/],
             ['convert', { svg: GRADIENT_SVG, minSdk: 0 }, /minSdk/],
             ['convert', { svg: GRADIENT_SVG, tint: '"/><evil' }, /tint/],
+            ['convert', { svg: GRADIENT_SVG, width: 0 }, /width/],
+            ['convert', { svg: GRADIENT_SVG, height: -24 }, /height/],
+            ['convert', { svg: GRADIENT_SVG, autoMirrored: 'yes' }, /autoMirrored/],
+            ['convert', { svg: GRADIENT_SVG, rules: { 'no-such-code': 'off' } }, /rules/],
+            ['convert', { svg: GRADIENT_SVG, rules: { 'unsupported-element': 'fatal' } }, /rules/],
+            // Validated by the library: its TypeError is the tool error.
+            ['convert', { svg: GRADIENT_SVG, currentColor: '?colorPrimary' }, /Invalid currentColor/],
+            ['convert', { svg: GRADIENT_SVG, colorMap: { '#000': '#fff' } }, /Invalid colorMap value/],
+            ['convert', { svg: GRADIENT_SVG, colorMap: { nope: '@color/x' } }, /Invalid colorMap key/],
             ['convert', { svg: 'a'.repeat(MAX_INPUT_BYTES + 1) }, /larger than 2 MB/],
             // Under the character bound but over the byte bound (2 bytes per character in UTF-8).
             ['convert', { svg: 'é'.repeat(MAX_INPUT_BYTES / 2 + 1) }, /larger than 2 MB/],

@@ -1,20 +1,30 @@
 import type { XastElement } from './ast.js';
 import { ClipPaths } from './clip.js';
 import type { ConvertContext } from './context.js';
-import { collectByName, failsConditions, isDisplayNone } from './elements.js';
+import {
+    collectByName,
+    failsConditions,
+    foreignElements,
+    GROUPS,
+    isDisplayNone,
+    isNotRendered,
+    switchChild,
+    systemLanguageIgnored,
+} from './elements.js';
 import { colorRefs } from './colorRef.js';
 import { ConversionError } from './errors.js';
 import { escapeXml, formatNumber } from './format.js';
 import { collectGradients } from './gradient.js';
-import { checkGroupOpacity } from './groupOpacity.js';
 import { initialStyle, resolveStyle } from './inherited.js';
-import { parseSvg } from './normalize.js';
-import { systemLanguageIgnored, walk } from './render.js';
-import { applyCssProperties, parseStyle, presentation } from './style.js';
+import { MAY_HAVE_CSS_TRANSFORM, parseSvg } from './normalize.js';
+import { validPathData } from './pathData.js';
+import { textLayout } from './text.js';
+import { walk } from './render.js';
+import { applyCssProperties, presentation } from './style.js';
 import { parseOpacity } from './units.js';
 import { resolveUses } from './useResolver.js';
 import { formatMatrix } from './transform.js';
-import { layoutWarnings, rootLayout, rootTransform } from './viewport.js';
+import { disablingViewBox, layoutWarnings, rootExtraDigits, rootLayout, rootTransform } from './viewport.js';
 import {
     WARNING_CATEGORIES,
     WARNING_CODES,
@@ -36,8 +46,38 @@ const MAX_PATH_DATA_LENGTH = 800;
 const MAX_VECTOR_DP = 200;
 /** Upper bound of `floatPrecision`: beyond it a double carries no further decimal. */
 const MAX_FLOAT_PRECISION = 20;
-/** `info` codes too noisy to report unless enabled with `rules` (`long-path-data`: ~3% of real icons). */
-const OFF_BY_DEFAULT: ReadonlySet<WarningCode> = new Set(['long-path-data']);
+/**
+ * `info` codes too noisy to report unless enabled with `rules` (`long-path-data`: ~3% of real
+ * icons; `invalid-path-data`: the output is already what browsers draw).
+ */
+const OFF_BY_DEFAULT: ReadonlySet<WarningCode> = new Set(['long-path-data', 'invalid-path-data']);
+/** Characters of the ignored part of a `d` quoted by `invalid-path-data`. */
+const PATH_ERROR_EXCERPT = 20;
+
+/**
+ * The `invalid-path-data` messages of a source tree parsed without svgo (the same tree in both
+ * `optimize` modes): one per `<path>` whose `d` attribute is in error but still draws a segment, so
+ * it is rendered up to its last valid segment (SVG 2 §9.5.4) and the rest is ignored. One that draws
+ * nothing is `empty-path`'s; a CSS `d` in error is an invalid declaration, ignored (not cut).
+ */
+function pathDataErrors(root: XastElement): string[] {
+    const paths: XastElement[] = [];
+    collectByName(root, new Set(['path']), paths);
+    const messages = new Set<string>();
+    for (const el of paths) {
+        const d = el.attributes?.d;
+        if (d === undefined) continue;
+        const valid = validPathData(d);
+        if (valid === null || valid === d) continue;
+        const start = d.length - d.slice(valid.length).trimStart().length;
+        const tail = d.slice(start);
+        const excerpt = tail.length > PATH_ERROR_EXCERPT ? `${tail.slice(0, PATH_ERROR_EXCERPT)}…` : tail;
+        messages.add(
+            `<path> d has an error at character ${start + 1} ("${excerpt}"): drawn up to its last valid segment, as browsers do; the rest is ignored.`,
+        );
+    }
+    return [...messages];
+}
 
 /** Severity of `code` before `rules`: `strict` escalates `lossy` (and `approximation` for `true`). */
 function defaultSeverity(code: WarningCode, strict: StrictMode): Severity {
@@ -45,6 +85,28 @@ function defaultSeverity(code: WarningCode, strict: StrictMode): Severity {
     if (category === 'info') return OFF_BY_DEFAULT.has(code) ? 'off' : 'warn';
     if (strict === true || (strict === 'lossy' && category === 'lossy')) return 'error';
     return 'warn';
+}
+
+/**
+ * The warning policy of `options` (`strict`, `rules`, `onWarn`): `warn` drops an `off` warning,
+ * throws a `ConversionError` for an `error` one, otherwise appends it to `warnings` and calls
+ * `onWarn`. Shared with `toImageVector`, whose own warnings follow the same rules.
+ * @internal
+ */
+export function warningSink(
+    options: Pick<ConvertOptions, 'strict' | 'rules' | 'onWarn'>,
+    warnings: Warning[],
+): { severityOf: (code: WarningCode) => Severity; warn: (w: Warning) => void } {
+    const { strict = false, rules = {}, onWarn } = options;
+    const severityOf = (code: WarningCode): Severity => rules[code] ?? defaultSeverity(code, strict);
+    const warn = (w: Warning): void => {
+        const severity = severityOf(w.code);
+        if (severity === 'off') return;
+        if (severity === 'error') throw new ConversionError(w);
+        warnings.push(w);
+        onWarn?.(w);
+    };
+    return { severityOf, warn };
 }
 
 /** Features of the generated XML that need more than API 21, with the level they need. */
@@ -73,12 +135,6 @@ export function vectorSize(svgSize: Size, width: number | undefined, height: num
         height: height ?? (width === undefined ? svgSize.height : width / ratio),
     };
 }
-
-/**
- * A CSS `transform` (style attribute or `<style>`), or a `transform-origin` / `transform-box`: the
- * properties svgo does not read when it moves transforms (same test as normalize.ts's default config).
- */
-const MAY_HAVE_CSS_TRANSFORM = /(?<![\w-])transform\s*:|transform-(?:origin|box)/;
 
 /** preset-default plugins that move transforms between elements or drop `transform-origin`. */
 const TRANSFORM_MOVERS = [
@@ -138,6 +194,21 @@ const elementsNamed = (root: XastElement, ...names: string[]): XastElement[] => 
     return out;
 };
 
+/**
+ * True when a rendered child of `el` may draw something: a container (`<g>`, `<a>`) draws through
+ * its rendered descendants, a `<switch>` through the child it picks (see `switchChild`); any other
+ * rendered element (shape, `<use>`, `<text>`, `<image>`, nested `<svg>`…) is assumed to draw.
+ */
+function drawsSomething(el: XastElement, foreign: WeakSet<XastElement>): boolean {
+    return (el.children ?? []).some((c) => {
+        if (c.type !== 'element' || isNotRendered(c, foreign)) return false;
+        if (GROUPS.has(c.name ?? '')) return drawsSomething(c, foreign);
+        if (c.name !== 'switch') return true;
+        const picked = switchChild(c, foreign).child;
+        return picked !== undefined && drawsSomething({ ...c, children: [picked] }, foreign);
+    });
+}
+
 export function convert(svg: string, options: ConvertOptions = {}): ConvertResult {
     const {
         optimize = true,
@@ -153,6 +224,7 @@ export function convert(svg: string, options: ConvertOptions = {}): ConvertResul
         autoMirrored = false,
         onWarn,
         minSdk: appMinSdk,
+        preserveIds = false,
     } = options;
 
     if (strict !== true && strict !== false && strict !== 'lossy')
@@ -178,16 +250,12 @@ export function convert(svg: string, options: ConvertOptions = {}): ConvertResul
             throw new TypeError(`Unknown warning code in rules: "${code}"`);
 
     const warnings: Warning[] = [];
-    const severityOf = (code: WarningCode): Severity => rules[code] ?? defaultSeverity(code, strict);
-    const warn = (w: Warning): void => {
-        const severity = severityOf(w.code);
-        if (severity === 'off') return;
-        if (severity === 'error') throw new ConversionError(w);
-        warnings.push(w);
-        onWarn?.(w);
-    };
+    const { severityOf, warn } = warningSink({ strict, rules, onWarn }, warnings);
 
-    const root = parseSvg(svg, optimize, svgoConfig, floatPrecision, fillBlackForUnfilled);
+    const root = parseSvg(svg, optimize, svgoConfig, floatPrecision, fillBlackForUnfilled, preserveIds);
+    // svgo's tree has its `d` in error already cut (normalize.ts): read the source's. Only when enabled.
+    const invalidPathData =
+        severityOf('invalid-path-data') === 'off' ? [] : pathDataErrors(optimize ? parseSvg(svg, false) : root);
     // Fold CSS transforms into attributes before <use> expansion, so that clones inherit them.
     applyCssProperties(root, warn);
     // Inline <use> references so the walker sees concrete geometry. Its warnings are reported once
@@ -211,10 +279,11 @@ export function convert(svg: string, options: ConvertOptions = {}): ConvertResul
     if (mover !== undefined && MAY_HAVE_CSS_TRANSFORM.test(svg))
         warn({
             code: 'unsupported-style',
-            message: `The custom svgoConfig runs ${mover}, which moves or bakes transforms without reading the CSS transform / transform-origin / transform-box set here: the output may be misplaced. Disable ${TRANSFORM_MOVERS.join(', ')} and convertPathData's applyTransforms (e.g. preset-default overrides), or omit svgoConfig.`,
+            message: `The custom svgoConfig runs ${mover}, which moves or bakes transforms without reading the CSS transform / translate / rotate / scale / transform-origin / transform-box set here: the output may be misplaced. Disable ${TRANSFORM_MOVERS.join(', ')} and convertPathData's applyTransforms (e.g. preset-default overrides), or omit svgoConfig.`,
             node: 'style',
         });
     for (const w of useWarnings) warn(w);
+    for (const message of invalidPathData) warn({ code: 'invalid-path-data', message, node: 'path' });
     // A root with display: none renders nothing, whatever its conditions: an empty <vector>, faithful.
     const hidden = removed !== undefined || isDisplayNone(found);
     // Conditional processing (SVG 2 §5.8) applies to the root too: when it fails, browsers render
@@ -227,9 +296,22 @@ export function convert(svg: string, options: ConvertOptions = {}): ConvertResul
                 'The root <svg> fails its requiredExtensions / systemLanguage condition: nothing is rendered; the <vector> is empty.',
             node: 'svg',
         });
-    else if (!hidden && found.attributes?.systemLanguage !== undefined)
+    // A zero (or negative) viewBox width or height disables rendering (SVG 2 §8.6): an empty <vector>
+    // sized as if the viewBox were absent, lossy like failed conditions.
+    const disabled = disablingViewBox(found.attributes ?? {});
+    if (!excluded && !hidden && disabled !== undefined)
+        warn({
+            code: 'unsupported-attribute',
+            message: `The root <svg> has viewBox="${disabled}", whose width or height is not positive: nothing is rendered; the <vector> is empty.`,
+            node: 'svg',
+        });
+    else if (!excluded && !hidden && found.attributes?.systemLanguage !== undefined)
         warn({ code: 'unsupported-attribute', message: systemLanguageIgnored('svg'), node: 'svg' });
-    const svgEl: XastElement = excluded || hidden ? { ...found, children: [] } : found;
+    const svgEl: XastElement = excluded || hidden || disabled !== undefined ? { ...found, children: [] } : found;
+    if (disabled !== undefined) {
+        svgEl.attributes = { ...svgEl.attributes };
+        delete svgEl.attributes.viewBox;
+    }
 
     // svgo inlines what it can and drops the emptied <style>; any CSS left was not applied.
     if (elementsNamed(svgEl, 'style').some((s) => cssText(s) !== ''))
@@ -244,30 +326,31 @@ export function convert(svg: string, options: ConvertOptions = {}): ConvertResul
     const layout = rootLayout(svgEl.attributes ?? {});
     // No size and no viewBox: the size is undefined (browsers use 300×150, resvg the content bounds).
     // Guessing from the content would not match any renderer either; report the crop instead.
-    if (layout.assumed.length)
+    // Nothing drawn (an empty or hidden root, only definitions or unrendered children): nothing to
+    // crop, no warning.
+    const foreign = foreignElements(svgEl);
+    const draws = drawsSomething(svgEl, foreign);
+    if (layout.assumed.length && draws)
         warn({
             code: 'unsupported-attribute',
             message: `The root <svg> has no viewBox and no usable ${layout.assumed.join(' / ')}: its size is undefined; assumed 24, content beyond it is cropped. Add a viewBox.`,
             node: 'svg',
         });
-    // Only the transform attribute is read: a CSS one on the root would be silently dropped.
-    if (['transform', 'transform-origin'].some((p) => parseStyle(svgEl.attributes?.style)[p] !== undefined))
-        warn({
-            code: 'unsupported-style',
-            message: 'CSS transform / transform-origin on the root <svg> is not supported; ignored.',
-            node: 'svg',
-        });
-    // Viewport-relative units on an <svg>, a root transform-origin that cannot be resolved.
+    // Viewport-relative units on an <svg>, a root transform / transform-origin that cannot be resolved.
     for (const w of layoutWarnings(svgEl)) warn(w);
     const step = ' '.repeat(indent);
     const r = (v: number): string => formatNumber(v, floatPrecision);
+    // Viewport units are magnified by the viewBox → size factor: they keep more decimals than the dp.
+    const precision = Math.min(floatPrecision + rootExtraDigits(layout), MAX_FLOAT_PRECISION);
+    const rv = (v: number): string => formatNumber(v, precision);
 
     const gradientEls = elementsNamed(svgEl, 'linearGradient', 'radialGradient');
     const ctx: ConvertContext = {
         warn,
-        precision: floatPrecision,
+        precision,
         step,
         fillBlackForUnfilled,
+        nonZeroFills: appMinSdk !== undefined && appMinSdk < GRADIENT_FILL_TYPE_SDK,
         colors,
         gradients: collectGradients(gradientEls, currentColor, warn, colors, svgEl),
         gradientIds: new Set(gradientEls.map((g) => g.attributes?.id)),
@@ -276,8 +359,11 @@ export function convert(svg: string, options: ConvertOptions = {}): ConvertResul
                 .map((p) => p.attributes?.id)
                 .filter(Boolean),
         ),
-        clips: new ClipPaths(svgEl, warn, layout.viewBox, floatPrecision),
+        clips: new ClipPaths(svgEl, warn, layout.viewBox, precision, foreign),
+        foreign,
         reported: new WeakSet(),
+        names: preserveIds ? new Set() : null,
+        text: options.fonts === undefined ? undefined : textLayout(options.fonts),
         usesGradient: false,
     };
 
@@ -287,7 +373,6 @@ export function convert(svg: string, options: ConvertOptions = {}): ConvertResul
     // Opacity on the root is exactly android:alpha on the <vector>; no need to fold it.
     const rootAlpha = parseOpacity(presentation(svgEl, 'opacity'));
     const baseStyle = { ...resolveStyle(svgEl, rootStyle), opacityMul: 1 };
-    checkGroupOpacity(ctx, { ...svgEl, attributes: { ...svgEl.attributes, opacity: '1' } }, rootStyle);
 
     // A viewBox origin other than (0,0) (or an aspect-ratio alignment) shifts the whole drawing;
     // VectorDrawable viewports always start at (0,0), so translate the content into place.
@@ -311,8 +396,8 @@ export function convert(svg: string, options: ConvertOptions = {}): ConvertResul
         : svgEl;
     const content = walk(ctx, rendered, baseStyle, offset ? step + step : step);
     const offsetAttrs = [
-        Math.abs(tx) > 1e-9 ? `${step}${step}android:translateX="${r(tx)}"` : null,
-        Math.abs(ty) > 1e-9 ? `${step}${step}android:translateY="${r(ty)}"` : null,
+        Math.abs(tx) > 1e-9 ? `${step}${step}android:translateX="${rv(tx)}"` : null,
+        Math.abs(ty) > 1e-9 ? `${step}${step}android:translateY="${rv(ty)}"` : null,
     ].filter(Boolean);
     const body =
         offset && content.trim() ? `${step}<group\n${offsetAttrs.join('\n')}>\n${content}\n${step}</group>` : content;
@@ -330,8 +415,8 @@ export function convert(svg: string, options: ConvertOptions = {}): ConvertResul
         `<vector xmlns:android="http://schemas.android.com/apk/res/android"${aapt}${tintLine}${alphaLine}${mirrorLine}\n` +
         `${step}android:width="${r(size.width)}dp"\n` +
         `${step}android:height="${r(size.height)}dp"\n` +
-        `${step}android:viewportWidth="${r(layout.viewportWidth)}"\n` +
-        `${step}android:viewportHeight="${r(layout.viewportHeight)}">\n` +
+        `${step}android:viewportWidth="${rv(layout.viewportWidth)}"\n` +
+        `${step}android:viewportHeight="${rv(layout.viewportHeight)}">\n` +
         `${body}\n` +
         `</vector>\n`;
 

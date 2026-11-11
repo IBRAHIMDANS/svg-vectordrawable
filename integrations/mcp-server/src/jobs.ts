@@ -2,7 +2,19 @@ import { WARNING_CATEGORIES, convert, vectorDrawableToSvg } from 'svg-vectordraw
 import type { ConvertOptions, PreviewOptions, WarningCategory, WarningCode } from 'svg-vectordrawable';
 
 /** The `convert` options exposed by the MCP tool (the subset of `ConvertOptions` a chat client needs). */
-export type ConvertToolOptions = Pick<ConvertOptions, 'strict' | 'currentColor' | 'floatPrecision' | 'minSdk' | 'tint'>;
+export type ConvertToolOptions = Pick<
+    ConvertOptions,
+    | 'strict'
+    | 'rules'
+    | 'currentColor'
+    | 'colorMap'
+    | 'floatPrecision'
+    | 'minSdk'
+    | 'tint'
+    | 'autoMirrored'
+    | 'width'
+    | 'height'
+>;
 
 export interface ConvertOutput {
     [key: string]: unknown;

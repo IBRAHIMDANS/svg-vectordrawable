@@ -13,24 +13,52 @@ import {
     type ResolvedGradient,
 } from './gradient.js';
 import { fillOf, strokeWidthOf, type Inherited } from './inherited.js';
+import { closedSubpathCount, enclosesArea, evenOddToNonZero } from './pathContours.js';
 import { normalizeArcFlags, pathBBox, transformPathData } from './pathData.js';
 import { isNone, presentation } from './style.js';
 import { multiply, scaleFactor, type Matrix } from './transform.js';
-import type { AndroidColor } from './types.js';
-import { parseLength } from './units.js';
+import type { AndroidColor, Warning } from './types.js';
+import { parseLength, VALID_UNRESOLVED_LENGTH } from './units.js';
 import { diagonal } from './viewport.js';
 
-/** An SVG paint: `url(#id)` with an optional fallback color, or a plain color / `none`. */
+/**
+ * An SVG paint: `url(#id)` or a non-local `url(…)` (`external`), each with an optional fallback
+ * color, or a plain color / `none`.
+ */
 interface Paint {
     ref?: string;
+    /** A paint server in another document (`url(other.svg#g)`, `url('data:…')`), with an optional fallback `color`. */
+    external?: string;
     color?: string;
 }
 
+/** `url(…)` (quoted or not) followed by an optional fallback; svgo may drop the space before it. */
+const URL_PAINT = /^url\(\s*(?:'([^']*)'|"([^"]*)"|([^'"()\s]*))\s*\)\s*(.*)$/is;
+
 function parsePaint(raw: string): Paint {
-    const m = /^url\(\s*['"]?#([^'")\s]+)['"]?\s*\)\s*(.*)$/.exec(raw.trim());
+    const m = URL_PAINT.exec(raw.trim());
     if (!m) return { color: raw.trim() };
-    const fallback = m[2]!.trim();
-    return fallback ? { ref: m[1]!, color: fallback } : { ref: m[1]! };
+    const url = (m[1] ?? m[2] ?? m[3]!).trim();
+    const fallback = m[4]!.trim();
+    if (!url.startsWith('#')) return fallback ? { external: url, color: fallback } : { external: url };
+    const ref = url.slice(1);
+    return fallback ? { ref, color: fallback } : { ref };
+}
+
+/**
+ * Reports a paint server in another document: the converter does not load it. Chrome and Firefox
+ * paint the fallback color when it cannot be loaded (nothing without one), but do paint a valid one
+ * (a `data:` URL with a gradient included), so using the fallback, or painting nothing, is lossy.
+ */
+function warnExternalPaint(ctx: ConvertContext, paint: Paint, property: 'fill' | 'stroke'): void {
+    if (paint.external === undefined) return;
+    const outcome =
+        paint.color !== undefined ? `its fallback color ${paint.color} is used` : `the ${property} is not painted`;
+    warnOnce(ctx, {
+        code: 'unsupported-paint',
+        message: `${property}="url(${paint.external})" points at a paint server in another document, which the converter does not load; ${outcome}.`,
+        node: 'path',
+    });
 }
 
 /** True when a `paint-order` value paints the stroke below the fill (the reverse of VectorDrawable's order). */
@@ -46,11 +74,12 @@ function strokeBeforeFill(value: string): boolean {
 class PathBuilder {
     private readonly attrs: [string, string][] = [];
     private readonly gradients: { gradient: ResolvedGradient; attr: 'fillColor' | 'strokeColor' }[] = [];
-    private skewWarned = false;
     /** An elliptical radial fill that can be exact, until {@link settleFill} decides. */
     private pendingFill: { raw: RawGradient; exact: EllipticalRadial } | null = null;
     /** Transform attributes of the `<group>` wrapping the path (exact elliptical radial fill). */
     private groupAttrs: [string, string][] | null = null;
+    /** `android:name` (`preserveIds`), set on the first path an element emits. */
+    name: string | undefined;
 
     constructor(
         private readonly ctx: ConvertContext,
@@ -89,14 +118,13 @@ class PathBuilder {
 
     private resolve(g: RawGradient, attr: 'fillColor' | 'strokeColor'): void {
         const { ctx } = this;
-        if (this.bake && !this.skewWarned) {
-            this.skewWarned = true;
-            ctx.warn({
+        // Once per conversion: every gradient-painted child of a skewed group says the same thing.
+        if (this.bake)
+            warnOnce(ctx, {
                 code: 'gradient-under-skew',
                 message: 'Gradient under a skewed/baked group may be imprecisely placed.',
                 node: 'path',
             });
-        }
         const bbox = g.objectBox ? pathBBox(this.bboxData) : null;
         const resolved = resolveGradient(g, bbox, this.style.viewport, ctx.precision, ctx.warn);
         this.gradients.push({ gradient: resolved, attr });
@@ -128,6 +156,25 @@ class PathBuilder {
         this.groupAttrs.push(['scaleY', formatNumber(scaleY, ctx.precision)]);
     }
 
+    /**
+     * Replaces `android:fillType="evenOdd"` (API 24) by nonzero geometry filling the same region
+     * (see {@link evenOddToNonZero}); kept when the contours cross. Without a painted fill, the
+     * unused `fillType` is simply dropped. A stroke drawn by this path must keep its geometry: the
+     * rewrite then needs every subpath closed and kept (reversing a closed contour changes no cap
+     * nor join). Call after {@link settleFill}, which may replace the geometry.
+     */
+    nonZeroFill(filled: boolean, stroked: boolean): void {
+        const at = this.attrs.findIndex(([name]) => name === 'fillType');
+        if (at < 0) return;
+        if (filled) {
+            const d = evenOddToNonZero(this.pathData, undefined, this.ctx.precision);
+            if (d === null) return;
+            if (d !== this.pathData && stroked && closedSubpathCount(this.pathData) !== d.split('Z').length - 1) return;
+            this.pathData = d;
+        }
+        this.attrs.splice(at, 1);
+    }
+
     /** True when the path uses a gradient (an `aapt:attr` child). */
     get hasGradient(): boolean {
         return this.gradients.length > 0;
@@ -154,6 +201,7 @@ class PathBuilder {
         const pad = this.groupAttrs ? this.pad + step : this.pad;
         const lines = [
             `${pad}<path`,
+            ...(this.name === undefined ? [] : [`${pad}${step}android:name="${escapeXml(this.name)}"`]),
             `${pad}${step}android:pathData="${escapeXml(this.pathData)}"`,
             ...this.attrs.map(([name, value]) => `${pad}${step}android:${name}="${value}"`),
         ];
@@ -170,8 +218,52 @@ class PathBuilder {
     }
 }
 
-/** SVG 2 paints taken from the referencing element (`<use>`, marker), which the converter does not track. */
+/**
+ * SVG 2 paints taken from the context element. Inside a `<use>` they are resolved upstream
+ * (`resolveStyle`, src/inherited.ts); one that reaches the paint code is outside a `<use>` (or in a
+ * marker), or its context paint is a gradient / pattern, and cannot be resolved.
+ */
 const CONTEXT_PAINT = /^context-(?:fill|stroke)$/i;
+
+/** Warnings already reported by {@link warnOnce}, per conversion (its `warn`, shared by the `ctx` copies). */
+const reported = new WeakMap<ConvertContext['warn'], Set<string>>();
+
+/**
+ * Reports a warning once per code, message and conversion: a declaration inherited by several
+ * painted elements, or a `<use>` instance read again, says the same thing each time (svgo, which
+ * may merge those elements, would otherwise report it fewer times). Two messages stay two warnings.
+ */
+export function warnOnce(ctx: Pick<ConvertContext, 'warn'>, warning: Warning): void {
+    let seen = reported.get(ctx.warn);
+    if (!seen) reported.set(ctx.warn, (seen = new Set()));
+    const key = `${warning.code}\0${warning.message}`;
+    if (seen.has(key)) return;
+    seen.add(key);
+    ctx.warn(warning);
+}
+
+/**
+ * Reports a length that is present but cannot be resolved (`ex`, `ch`, `calc()`…), for which the
+ * caller uses `fallback`. A value that is not a length at all (`abc`, `10abc`) is silent: browsers
+ * use the initial value, which `fallback` is, and so does the converter. Except for a radius whose
+ * fallback is `auto` (`rx` / `ry`): Firefox uses `auto`, Chrome 0 (it does not support `auto`
+ * either), so that one stays reported. Once per message and conversion: an inherited value or a
+ * `<use>` instance read again is not reported again.
+ */
+export function warnUnresolvedLength(
+    ctx: Pick<ConvertContext, 'warn'>,
+    attr: string,
+    value: string,
+    node: string,
+    fallback: string,
+): void {
+    const trimmed = value.trim();
+    const valid = VALID_UNRESOLVED_LENGTH.test(trimmed);
+    if (!valid && fallback !== 'auto') return;
+    const reason = valid ? 'is not a length the converter can resolve (ex, ch, calc()…)' : 'is not a valid length';
+    const message = `${attr}="${trimmed}" on <${node}> ${reason}; ${fallback} is used.`;
+    warnOnce(ctx, { code: 'unsupported-attribute', message, node });
+}
 
 /** SVG's initial fill (black), the one `fillBlackForUnfilled` emits. */
 const INITIAL_FILL = '#FF000000' as AndroidColor;
@@ -179,10 +271,11 @@ const INITIAL_FILL = '#FF000000' as AndroidColor;
 /**
  * The Android color of a solid paint (literal or reference, through `ctx.colors`), null when nothing
  * is painted (no value, `none`). A value the color parser cannot read is reported as
- * `unsupported-paint` instead of silently dropping the paint. `context-fill` / `context-stroke` (taken from the `<use>` or marker, which
- * the converter does not track) paint nothing. An unparseable fallback color after `url(#…)` gives
- * the initial paint (the implicit black fill, no stroke). A whole declaration that is invalid never
- * gets here: resolveStyle ignores it, {@link warnIgnoredPaint} reports it.
+ * `unsupported-paint` instead of silently dropping the paint. `context-fill` / `context-stroke` left
+ * unresolved (outside a `<use>`, or with a gradient / pattern context paint; a solid one inside a
+ * `<use>` is resolved upstream) paint nothing. A whole declaration that is invalid (an unparseable
+ * fallback color after `url(#…)` included) never gets here: resolveStyle ignores it, and
+ * {@link warnIgnoredPaint} reports it unless a browser drops it at parse time too.
  */
 function solidPaint(
     ctx: ConvertContext,
@@ -191,13 +284,19 @@ function solidPaint(
     property: 'fill' | 'stroke',
 ): ResolvedColor | null {
     if (value === undefined || isNone(value)) return null;
+    if (style.colorUnresolved !== undefined && /currentcolor/i.test(value))
+        warnOnce(ctx, {
+            code: 'unsupported-paint',
+            message: `color="${style.colorUnresolved}" cannot be resolved (var(), env() and attr() are not substituted); ${property}="${value.trim()}" uses the inherited color.`,
+            node: 'path',
+        });
     const color = ctx.colors.paint(value, style.color);
     if (color) return color;
     const shown = value.trim();
     const context = CONTEXT_PAINT.test(shown);
     const fallback = property === 'fill' && !context && ctx.fillBlackForUnfilled ? INITIAL_FILL : null;
     const outcome = fallback ? 'using the initial black fill' : `the ${property} is dropped`;
-    ctx.warn({
+    warnOnce(ctx, {
         code: 'unsupported-paint',
         message: context
             ? `${property}="${shown}" (context paint) cannot be resolved; ${outcome}.`
@@ -208,9 +307,10 @@ function solidPaint(
 }
 
 /**
- * Reports the invalid `fill` / `stroke` declaration resolveStyle ignored (`env()`, `var()`,
- * `color-mix()`, a typo…). CSS ignores it too: the presentation attribute under an invalid `style`
- * declaration applies, else the parent's value, else the initial one (black fill, no stroke).
+ * Reports the unusable `fill` / `stroke` declaration resolveStyle ignored (`env()`, `var()`,
+ * `color-mix()`…; not a typo, which a browser drops at parse time too). CSS ignores it too: the
+ * presentation attribute under an invalid `style` declaration applies, else the parent's value,
+ * else the initial one (black fill, no stroke).
  */
 function warnIgnoredPaint(ctx: ConvertContext, style: Inherited, property: 'fill' | 'stroke'): void {
     const invalid = property === 'fill' ? style.fillInvalid : style.strokeInvalid;
@@ -222,7 +322,7 @@ function warnIgnoredPaint(ctx: ConvertContext, style: Inherited, property: 'fill
             : property === 'fill' && ctx.fillBlackForUnfilled
               ? 'using the initial black fill'
               : `the ${property} is dropped`;
-    ctx.warn({
+    warnOnce(ctx, {
         code: 'unsupported-paint',
         message: `${property}="${invalid}" is not a color the converter can parse; it is ignored, ${outcome}.`,
         node: 'path',
@@ -230,41 +330,71 @@ function warnIgnoredPaint(ctx: ConvertContext, style: Inherited, property: 'fill
 }
 
 /**
- * Why a `url(#id)` paint without fallback color draws nothing, null when `id` names no gradient.
- * A gradient element `collectGradients` left out is an invalid paint server (no usable stop, or a
- * non-invertible gradientTransform): SVG 2 §13.2 paints nothing for it (SVG 1.1 §13.2.4 likewise
- * for a gradient without stops).
+ * Reports a `url(#id)` paint that draws nothing: a gradient without stops (SVG 1.1 §13.2.4 paints
+ * none, fallback color or not), or, without fallback color, a reference to nothing or to an invalid
+ * paint server (a gradient `collectGradients` left out: non-invertible gradientTransform), which
+ * SVG 2 §13.2 does not paint either.
  */
-function invalidGradient(ctx: ConvertContext, ref: string, property: 'fill' | 'stroke'): string | null {
-    if (!ctx.gradientIds.has(ref)) return null;
-    return `${property}="url(#${ref})" points at a gradient that is not a valid paint server (no usable stop, or a non-invertible gradientTransform) and has no fallback color; the ${property} is not painted.`;
+function warnUnpainted(ctx: ConvertContext, ref: string, property: 'fill' | 'stroke'): void {
+    const reason = ctx.gradients.has(ref)
+        ? 'a gradient without stops, which paints none'
+        : ctx.gradientIds.has(ref)
+          ? 'a gradient that is not a valid paint server (non-invertible gradientTransform), without fallback color'
+          : 'nothing (unknown paint server), without fallback color';
+    warnOnce(ctx, {
+        code: 'missing-gradient',
+        message: `${property}="url(#${ref})" points at ${reason}; the ${property} is not painted.`,
+        node: 'path',
+    });
+}
+
+/** Inherited properties a substitution may leave unresolved (see `Inherited.unresolved`), by what reads them. */
+const FILL_PROPERTIES = new Set(['fill-opacity', 'fill-rule']);
+const BOTH_PAINTS_PROPERTIES = new Set(['paint-order']);
+
+/**
+ * Reports the inherited properties whose `var()` / `env()` / `attr()` declaration was taken as the
+ * parent's value (see `Inherited.unresolved`), when the path paints with them: fill properties
+ * with a painted fill, stroke ones with a painted stroke, `paint-order` with both.
+ */
+function warnUnresolvedStyle(ctx: ConvertContext, style: Inherited, fill: boolean, stroke: boolean): void {
+    for (const [prop, value] of Object.entries(style.unresolved ?? {})) {
+        const used = FILL_PROPERTIES.has(prop)
+            ? fill
+            : BOTH_PAINTS_PROPERTIES.has(prop)
+              ? fill && stroke
+              : !prop.startsWith('stroke-') || stroke;
+        if (used)
+            warnOnce(ctx, {
+                code: 'unsupported-style',
+                message: `${prop}: ${value} cannot be resolved (var(), env() and attr() are not substituted); the inherited value is used.`,
+                node: 'path',
+            });
+    }
 }
 
 /** Emits the fill attributes; true when the fill is painted. */
 function emitFill(ctx: ConvertContext, path: PathBuilder, style: Inherited): boolean {
     warnIgnoredPaint(ctx, style, 'fill');
     const fill = parsePaint(fillOf(style, ctx.fillBlackForUnfilled));
-    const raw = fill.ref !== undefined ? ctx.gradients.get(fill.ref) : undefined;
+    warnExternalPaint(ctx, fill, 'fill');
+    const found = fill.ref !== undefined ? ctx.gradients.get(fill.ref) : undefined;
+    const raw = found?.stops.length ? found : undefined;
     let fillColor = fill.color;
-    if (raw) {
-        path.gradient(raw, 'fillColor');
+    if (found) {
+        // A gradient wins over the fallback color, even one without stops (it paints none).
+        if (raw) path.gradient(raw, 'fillColor');
+        else warnUnpainted(ctx, fill.ref!, 'fill');
         fillColor = undefined;
     } else if (fill.ref !== undefined && ctx.patternIds.has(fill.ref)) {
-        ctx.warn({
+        // Without fallback color nothing is painted, as for a stroke (an invented color would be worse).
+        warnOnce(ctx, {
             code: 'unsupported-paint',
-            message: `<pattern> fill "${fill.ref}" cannot be represented in a VectorDrawable; using ${fillColor ? 'its fallback color' : 'black'}.`,
+            message: `<pattern> fill "${fill.ref}" cannot be represented in a VectorDrawable; ${fillColor ? 'using its fallback color' : 'the fill is not painted'}.`,
             node: 'path',
         });
-        fillColor ??= '#000000';
     } else if (fill.ref !== undefined && fillColor === undefined) {
-        // An unknown reference keeps the documented black fill (SVG 2 would paint nothing here too).
-        const invalid = invalidGradient(ctx, fill.ref, 'fill');
-        ctx.warn({
-            code: 'missing-gradient',
-            message: invalid ?? `Path references unknown gradient "${fill.ref}"; using black.`,
-            node: 'path',
-        });
-        if (!invalid) fillColor = '#000000';
+        warnUnpainted(ctx, fill.ref, 'fill');
     }
     // A missing reference with a fallback color is valid SVG: the fallback is the rendering.
     const color = solidPaint(ctx, fillColor, style, 'fill');
@@ -283,24 +413,22 @@ type StrokePaint = { gradient: RawGradient } | ResolvedColor;
 function resolveStroke(ctx: ConvertContext, style: Inherited): StrokePaint | null {
     warnIgnoredPaint(ctx, style, 'stroke');
     const stroke = parsePaint(style.stroke ?? 'none');
+    warnExternalPaint(ctx, stroke, 'stroke');
     // A resolvable gradient wins over the fallback color (SVG uses the fallback only for a bad reference).
     const strokeGradient = stroke.ref !== undefined ? ctx.gradients.get(stroke.ref) : undefined;
+    if (strokeGradient?.stops.length === 0) {
+        warnUnpainted(ctx, stroke.ref!, 'stroke'); // paints none, even over a fallback color
+        return null;
+    }
     const strokeColor = strokeGradient ? undefined : stroke.color;
     if (stroke.ref !== undefined && !strokeGradient) {
         if (ctx.patternIds.has(stroke.ref))
-            ctx.warn({
+            warnOnce(ctx, {
                 code: 'unsupported-paint',
                 message: `Pattern strokes are not supported by VectorDrawable; ${strokeColor ? 'using the fallback color' : 'stroke dropped'}.`,
                 node: 'path',
             });
-        else if (strokeColor === undefined)
-            ctx.warn({
-                code: 'missing-gradient',
-                message:
-                    invalidGradient(ctx, stroke.ref, 'stroke') ??
-                    `Stroke references unknown paint "${stroke.ref}"; stroke dropped.`,
-                node: 'path',
-            });
+        else if (strokeColor === undefined) warnUnpainted(ctx, stroke.ref, 'stroke');
     }
     if (strokeGradient) return { gradient: strokeGradient };
     return solidPaint(ctx, strokeColor, style, 'stroke');
@@ -335,7 +463,7 @@ function dashedPathData(
               })
             : null;
     if (dashed === null) {
-        ctx.warn({
+        warnOnce(ctx, {
             code: 'unsupported-stroke-dasharray',
             message: `stroke-dasharray="${style.strokeDasharray!.trim()}" could not be converted to dash geometry; the stroke is drawn solid.`,
             node: 'path',
@@ -348,19 +476,23 @@ function dashedPathData(
 /** Arc-length tolerance of dash cuts on curves, relative to the viewport diagonal (24 → 2.4e-4). */
 const DASH_TOLERANCE = 1e-5;
 
-/** Emits the attributes of a painted stroke. */
-function emitStroke(
-    ctx: ConvertContext,
-    path: PathBuilder,
-    style: Inherited,
-    paint: StrokePaint,
-    bake: Matrix | undefined,
-): void {
+/**
+ * The `strokeWidth` attribute value: the stroke width, scaled with baked geometry (approximated for
+ * a non-uniform scale), formatted. `'0'` (rounded to zero included) draws nothing in SVG, while
+ * Android draws a hairline: such a stroke is not emitted.
+ */
+function strokeWidthAttr(ctx: ConvertContext, style: Inherited, bake: Matrix | undefined): string {
+    const strokeScale = bake ? scaleFactor(bake) : 1;
+    if (style.strokeWidth?.trim() && Number.isNaN(parseLength(style.strokeWidth, diagonal(style.viewport))))
+        warnUnresolvedLength(ctx, 'stroke-width', style.strokeWidth, 'path', '1');
+    return formatNumber(strokeWidthOf(style) * strokeScale, ctx.precision);
+}
+
+/** Emits the attributes of a painted stroke (`width`: see {@link strokeWidthAttr}). */
+function emitStroke(ctx: ConvertContext, path: PathBuilder, style: Inherited, paint: StrokePaint, width: string): void {
     if ('gradient' in paint) path.gradient(paint.gradient, 'strokeColor');
     else path.attr('strokeColor', paint.color);
-    // Baked geometry is scaled, the stroke must follow (approximated for non-uniform scale).
-    const strokeScale = bake ? scaleFactor(bake) : 1;
-    path.attr('strokeWidth', formatNumber(strokeWidthOf(style) * strokeScale, ctx.precision));
+    path.attr('strokeWidth', width);
     const sa = alphaAttr(style.strokeOpacity * style.opacityMul, 'alpha' in paint ? paint.alpha : 1);
     if (sa !== null) path.attr('strokeAlpha', sa);
     if (style.strokeLinecap === 'round' || style.strokeLinecap === 'square')
@@ -368,7 +500,7 @@ function emitStroke(
     if (style.strokeLinejoin === 'round' || style.strokeLinejoin === 'bevel' || style.strokeLinejoin === 'miter')
         path.attr('strokeLineJoin', style.strokeLinejoin);
     else if (style.strokeLinejoin === 'arcs' || style.strokeLinejoin === 'miter-clip')
-        ctx.warn({
+        warnOnce(ctx, {
             code: 'unsupported-attribute',
             message: `stroke-linejoin="${style.strokeLinejoin}" is not supported by VectorDrawable; miter is used.`,
             node: 'path',
@@ -562,6 +694,21 @@ export function roundPathNumbers(d: string, precision: number): string {
     return out + d.slice(last);
 }
 
+/** Ids the converter generates (clip-paths, masks, symbol viewports…): never an `android:name`. */
+const SYNTHETIC_ID = /^svgvd-/;
+
+/**
+ * The `android:name` of `el` with `preserveIds`: its id, reserved so that no other element emits it
+ * (`ctx.names`). Undefined when the option is off, without id, for a synthetic id, or when the name
+ * was already emitted (another `<use>` instance, a duplicated id).
+ */
+export function claimName(ctx: ConvertContext, el: XastElement): string | undefined {
+    const id = el.attributes?.id;
+    if (!ctx.names || !id || SYNTHETIC_ID.test(id) || ctx.names.has(id)) return undefined;
+    ctx.names.add(id);
+    return id;
+}
+
 /**
  * Renders a drawable element as a `<path>` with its fill and stroke (solid colors or gradients),
  * reporting what a VectorDrawable cannot express. `bake` is a transform already applied to `d`.
@@ -578,15 +725,24 @@ export function renderPath(
     const pathData = bake ? transformPathData(d, bake) : roundPathNumbers(normalizeArcFlags(d), ctx.precision);
     const usedGradient = ctx.usesGradient;
     const path = new PathBuilder(ctx, pathData, style, pad, bake, pathData, d);
-    const fillPainted = emitFill(ctx, path, style);
-    const stroke = resolveStroke(ctx, style);
+    // A fill of a geometry without area (a line, a flat polyline) covers nothing: beside a painted
+    // stroke it is neither emitted nor reported (no empty fill path, no fillColor on the stroke path).
+    // A flat path with only a fill is left as is, emitted after the stroke is known.
+    const flat = !enclosesArea(pathData);
+    let fillPainted = !flat && emitFill(ctx, path, style);
+    const paint = resolveStroke(ctx, style);
+    const strokeWidth = paint ? strokeWidthAttr(ctx, style, bake) : undefined;
+    // A zero width (rounded to zero included) draws nothing in SVG, a hairline on Android.
+    const stroke = strokeWidth === '0' ? null : paint;
     const dashed = stroke ? dashedPathData(ctx, d, el, style, bake) : undefined;
     const strokePainted = stroke !== null && dashed !== '';
+    if (flat && !strokePainted) fillPainted = emitFill(ctx, path, style);
     // A dashed stroke gets its own path: the fill keeps the original geometry.
     const strokePath = dashed ? new PathBuilder(ctx, dashed, style, pad, bake, pathData) : path;
     // An exact elliptical radial fill transforms its path's space: only without a stroke on that path.
     path.settleFill(strokePath !== path || !strokePainted);
-    if (stroke && strokePainted) emitStroke(ctx, strokePath, style, stroke, bake);
+    if (ctx.nonZeroFills) path.nonZeroFill(fillPainted, strokePath === path && strokePainted);
+    if (stroke && strokePainted) emitStroke(ctx, strokePath, style, stroke, strokeWidth!);
     const paintOrder = style.paintOrder;
     const strokeFirst = fillPainted && strokePainted && !!paintOrder && strokeBeforeFill(paintOrder);
     // A path painting nothing (no fill nor stroke, transparent, zero alpha or width) is dropped.
@@ -601,25 +757,29 @@ export function renderPath(
     if (!paths.some((p) => p.hasGradient)) ctx.usesGradient = usedGradient;
     // Separate fill and stroke paths honor paint-order by their order.
     if (paths.length === 2 && strokeFirst) paths.reverse();
+    paths[0]!.name = claimName(ctx, el);
+    warnUnresolvedStyle(ctx, style, fillPainted, strokePainted);
 
     const vectorEffect = presentation(el, 'vector-effect')?.trim();
+    // Once per value and conversion: a `<use>` instance reads the same element again.
     if (vectorEffect && vectorEffect !== 'none')
-        ctx.warn({
+        warnOnce(ctx, {
             code: 'unsupported-attribute',
             message: `vector-effect="${vectorEffect}" cannot be represented in a VectorDrawable; ignored.`,
             node: 'path',
         });
     if (strokeFirst && strokePath === path)
-        ctx.warn({
+        warnOnce(ctx, {
             code: 'unsupported-attribute',
             message: `paint-order="${paintOrder!.trim()}" cannot be represented in a VectorDrawable; the stroke is drawn over the fill.`,
             node: 'path',
         });
 
     // `opacity` composites the element as one layer; splitting it into fillAlpha and
-    // strokeAlpha lets the fill show through the inner half of the stroke.
+    // strokeAlpha lets the fill show through the inner half of the stroke. A group opacity folded
+    // onto several such paths says the same thing for each: reported once (svgo may merge them).
     if (style.opacityMul < 1 && fillPainted && strokePainted)
-        ctx.warn({
+        warnOnce(ctx, {
             code: 'opacity-approximated',
             message: 'opacity on a path with both fill and stroke is approximated by fillAlpha/strokeAlpha.',
             node: 'path',

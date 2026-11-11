@@ -25,8 +25,12 @@ const ARG_COUNT: Record<string, number> = {
 /** Positions of the large-arc and sweep flags inside one A/a argument group. */
 const ARC_FLAG_INDEXES = new Set([3, 4]);
 
+/** One path-data number, SVG 2 grammar: sign, digits with an optional dot, or a leading dot; exponent. */
+const NUMBER_SOURCE = String.raw`[+-]?(?:\d+\.?\d*|\.\d+)(?:[eE][+-]?\d+)?`;
 /** A full path-data number token (same grammar as the tokenizer's number branch). */
-const NUMBER_TOKEN_RE = /^-?(?:\d*\.\d+|\d+\.?)(?:[eE][+-]?\d+)?$/;
+const NUMBER_TOKEN_RE = new RegExp(`^${NUMBER_SOURCE}$`);
+/** A command-letter token. Anchored: the `e` of an exponent (`1e-5`) is part of a number, not a command. */
+const COMMAND_TOKEN_RE = /^[MmLlHhVvCcSsQqTtAaZz]$/;
 
 /**
  * Splits a compact arc-flag token. SVG flags are single characters (`0`/`1`) and need no separator,
@@ -55,7 +59,7 @@ interface FlagSpan {
 export function parsePath(d: string, flagSpans?: FlagSpan[]): Command[] {
     const commands: Command[] = [];
     // Match a command letter or a number (incl. scientific notation, leading sign, dot).
-    const tokenRe = /([MmLlHhVvCcSsQqTtAaZz])|(-?(?:\d*\.\d+|\d+\.?)(?:[eE][+-]?\d+)?)/g;
+    const tokenRe = new RegExp(`([MmLlHhVvCcSsQqTtAaZz])|(${NUMBER_SOURCE})`, 'g');
     const tokens: string[] = [];
     // Source offset of each token, kept in sync when a compact arc flag is split off.
     const offsets: number[] = [];
@@ -70,12 +74,14 @@ export function parsePath(d: string, flagSpans?: FlagSpan[]): Command[] {
     while (i < tokens.length) {
         const tok = tokens[i]!;
         let cmd: string;
-        if (/[a-zA-Z]/.test(tok)) {
+        if (COMMAND_TOKEN_RE.test(tok)) {
             cmd = tok;
             i += 1;
         } else {
             // Bare number with no leading letter: only valid if a previous command can repeat.
-            if (!prevCmd) break;
+            // Z/z takes no argument and cannot repeat: a number after it is an error (SVG 2 §9.5.4),
+            // and treating it as an implicit Z would never consume it (endless loop).
+            if (!prevCmd || prevCmd === 'Z' || prevCmd === 'z') break;
             // After an explicit moveto, subsequent coordinate pairs are implicit linetos.
             cmd = prevCmd === 'M' ? 'L' : prevCmd === 'm' ? 'l' : prevCmd;
         }
@@ -95,7 +101,7 @@ export function parsePath(d: string, flagSpans?: FlagSpan[]): Command[] {
         const spans: FlagSpan[] = [];
         for (let k = 0; k < count; k += 1) {
             const next = tokens[i];
-            if (next === undefined || /[a-zA-Z]/.test(next)) break;
+            if (next === undefined || COMMAND_TOKEN_RE.test(next)) break;
             if (upper === 'A' && ARC_FLAG_INDEXES.has(k)) {
                 const split = splitArcFlag(next);
                 if (split) {

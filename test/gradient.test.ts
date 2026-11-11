@@ -130,8 +130,8 @@ describe('collectGradients — stop count', () => {
         expect(stroke.replace('strokeColor', 'fillColor')).toBe(fill);
     });
 
-    it('skips a gradient without stops', () => {
-        expect(collectGradients([linear('g', [])], '#000', noWarn).has('g')).toBe(false);
+    it('keeps a gradient without stops, which paints none', () => {
+        expect(collectGradients([linear('g', [])], '#000', noWarn).get('g')?.stops).toEqual([]);
     });
 });
 
@@ -152,8 +152,8 @@ describe('collectGradients — Android color references', () => {
         expect(gradients.get('a')!.stops.map((s) => s.color)).toEqual(['@color/brand', '?attr/tint', '#800000FF']);
         expect(gradients.get('b')!.stops.map((s) => s.color)).toEqual(['#800000FF', '#800000FF']);
         expect(warnings.map((w) => [w.code, w.node])).toEqual([
-            ['unsupported-paint', 'stop'],
-            ['unsupported-paint', 'stop'],
+            ['unsupported-color-reference', 'stop'],
+            ['unsupported-color-reference', 'stop'],
         ]);
         expect(warnings.map((w) => w.message.match(/"(\w)"/)![1])).toEqual(['a', 'b']);
     });
@@ -567,6 +567,50 @@ describe('collectGradients — empty or invalid attributes do not block href inh
         for (const g of both(input))
             expect(g).toContain('android:startX="0" android:startY="0" android:endX="100" android:endY="0"');
     });
+
+    // Chrome and Firefox render x1="10abc" like x1="abc" (initial value 0): the leading number is not kept.
+    it('drops a number followed by garbage (10abc) like any invalid value, without a warning', () => {
+        const input = svg(
+            `<linearGradient id="g" gradientUnits="userSpaceOnUse" x1="10abc" x2="20">${stops}</linearGradient>`,
+        );
+        for (const optimize of [true, false]) {
+            const { xml, warnings } = convert(input, { optimize });
+            expect(coords(xml)).toContain('android:startX="0" android:startY="0" android:endX="20"');
+            expect(warnings).toEqual([]);
+        }
+    });
+
+    it('inherits the template value under x1="10abc", in both modes', () => {
+        const input = svg(
+            `<linearGradient id="t" gradientUnits="userSpaceOnUse" x1="10" x2="20">${stops}</linearGradient>` +
+                '<linearGradient id="g" href="#t" x1="10abc"/>',
+        );
+        for (const optimize of [true, false]) {
+            const { xml, warnings } = convert(input, { optimize });
+            expect(coords(xml)).toContain('android:startX="10" android:startY="0" android:endX="20"');
+            expect(warnings).toEqual([]);
+        }
+    });
+
+    it('keeps a valid length it cannot resolve, with its warning (1ex: leading number, calc(): initial value)', () => {
+        const cases: [own: string, expected: string, used: string][] = [
+            ['x1="1ex"', 'android:startX="1"', 'its leading number is used'],
+            ['x1="calc(10px)"', 'android:startX="0"', 'the initial value is used'],
+        ];
+        for (const [own, expected, used] of cases) {
+            const input = svg(
+                `<linearGradient id="t" gradientUnits="userSpaceOnUse" x1="5" x2="20">${stops}</linearGradient>` +
+                    `<linearGradient id="g" href="#t" ${own}/>`,
+            );
+            for (const optimize of [true, false]) {
+                const { xml, warnings } = convert(input, { optimize });
+                expect(coords(xml), own).toContain(expected);
+                expect(warnings, own).toEqual([
+                    expect.objectContaining({ code: 'unsupported-attribute', message: expect.stringContaining(used) }),
+                ]);
+            }
+        }
+    });
 });
 
 /** 16 alternating white / black stops: their linearRGB blend needs more items than the cap allows. */
@@ -861,4 +905,62 @@ describe('color-interpolation="linearRGB" — intermediate stops in linear light
             });
         }
     });
+});
+
+describe('invalid gradientTransform is reported (T-88)', () => {
+    const svg = (inner: string): string => `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">${inner}</svg>`;
+    const STOPS = '<stop offset="0" stop-color="#f00"/><stop offset="1" stop-color="#00f"/>';
+    const direct = (value: string): string =>
+        svg(
+            `<linearGradient id="g" gradientTransform="${value}">${STOPS}</linearGradient><rect width="24" height="24" fill="url(#g)"/>`,
+        );
+    const viaHref = (value: string): string =>
+        svg(
+            `<linearGradient id="t" gradientTransform="rotate(90)">${STOPS}</linearGradient>` +
+                `<linearGradient id="g" href="#t" gradientTransform="${value}"/><rect width="24" height="24" fill="url(#g)"/>`,
+        );
+    const INVALID = ['rotate(foo)', 'translate(10px 0)', 'translate(foo 5) rotate(90)'];
+    const ignored = (value: string): Warning => ({
+        code: 'unsupported-attribute',
+        message: `Gradient "g" has gradientTransform="${value}", not a valid transform list; ignored.`,
+        node: 'linearGradient',
+    });
+    const endpoints = (xml: string): string[] =>
+        ['startX', 'startY', 'endX', 'endY'].map((k) => new RegExp(`android:${k}="([^"]*)"`).exec(xml)![1]!);
+
+    for (const optimize of [true, false]) {
+        describe(`optimize: ${optimize}`, () => {
+            for (const value of INVALID) {
+                it(`reports ${value} on a gradient and renders it untransformed`, () => {
+                    const { xml, warnings } = convert(direct(value), { optimize });
+                    expect(warnings).toEqual([ignored(value)]);
+                    expect(xml).toBe(convert(direct(''), { optimize }).xml);
+                    expect(() => convert(direct(value), { optimize, strict: true })).toThrow(/gradientTransform/);
+                });
+
+                it(`reports ${value} on a gradient whose template's gradientTransform then applies`, () => {
+                    const { xml, warnings } = convert(viaHref(value), { optimize });
+                    expect(warnings).toEqual([ignored(value)]);
+                    expect(endpoints(xml)).toEqual(['0', '0', '0', '24']); // the template's rotate(90)
+                    expect(() => convert(viaHref(value), { optimize, strict: true })).toThrow(/gradientTransform/);
+                });
+            }
+
+            it('reports an invalid gradientTransform once for a gradient used twice', () => {
+                const doc = svg(
+                    `<linearGradient id="g" gradientTransform="rotate(foo)">${STOPS}</linearGradient>` +
+                        '<rect width="12" height="24" fill="url(#g)"/><rect x="12" width="12" height="24" fill="url(#g)"/>',
+                );
+                expect(convert(doc, { optimize }).warnings).toEqual([ignored('rotate(foo)')]);
+            });
+
+            it('does not report an empty or valid gradientTransform', () => {
+                expect(convert(direct(''), { optimize, strict: true }).warnings).toEqual([]);
+                expect(convert(viaHref(''), { optimize, strict: true }).warnings).toEqual([]);
+                const { xml, warnings } = convert(direct('rotate(90 12 12)'), { optimize, strict: true });
+                expect(warnings).toEqual([]);
+                expect(xml).not.toBe(convert(direct(''), { optimize }).xml);
+            });
+        });
+    }
 });

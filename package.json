@@ -34,7 +34,8 @@
         "./browser-lite": {
             "types": "./dist/browser-lite.d.ts",
             "import": "./dist/browser-lite.js"
-        }
+        },
+        "./package.json": "./package.json"
     },
     "bin": {
         "svgvd": "dist/cli.js"
@@ -44,12 +45,13 @@
     ],
     "sideEffects": false,
     "scripts": {
-        "build": "tsup && node scripts/fix-dts-svgo.mjs",
+        "build": "node -e \"require('node:fs').rmSync('dist', { recursive: true, force: true })\" && tsup && node scripts/fix-dts-svgo.mjs",
         "test": "vitest run",
         "test:watch": "vitest",
         "test:coverage": "vitest run --coverage",
         "test:visual": "vitest run test/visual.test.ts",
         "typecheck": "tsc --noEmit",
+        "check:types": "d=$(mktemp -d) && pnpm pack --pack-destination \"$d\" > /dev/null && npx --yes @arethetypeswrong/cli@0.18.5 \"$d\"/*.tgz --ignore-rules cjs-resolves-to-esm",
         "lint": "eslint .",
         "lint:fix": "eslint . --fix",
         "format": "prettier --write .",
@@ -93,16 +95,20 @@
     },
     "packageManager": "pnpm@12.18.0",
     "engines": {
-        "node": ">=18"
+        "node": ">=20"
     },
     "dependencies": {
         "svgo": "^4.1.0"
     },
     "peerDependencies": {
-        "@resvg/resvg-js": "^2.6.2"
+        "@resvg/resvg-js": "^2.6.2",
+        "opentype.js": "^2.0.0"
     },
     "peerDependenciesMeta": {
         "@resvg/resvg-js": {
+            "optional": true
+        },
+        "opentype.js": {
             "optional": true
         }
     },
@@ -113,6 +119,7 @@
         "@vitest/coverage-v8": "^5.1.0",
         "eslint": "^10.14.0",
         "globals": "^17.14.0",
+        "opentype.js": "^2.0.0",
         "prettier": "^3.9.10",
         "tsup": "^9.0.0",
         "typescript": "^5.6.0",

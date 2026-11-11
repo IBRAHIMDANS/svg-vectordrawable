@@ -242,9 +242,7 @@ exports[`golden snapshots (optimize:false, deterministic) > radial-gradient-tran
 
 exports[`golden snapshots (optimize:false, deterministic) > skew-group.svg 1`] = `
 {
-  "warnings": [
-    "group-skew",
-  ],
+  "warnings": [],
   "xml": "<vector xmlns:android="http://schemas.android.com/apk/res/android"
     android:width="24dp"
     android:height="24dp"
@@ -293,6 +291,325 @@ exports[`golden snapshots (optimize:false, deterministic) > svgo-cubic-smooth.sv
         android:pathData="M3 15c3 -2 6 -2 9 0s6 2 9 0"
         android:strokeColor="#FF000000"
         android:strokeWidth="2" />
+</vector>
+",
+}
+`;
+
+exports[`golden snapshots (optimize:false, deterministic) > tool-figma-clip.svg 1`] = `
+{
+  "warnings": [],
+  "xml": "<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24">
+    <group>
+        <clip-path android:pathData="M2 2L22 2L22 22L2 22Z" />
+        <path
+            android:pathData="M12 2C6.477 2 2 6.477 2 12C2 17.523 6.477 22 12 22C17.523 22 22 17.523 22 12C22 6.477 17.523 2 12 2Z"
+            android:fillColor="#FF0D99FF" />
+        <path
+            android:pathData="M7 7H17V17H7V7ZM9 9V15H15V9H9Z"
+            android:fillColor="#FFFFFFFF"
+            android:fillType="evenOdd" />
+        <path
+            android:pathData="M-2 18L26 18"
+            android:strokeColor="#FF1E1E1E"
+            android:strokeWidth="2"
+            android:strokeLineCap="round" />
+    </group>
+</vector>
+",
+}
+`;
+
+exports[`golden snapshots (optimize:false, deterministic) > tool-figma-gradient-stroke.svg 1`] = `
+{
+  "warnings": [],
+  "xml": "<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:aapt="http://schemas.android.com/aapt"
+    android:width="32dp"
+    android:height="32dp"
+    android:viewportWidth="32"
+    android:viewportHeight="32">
+    <path
+        android:pathData="M8,0.5h16a7.5,7.5 0 0 1 7.5,7.5v16a7.5,7.5 0 0 1 -7.5,7.5h-16a7.5,7.5 0 0 1 -7.5,-7.5v-16a7.5,7.5 0 0 1 7.5,-7.5z">
+        <aapt:attr name="android:fillColor">
+            <gradient
+                android:startX="16"
+                android:startY="0"
+                android:endX="16"
+                android:endY="32"
+                android:type="linear">
+                <item android:offset="0" android:color="#FF7B61FF" />
+                <item android:offset="1" android:color="#FF4A2FD6" />
+            </gradient>
+        </aapt:attr>
+    </path>
+    <path
+        android:pathData="M8,0.5h16a7.5,7.5 0 0 1 7.5,7.5v16a7.5,7.5 0 0 1 -7.5,7.5h-16a7.5,7.5 0 0 1 -7.5,-7.5v-16a7.5,7.5 0 0 1 7.5,-7.5z"
+        android:strokeColor="#FF000000"
+        android:strokeWidth="1"
+        android:strokeAlpha="0.1" />
+    <path
+        android:pathData="M10 16.5L14 20.5L22 11.5"
+        android:strokeColor="#FFFFFFFF"
+        android:strokeWidth="2.5"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round" />
+    <path
+        android:pathData="M21,8a3,3 0 1 0 6,0a3,3 0 1 0 -6,0z"
+        android:fillAlpha="0.6">
+        <aapt:attr name="android:fillColor">
+            <gradient
+                android:centerX="24"
+                android:centerY="8"
+                android:gradientRadius="3"
+                android:type="radial">
+                <item android:offset="0" android:color="#FFFFFFFF" />
+                <item android:offset="1" android:color="#00FFFFFF" />
+            </gradient>
+        </aapt:attr>
+    </path>
+</vector>
+",
+}
+`;
+
+exports[`golden snapshots (optimize:false, deterministic) > tool-illustrator-gradient.svg 1`] = `
+{
+  "warnings": [],
+  "xml": "<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:aapt="http://schemas.android.com/aapt"
+    android:width="48dp"
+    android:height="48dp"
+    android:viewportWidth="48"
+    android:viewportHeight="48">
+    <path
+        android:pathData="M10,4h28c3.3,0,6,2.7,6,6v28c0,3.3-2.7,6-6,6H10c-3.3,0-6-2.7-6-6V10C4,6.7,6.7,4,10,4z">
+        <aapt:attr name="android:fillColor">
+            <gradient
+                android:startX="4"
+                android:startY="24"
+                android:endX="44"
+                android:endY="24"
+                android:type="linear">
+                <item android:offset="0" android:color="#FFFF7A00" />
+                <item android:offset="0.5" android:color="#FFFF3D6E" />
+                <item android:offset="1" android:color="#FF8A2BE2" />
+            </gradient>
+        </aapt:attr>
+    </path>
+    <path
+        android:pathData="M12,24a12,12 0 1 0 24,0a12,12 0 1 0 -24,0z">
+        <aapt:attr name="android:fillColor">
+            <gradient
+                android:centerX="24"
+                android:centerY="24"
+                android:gradientRadius="12"
+                android:type="radial">
+                <item android:offset="0" android:color="#FFFFFFFF" />
+                <item android:offset="1" android:color="#00FFFFFF" />
+            </gradient>
+        </aapt:attr>
+    </path>
+</vector>
+",
+}
+`;
+
+exports[`golden snapshots (optimize:false, deterministic) > tool-illustrator-style-classes.svg 1`] = `
+{
+  "warnings": [
+    "unsupported-style",
+  ],
+  "xml": "<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="48dp"
+    android:height="48dp"
+    android:viewportWidth="48"
+    android:viewportHeight="48">
+    <path
+        android:pathData="M6,24a18,18 0 1 0 36,0a18,18 0 1 0 -36,0z"
+        android:fillColor="#FF000000" />
+    <path
+        android:pathData="M14,24.5l6.2,6.2L34,17"
+        android:fillColor="#FF000000" />
+    <path
+        android:pathData="M24,9.5L26.1,13.8L30.8,14.4L27.4,17.7L28.2,22.4L24,20.2L19.8,22.4L20.6,17.7L17.2,14.4L21.9,13.8z"
+        android:fillColor="#FF000000" />
+    <path
+        android:pathData="M6,38h36v4h-36z"
+        android:fillColor="#FF000000" />
+</vector>
+",
+}
+`;
+
+exports[`golden snapshots (optimize:false, deterministic) > tool-illustrator-svgid-clip.svg 1`] = `
+{
+  "warnings": [],
+  "xml": "<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="64dp"
+    android:height="64dp"
+    android:viewportWidth="64"
+    android:viewportHeight="64">
+    <group>
+        <clip-path android:pathData="M18,8h28a10,10 0 0 1 10,10v28a10,10 0 0 1 -10,10h-28a10,10 0 0 1 -10,-10v-28a10,10 0 0 1 10,-10z" />
+        <path
+            android:pathData="M0,0h64v64h-64z"
+            android:fillColor="#FF2B7BB9" />
+        <path
+            android:pathData="M32,52a20,20 0 1 0 40,0a20,20 0 1 0 -40,0z"
+            android:fillColor="#FFF5C400" />
+    </group>
+</vector>
+",
+}
+`;
+
+exports[`golden snapshots (optimize:false, deterministic) > tool-inkscape-layers.svg 1`] = `
+{
+  "warnings": [],
+  "xml": "<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="48dp"
+    android:height="48dp"
+    android:viewportWidth="12.7"
+    android:viewportHeight="12.7">
+    <group
+        android:translateX="-48.5"
+        android:translateY="-72.25">
+        <path
+            android:pathData="M49.35,78.6a5.5,5.5 0 1 0 11,0a5.5,5.5 0 1 0 -11,0z"
+            android:fillColor="#FFFF6600"
+            android:strokeColor="#FF2B0000"
+            android:strokeWidth="0.529"
+            android:strokeLineCap="round"
+            android:strokeLineJoin="round" />
+        <group
+            android:rotation="45">
+            <path
+                android:pathData="M91.86,16h5v1.6h-5z"
+                android:fillColor="#FFFFFFFF" />
+        </group>
+    </group>
+</vector>
+",
+}
+`;
+
+exports[`golden snapshots (optimize:false, deterministic) > tool-inkscape-metadata-matrix.svg 1`] = `
+{
+  "warnings": [],
+  "xml": "<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:aapt="http://schemas.android.com/aapt"
+    android:width="48dp"
+    android:height="48dp"
+    android:viewportWidth="48"
+    android:viewportHeight="48">
+    <group
+        android:translateY="-1004.362">
+        <group
+            android:translateY="1004.362">
+            <path
+                android:pathData="M10,4h28a6,6 0 0 1 6,6v28a6,6 0 0 1 -6,6h-28a6,6 0 0 1 -6,-6v-28a6,6 0 0 1 6,-6z">
+                <aapt:attr name="android:fillColor">
+                    <gradient
+                        android:startX="4"
+                        android:startY="4"
+                        android:endX="44"
+                        android:endY="44"
+                        android:type="linear">
+                        <item android:offset="0" android:color="#FF00AA88" />
+                        <item android:offset="1" android:color="#FF0055D4" />
+                    </gradient>
+                </aapt:attr>
+            </path>
+        </group>
+        <group
+            android:translateX="-8.785"
+            android:translateY="1019.578"
+            android:rotation="-30">
+            <path
+                android:pathData="m 14,24 h 18 m -6,-6 6,6 -6,6"
+                android:strokeColor="#FFFFFFFF"
+                android:strokeWidth="3"
+                android:strokeLineCap="round"
+                android:strokeLineJoin="miter"
+                android:strokeMiterLimit="4" />
+        </group>
+        <group
+            android:translateY="1004.362">
+            <path
+                android:pathData="M 42,10 39.131,11.131 38,14 36.869,11.131 34,10 36.869,8.869 38,6 39.131,8.869 Z"
+                android:fillColor="#FFFFCC00" />
+        </group>
+    </group>
+</vector>
+",
+}
+`;
+
+exports[`golden snapshots (optimize:false, deterministic) > tool-sketch-artboard.svg 1`] = `
+{
+  "warnings": [],
+  "xml": "<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24">
+    <group>
+        <path
+            android:pathData="M2,12a10,10 0 1 0 20,0a10,10 0 1 0 -20,0z"
+            android:fillColor="#FF34C759"
+            android:fillType="evenOdd" />
+        <group
+            android:translateX="12"
+            android:translateY="4.929"
+            android:rotation="45">
+            <path
+                android:pathData="M5,0h0a1,1 0 0 1 1,1v8a1,1 0 0 1 -1,1h0a1,1 0 0 1 -1,-1v-8a1,1 0 0 1 1,-1z"
+                android:fillColor="#FFFFFFFF"
+                android:fillType="evenOdd" />
+            <group
+                android:translateX="10"
+                android:rotation="90">
+                <path
+                    android:pathData="M5,0h0a1,1 0 0 1 1,1v8a1,1 0 0 1 -1,1h0a1,1 0 0 1 -1,-1v-8a1,1 0 0 1 1,-1z"
+                    android:fillColor="#FFFFFFFF"
+                    android:fillType="evenOdd" />
+            </group>
+        </group>
+        <path
+            android:pathData="M3,20.5 L21,20.5"
+            android:strokeColor="#FF1C1C1E"
+            android:strokeWidth="1"
+            android:strokeAlpha="0.4"
+            android:strokeLineCap="round" />
+    </group>
+</vector>
+",
+}
+`;
+
+exports[`golden snapshots (optimize:false, deterministic) > tool-sketch-mask.svg 1`] = `
+{
+  "warnings": [],
+  "xml": "<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24">
+    <path
+        android:pathData="M12,22 C13.1,22 14,21.1 14,20 L10,20 C10,21.1 10.9,22 12,22 Z M18,16 L18,11 C18,7.93 16.37,5.36 13.5,4.68 L13.5,4 C13.5,3.17 12.83,2.5 12,2.5 C11.17,2.5 10.5,3.17 10.5,4 L10.5,4.68 C7.64,5.36 6,7.92 6,11 L6,16 L4,18 L4,19 L20,19 L20,18 L18,16 Z"
+        android:fillColor="#FF000000" />
+    <group>
+        <clip-path android:pathData="M12 22c-1.1 0-2-.9-2-2h4c0 1.1-.9 2-2 2ZM18 16l2 2v1H4V18l2-2V11c0-3.08 1.64-5.64 4.5-6.32V4c0-.83.67-1.5 1.5-1.5.83 0 1.5.67 1.5 1.5v.68C16.37 5.36 18 7.93 18 11Z" />
+        <path
+            android:pathData="M0,0h24v24h-24z"
+            android:fillColor="#FFE8341A"
+            android:fillType="evenOdd" />
+    </group>
 </vector>
 ",
 }

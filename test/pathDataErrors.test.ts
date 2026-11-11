@@ -93,9 +93,20 @@ describe('convert: path data in error', () => {
             // Only the rect is left.
             expect(pathData(r.xml)).toHaveLength(1);
             expect(pathData(r.xml)[0]).toMatch(/^M0[ ,]0h1v1/);
-            // optimize: true still drops these silently (svgo's removeHiddenElems): only an empty d
-            // is guarded in normalize.ts so far.
-            if (!optimize || d === '') expect(codes(r)).toEqual(['empty-path']);
+            expect(codes(r)).toEqual(['empty-path']);
+        });
+
+        it('strict rejects a path with nothing drawable', () => {
+            for (const d of [' ', 'garbage', 'M10 10 L', 'M10 10']) {
+                expect(() => convert(svg(d), { optimize, strict: true }), d).toThrow(/no drawable geometry/);
+            }
+        });
+
+        it('keeps the next shape after a path cut after a closepath (no merge)', () => {
+            const r = convert(svg('M0 0 L5 5 Z 10 10'), { optimize });
+            expect(pathData(r.xml)).toHaveLength(2);
+            expect(pathData(r.xml)[1]).toMatch(/^M0[ ,]0h1v1/);
+            expect(codes(r)).toEqual([]);
         });
 
         it('keeps a valid path unchanged', () => {
@@ -111,10 +122,6 @@ describe('convert: path data in error', () => {
             { optimize: false },
         );
         expect(pathData(r.xml)).toEqual(['M0 0 L5 5 Z']);
-    });
-
-    it('strict rejects a path with nothing drawable (optimize: false)', () => {
-        expect(() => convert(svg('M10 10 L'), { optimize: false, strict: true })).toThrow(/no drawable geometry/);
     });
 
     it('cuts a clip-path child in error too', () => {

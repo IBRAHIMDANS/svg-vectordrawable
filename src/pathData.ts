@@ -125,10 +125,11 @@ export function validPathData(d: string): string | null {
 /**
  * Applies an affine matrix to a path and returns a new path string in absolute commands only
  * (M/L/C/Q/Z). The path is first lowered (see {@link toAbsolute}: H/V→L, S→C, T→Q, A→cubics),
- * then every coordinate pair is mapped through `m`. Numbers are rounded to 3 decimals with
- * trailing zeros trimmed.
+ * then every coordinate pair is mapped through `m`. Numbers are rounded to `precision` decimals
+ * (3 by default) with trailing zeros trimmed.
  */
-export function transformPathData(d: string, m: Matrix): string {
+export function transformPathData(d: string, m: Matrix, precision = 3): string {
+    const format = precision === 3 ? fmt : (v: number): string => fmtAt(v, precision);
     const absCommands = toAbsolute(parsePath(d));
     const parts: string[] = [];
 
@@ -140,10 +141,34 @@ export function transformPathData(d: string, m: Matrix): string {
         const mapped: string[] = [];
         for (let k = 0; k + 1 < args.length; k += 2) {
             const [tx, ty] = applyPoint(m, args[k]!, args[k + 1]!);
-            mapped.push(fmt(tx), fmt(ty));
+            mapped.push(format(tx), format(ty));
         }
         parts.push(cmd + mapped.join(' '));
     }
 
     return parts.join('');
+}
+
+/** Like `fmt`, at `precision` decimals (0 to 20): no exponent, trailing zeros trimmed, -0 → "0". */
+function fmtAt(n: number, precision: number): string {
+    if (!Number.isFinite(n)) return '0';
+    const p = Math.min(Math.max(Math.round(precision), 0), 20);
+    let s = (Math.round(n * 10 ** p) / 10 ** p).toFixed(p);
+    if (s.includes('.')) s = s.replace(/\.?0+$/, '');
+    return s === '' || /^-0?$/.test(s) ? '0' : s;
+}
+
+/**
+ * Precision of coordinates drawn under a scale of `scale`: they are multiplied by it on screen, so
+ * they keep `ceil(log10(scale))` more decimals than `precision` (at most 20). Unchanged under a
+ * scale of 1 or less.
+ */
+export function scaledPrecision(precision: number, scale: number): number {
+    const extra = scale > 1 ? Math.ceil(Math.log10(scale) - 1e-9) : 0;
+    return Math.min(precision + extra, 20);
+}
+
+/** Largest factor by which `m` scales lengths along an axis (the longer of its column vectors). */
+export function matrixScale(m: Matrix): number {
+    return Math.max(Math.hypot(m.a, m.b), Math.hypot(m.c, m.d));
 }

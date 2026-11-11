@@ -40,6 +40,13 @@ export function scaleFactor(m: Matrix): number {
     return Math.sqrt(Math.abs(m.a * m.d - m.b * m.c));
 }
 
+/** Largest factor by which `m` stretches a length (its largest singular value). */
+export function maxStretch(m: Matrix): number {
+    const f = m.a * m.a + m.b * m.b + m.c * m.c + m.d * m.d;
+    const det = m.a * m.d - m.b * m.c;
+    return Math.sqrt((f + Math.sqrt(Math.max(0, f * f - 4 * det * det))) / 2);
+}
+
 const translation = (tx: number, ty: number): Matrix => ({ ...IDENTITY, e: tx, f: ty });
 const scaling = (sx: number, sy: number): Matrix => ({ ...IDENTITY, a: sx, d: sy });
 const rad = (deg: number): number => (deg * Math.PI) / 180;
@@ -55,52 +62,71 @@ const skewing = (ax: number, ay: number): Matrix => ({ ...IDENTITY, b: Math.tan(
 export const aroundOrigin = (m: Matrix, ox: number, oy: number): Matrix =>
     multiply(translation(ox, oy), multiply(m, translation(-ox, -oy)));
 
+/** An SVG `<number>` followed by an optional comma-wsp (SVG 1.1 transform list grammar). */
+const SVG_NUMBER_RE = /([+-]?(?:\d+\.?\d*|\.\d+)(?:e[+-]?\d+)?)[\s,]*/iy;
+
+/** The numbers of a transform function's argument list, or null when one is not a plain number. */
+function svgNumbers(s: string): number[] | null {
+    const out: number[] = [];
+    const re = new RegExp(SVG_NUMBER_RE);
+    const src = s.trim();
+    let n: RegExpExecArray | null;
+    while (re.lastIndex < src.length) {
+        if ((n = re.exec(src)) === null) return null;
+        out.push(parseFloat(n[1]!));
+    }
+    return src.endsWith(',') ? null : out;
+}
+
+/** Matrix of one SVG transform function, or null when its argument count is invalid. */
+function svgFunctionMatrix(name: string, args: readonly number[]): Matrix | null {
+    const [a0, a1, a2] = args as [number, number?, number?];
+    const n = args.length;
+    switch (name) {
+        case 'matrix':
+            return n === 6 ? { a: a0, b: a1!, c: a2!, d: args[3]!, e: args[4]!, f: args[5]! } : null;
+        case 'translate':
+            return n === 1 || n === 2 ? translation(a0, a1 ?? 0) : null;
+        case 'scale':
+            return n === 1 || n === 2 ? scaling(a0, a1 ?? a0) : null;
+        case 'rotate':
+            if (n === 1) return rotation(a0);
+            return n === 3 ? aroundOrigin(rotation(a0), a1!, a2!) : null;
+        case 'skewx':
+            return n === 1 ? skewing(a0, 0) : null;
+        case 'skewy':
+            return n === 1 ? skewing(0, a0) : null;
+    }
+    return null;
+}
+
 /**
  * Parses an SVG transform list (translate/scale/rotate/skewX/skewY/matrix) into one matrix.
- * Returns null when there is nothing parseable, so callers keep untransformed coordinates.
+ * Returns null when there is nothing parseable, so callers keep untransformed coordinates. As in
+ * browsers, a syntax error anywhere (an argument that is not a plain number, a unit, a wrong
+ * argument count, an unknown function) invalidates the whole list: see `isInvalidTransform`.
  */
 export function parseTransform(transform: string | undefined): Matrix | null {
     if (!transform) return null;
+    const s = transform.trim();
     let m = IDENTITY;
     let matched = false;
-    const re = /(matrix|translate|scale|rotate|skewX|skewY)\s*\(([^)]*)\)/gi;
+    const re = /\s*(matrix|translate|scale|rotate|skewX|skewY)\s*\(([^()]*)\)[\s,]*/iy;
     let fn: RegExpExecArray | null;
-    while ((fn = re.exec(transform)) !== null) {
-        const name = fn[1]!.toLowerCase();
-        const args = fn[2]!
-            .split(/[\s,]+/)
-            .map(Number)
-            .filter((n) => !Number.isNaN(n));
-        let next: Matrix | null = null;
-        switch (name) {
-            case 'matrix':
-                if (args.length >= 6)
-                    next = { a: args[0]!, b: args[1]!, c: args[2]!, d: args[3]!, e: args[4]!, f: args[5]! };
-                break;
-            case 'translate':
-                next = translation(args[0] ?? 0, args[1] ?? 0);
-                break;
-            case 'scale':
-                next = scaling(args[0] ?? 1, args[1] ?? args[0] ?? 1);
-                break;
-            case 'rotate':
-                next = rotation(args[0] ?? 0);
-                if (args.length >= 3) next = aroundOrigin(next, args[1]!, args[2]!);
-                break;
-            case 'skewx':
-                next = skewing(args[0] ?? 0, 0);
-                break;
-            case 'skewy':
-                next = skewing(0, args[0] ?? 0);
-                break;
-        }
-        if (next) {
-            m = multiply(m, next);
-            matched = true;
-        }
+    while (re.lastIndex < s.length) {
+        if ((fn = re.exec(s)) === null) return null;
+        const args = svgNumbers(fn[2]!);
+        const next = args && svgFunctionMatrix(fn[1]!.toLowerCase(), args);
+        if (!next) return null;
+        m = multiply(m, next);
+        matched = true;
     }
-    return matched ? m : null;
+    return matched && !/,\s*$/.test(s) ? m : null;
 }
+
+/** True when a `transform` attribute is set but is not a valid SVG transform list (rendered untransformed). */
+export const isInvalidTransform = (transform: string | undefined): boolean =>
+    transform !== undefined && !/^\s*(?:none\s*)?$/i.test(transform) && parseTransform(transform) === null;
 
 /** Degrees per CSS angle unit (a unitless angle is read as degrees, as SVG does). */
 const ANGLE_DEG: Record<string, number> = { '': 1, deg: 1, rad: 180 / Math.PI, grad: 0.9, turn: 360 };
@@ -122,7 +148,31 @@ function cssNumber(v: string): number {
 /** A CSS `<number>` or `<percentage>` (`scale(50%)` = `scale(0.5)`; NaN when unparseable). */
 const cssFactor = (v: string): number => (v.endsWith('%') ? cssNumber(v.slice(0, -1)) / 100 : cssNumber(v));
 
-/** Matrix of one CSS transform function (lengths in user units, angles in degrees), or null. */
+/**
+ * A CSS `rotate3d(x, y, z, angle)` that stays in the plane: around ±z (the axis is normalized, so only
+ * the sign of z matters), or a null rotation (a zero axis, a whole number of turns). Null otherwise.
+ */
+function rotation3d([x, y, z]: readonly [number, number, number], deg: number): Matrix | null {
+    if (![x, y, z, deg].every(Number.isFinite)) return null;
+    if (deg % 360 === 0 || (x === 0 && y === 0 && z === 0)) return IDENTITY;
+    if (x !== 0 || y !== 0) return null;
+    return rotation(z > 0 ? deg : -deg);
+}
+
+/**
+ * A CSS `matrix3d` (column-major) that is a 2D matrix (only a, b, c, d, e, f
+ * differ from the identity), as Chrome and Firefox compute it to `matrix(…)`. Null otherwise.
+ */
+function matrix3d(v: readonly number[]): Matrix | null {
+    const is2d = [2, 3, 6, 7, 8, 9, 11, 14].every((i) => v[i] === 0) && v[10] === 1 && v[15] === 1;
+    return is2d ? { a: v[0]!, b: v[1]!, c: v[4]!, d: v[5]!, e: v[12]!, f: v[13]! } : null;
+}
+
+/**
+ * Matrix of one CSS transform function (lengths in user units, angles in degrees), or null. A 3D
+ * function folds when it stays in the plane (`translate3d(x, y, 0)`, `scaleZ(1)`, `rotateZ(a)`,
+ * `rotateX(0)`, `perspective(none)`, a 2D `matrix3d`…), as Chrome and Firefox compute it to a 2D `matrix(…)`.
+ */
 function cssFunctionMatrix(name: string, args: readonly string[]): Matrix | null {
     const lengths = args.map((a) => parseLength(a));
     const numbers = args.map(cssNumber);
@@ -137,6 +187,9 @@ function cssFunctionMatrix(name: string, args: readonly string[]): Matrix | null
                 m = { a, b, c, d, e, f };
             }
             break;
+        case 'matrix3d':
+            if (n === 16) m = matrix3d(numbers);
+            break;
         case 'translate':
             if (n === 1 || n === 2) m = translation(lengths[0]!, lengths[1] ?? 0);
             break;
@@ -145,6 +198,12 @@ function cssFunctionMatrix(name: string, args: readonly string[]): Matrix | null
             break;
         case 'translatey':
             if (n === 1) m = translation(0, lengths[0]!);
+            break;
+        case 'translatez':
+            if (n === 1 && lengths[0] === 0) m = IDENTITY;
+            break;
+        case 'translate3d':
+            if (n === 3 && lengths[2] === 0) m = translation(lengths[0]!, lengths[1]!);
             break;
         case 'scale':
             if (n === 1 || n === 2) m = scaling(factors[0]!, factors[1] ?? factors[0]!);
@@ -155,8 +214,25 @@ function cssFunctionMatrix(name: string, args: readonly string[]): Matrix | null
         case 'scaley':
             if (n === 1) m = scaling(1, factors[0]!);
             break;
+        case 'scalez':
+            if (n === 1 && factors[0] === 1) m = IDENTITY;
+            break;
+        case 'scale3d':
+            if (n === 3 && factors[2] === 1) m = scaling(factors[0]!, factors[1]!);
+            break;
         case 'rotate':
+        case 'rotatez':
             if (n === 1) m = rotation(angles[0]!);
+            break;
+        case 'rotatex':
+        case 'rotatey':
+            if (n === 1 && angles[0]! % 360 === 0) m = IDENTITY;
+            break;
+        case 'rotate3d':
+            if (n === 4) m = rotation3d(numbers.slice(0, 3) as [number, number, number], angles[3]!);
+            break;
+        case 'perspective':
+            if (n === 1 && args[0]!.toLowerCase() === 'none') m = IDENTITY;
             break;
         case 'skew':
             if (n === 1 || n === 2) m = skewing(angles[0]!, angles[1] ?? 0);
@@ -174,7 +250,8 @@ function cssFunctionMatrix(name: string, args: readonly string[]): Matrix | null
 /**
  * Parses a CSS `transform` property value into one matrix (`none` is the identity). Returns null
  * when some part is not a 2D transform with absolute units: percentages of the reference box,
- * font-relative lengths, 3D functions, `calc()` / `var()`, or a syntax error.
+ * font-relative lengths, a 3D function that leaves the plane, `calc()` / `var()`, or a syntax error
+ * (arguments are comma-separated: `translate(1px 2px)` is invalid CSS, dropped by browsers).
  */
 export function parseCssTransform(value: string): Matrix | null {
     const s = value.trim();
@@ -184,8 +261,8 @@ export function parseCssTransform(value: string): Matrix | null {
     let matched = false;
     let fn: RegExpExecArray | null;
     while (re.lastIndex < s.length && (fn = re.exec(s)) !== null) {
-        const args = fn[2]!.trim().split(/\s*,\s*|\s+/);
-        const next = cssFunctionMatrix(fn[1]!.toLowerCase(), args);
+        const args = fn[2]!.split(',').map((a) => a.trim());
+        const next = args.some((a) => !a || /\s/.test(a)) ? null : cssFunctionMatrix(fn[1]!.toLowerCase(), args);
         if (!next) return null;
         m = multiply(m, next);
         matched = true;

@@ -1,7 +1,7 @@
 import { readFileSync, writeFileSync, readdirSync, statSync, mkdirSync } from 'node:fs';
 import { join, extname, basename, dirname, relative } from 'node:path';
 import { convert } from './convert.js';
-import { androidResourceName, assertNoNameCollisions, findNameCollisions, type NameCollision } from './resourceName.js';
+import { androidResourceName, findNameCollisions, type NameCollision } from './resourceName.js';
 import type { ConvertOptions, ConvertResult, Warning } from './types.js';
 
 /** How default output file names are derived from input file names. */
@@ -43,27 +43,37 @@ export function fallbackPngPath(xmlOutput: string, density: string): string {
 }
 
 /**
- * The output paths shared by several inputs, in input order; empty when all are distinct.
- * Only checked with `androidNames`, where distinct source names can collapse to the same resource name.
+ * The output paths shared by several inputs, in input order; empty when all are distinct. Two inputs
+ * can map to the same path through their names (`a.svg` and `a.SVG`, or `x/a.svg` and `y/a.svg` written
+ * to one directory) and, with `androidNames`, also when distinct names collapse to the same resource name.
+ * Paths differing only by case (`A.xml` and `a.xml`) collide too: they are one file on macOS and Windows.
  */
-export function findOutputCollisions(
-    entries: readonly { input: string; output: string }[],
-    naming?: FileNamingOptions,
-): NameCollision[] {
-    return naming?.androidNames
-        ? findNameCollisions(entries.map(({ input, output }) => ({ input, name: output })))
-        : [];
+export function findOutputCollisions(entries: readonly { input: string; output: string }[]): NameCollision[] {
+    return findNameCollisions(entries.map(({ input, output }) => ({ input, name: output })));
 }
 
+/** How output files are named, plus the output format (`'vector'` when absent), which names a collision. */
+export type CollisionNaming = FileNamingOptions & { format?: 'vector' | 'compose' };
+
 /**
- * Fails when several inputs would be written to the same output path, before anything is written.
- * Only checked with `androidNames` (see {@link findOutputCollisions}).
+ * What a collision is called in messages, chosen by the output format first: a Kotlin name with
+ * `format: 'compose'` (whose names are always Android resource names), then an Android resource name
+ * with `androidNames`, an output path otherwise.
  */
+export function collisionKind(naming?: CollisionNaming): string {
+    if (naming?.format === 'compose') return 'Kotlin name collision';
+    return naming?.androidNames ? 'Android resource name collision' : 'Output collision';
+}
+
+/** Fails when several inputs would be written to the same output path, before anything is written. */
 export function assertDistinctOutputs(
     entries: readonly { input: string; output: string }[],
-    naming?: FileNamingOptions,
+    naming?: CollisionNaming,
 ): void {
-    if (naming?.androidNames) assertNoNameCollisions(entries.map(({ input, output }) => ({ input, name: output })));
+    const collisions = findOutputCollisions(entries);
+    if (collisions.length === 0) return;
+    const lines = collisions.map((c) => `  ${c.name}: ${c.inputs.join(', ')}`);
+    throw new Error(`${collisionKind(naming)} (nothing written):\n${lines.join('\n')}`);
 }
 
 /**
@@ -109,7 +119,8 @@ export interface ConvertDirResult {
 
 /**
  * Converts every `*.svg` in a directory to `*.xml` in `outputDir`. (Node only, non-recursive.)
- * With `naming.androidNames`, throws before writing anything if two inputs map to the same resource name.
+ * Throws before writing anything if two inputs map to the same output (`a.svg` and `a.SVG`, or the same
+ * resource name with `naming.androidNames`).
  */
 export function convertDir(
     inputDir: string,

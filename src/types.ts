@@ -14,13 +14,16 @@ export const WARNING_CODES = [
      * A paint VectorDrawable cannot express or the converter cannot read: a `<pattern>`; a `fill` /
      * `stroke` value that is not a parseable color (initial black fill, or dropped); a `stop-color`
      * that is not one (black used); `context-fill` / `context-stroke` outside a `<use>`, or taken
-     * from a gradient context paint (dropped); a translucent gradient stop mapped to an Android
-     * reference by `currentColor` / `colorMap` (an `<item>` has no alpha; literal kept).
+     * from a gradient context paint (dropped). (A color reference that cannot be emitted is
+     * `unsupported-color-reference`.)
      */
     'unsupported-paint',
     /** A clipPath that cannot be (fully) converted. */
     'unsupported-clip-path',
-    /** `url(#id)` paint without fallback color pointing at nothing (fill: black) or at an invalid gradient (not painted). */
+    /**
+     * `url(#id)` paint that is not painted: without fallback color, pointing at nothing or at an
+     * invalid gradient; or pointing at a gradient without stops (painted none, fallback or not).
+     */
     'missing-gradient',
     /** `clip-path="url(#id)"` pointing at nothing; ignored. */
     'missing-clip-path',
@@ -55,6 +58,12 @@ export const WARNING_CODES = [
      */
     'long-path-data',
     /**
+     * A `<path>` whose `d` attribute is in error after a valid start (a typo such as
+     * `M0 0h10v10 x 3 3`): drawn up to its last valid segment, as browsers do (SVG 2 §9.5.4), the
+     * rest ignored. Off by default (opt in with `rules`).
+     */
+    'invalid-path-data',
+    /**
      * `android:width` or `android:height` above 200dp: large vectors are slow to render and cost
      * memory (Android recommends at most 200×200dp; use a bitmap for big artwork).
      */
@@ -64,6 +73,13 @@ export const WARNING_CODES = [
      * stroke outline): the masked area differs along the stroked outlines. Reported once per mask.
      */
     'mask-approximated',
+    /**
+     * An Android color reference (`?attr/…`, `@color/…`, from `currentColor` / `colorMap`) that the
+     * output cannot carry: a translucent gradient stop (a gradient `<item>` has no alpha; its literal
+     * color is kept and does not follow the theme), or any reference in a Compose `ImageVector` (no
+     * app resources; drawn in a placeholder gray). Reported once per gradient / per reference.
+     */
+    'unsupported-color-reference',
 ] as const;
 
 /** Stable machine-readable warning codes. */
@@ -84,6 +100,7 @@ export const WARNING_CATEGORIES: Readonly<Record<WarningCode, WarningCategory>> 
     'unsupported-stroke-dasharray': 'lossy',
     'unsupported-stroke-gradient': 'lossy',
     'unsupported-paint': 'lossy',
+    'unsupported-color-reference': 'lossy',
     'unsupported-clip-path': 'lossy',
     'missing-gradient': 'lossy',
     'missing-clip-path': 'lossy',
@@ -97,6 +114,7 @@ export const WARNING_CATEGORIES: Readonly<Record<WarningCode, WarningCategory>> 
     'mask-approximated': 'approximation',
     'min-sdk-exceeded': 'info',
     'long-path-data': 'info',
+    'invalid-path-data': 'info',
     'large-vector': 'info',
 };
 
@@ -147,7 +165,7 @@ export interface ConvertOptions {
      * `#AARRGGBB` (`#f00`, `red` and `rgb(255,0,0)` are one key). An exact key wins; otherwise an
      * opaque key also matches its color at any alpha, that alpha going to `fillAlpha` / `strokeAlpha`.
      * Gradient stops get the reference only when opaque (an `<item>` has no alpha): a translucent
-     * one keeps its literal color, with an `unsupported-paint` warning. A malformed key or value, a
+     * one keeps its literal color, with an `unsupported-color-reference` warning. A malformed key or value, a
      * fully transparent key (e.g. the Android `#FF000000`, read as CSS `#RRGGBBAA`: red at alpha 0),
      * or two keys for one color with different references, throw a `TypeError`.
      */
@@ -193,9 +211,30 @@ export interface ConvertOptions {
     onWarn?: (warning: Warning) => void;
     /**
      * The app's `minSdk`: when the output needs a higher API level (see `ConvertResult.minSdk`),
-     * a `min-sdk-exceeded` warning names the features responsible. Unset: no check.
+     * a `min-sdk-exceeded` warning names the features responsible. Below 24, an evenodd fill is
+     * rewritten as nonzero geometry (no `android:fillType`) when its contours are nested or
+     * disjoint; crossing contours keep `fillType`. Unset: no check, no rewrite.
      */
     minSdk?: number;
+    /**
+     * Keep the SVG `id` of a `<path>`, a basic shape or a `<g>` (also `<a>`, `<switch>`, a nested
+     * `<svg>`) as `android:name`, so that an `AnimatedVectorDrawable` can target it. A named `<g>` is
+     * emitted as a `<group>` even without a transform. Names stay unique: an id seen again (the
+     * instances of a `<use>`, a duplicated id) is emitted only the first time. With the default svgo
+     * config, `mergePaths`, `collapseGroups` and `moveGroupAttrsToElems` are turned off and ids are
+     * not minified; a custom `svgoConfig` is used as is (keep ids there yourself). @default false
+     */
+    preserveIds?: boolean;
+    /**
+     * Fonts to draw `<text>` with, as glyph outlines: a font-family name (matched case-insensitively,
+     * the first family of `font-family` found here wins) → a font file path or its bytes (TrueType /
+     * OpenType / WOFF). A bold or italic `<text>` needs its own key: `"<family> bold"` (or `700`),
+     * `"<family> italic"`, `"<family> bold italic"`. Only a single line of plain text is converted
+     * (see the README); everything else stays an `unsupported-element` warning. Node only: needs the
+     * optional peer dependency `opentype.js`, loaded on the first `<text>` to draw; the browser builds
+     * throw a TypeError. Without it, every `<text>` is reported and skipped.
+     */
+    fonts?: Record<string, string | Uint8Array>;
 }
 
 export interface ConvertResult {
@@ -212,3 +251,29 @@ export interface ConvertResult {
 
 /** An RGBA color expressed as Android `#AARRGGBB`. */
 export type AndroidColor = `#${string}`;
+
+// --- Jetpack Compose output (`toImageVector`) ---
+
+/**
+ * Options of `toImageVector`: the conversion options (same warnings, `strict` and `rules` as
+ * `convert`), without those that only shape the XML text or target the Android framework.
+ */
+export interface ImageVectorOptions extends Omit<ConvertOptions, 'indent' | 'xmlTag' | 'minSdk'> {
+    /**
+     * Name of the generated `val` (and of the `ImageVector`), made a valid PascalCase Kotlin
+     * identifier: `ic_arrow-back` → `IcArrowBack`; a leading digit gets an `Icon` prefix. A name
+     * without any ASCII letter or digit throws a `TypeError`.
+     */
+    name: string;
+    /** Kotlin package of the file (`com.example.icons`); omitted: no `package` line. Malformed: `TypeError`. */
+    packageName?: string;
+}
+
+export interface ImageVectorResult {
+    /** The generated Kotlin source file. */
+    kotlin: string;
+    /** The Kotlin identifier of the `val` (derived from `options.name`). */
+    name: string;
+    /** All non-fatal issues: those of `convert`, then those of the Kotlin serialization. */
+    warnings: Warning[];
+}

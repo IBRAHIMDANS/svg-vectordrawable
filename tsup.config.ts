@@ -1,4 +1,18 @@
+import { fileURLToPath } from 'node:url';
 import { defineConfig, type Options } from 'tsup';
+
+/**
+ * Resolves `./text.js` (the `fonts` option: Node file reads and opentype.js loaded with createRequire)
+ * to src/text-browser.ts, which rejects the option, so that the browser bundles carry neither.
+ */
+const browserText: NonNullable<Options['esbuildPlugins']>[number] = {
+    name: 'svgvd-browser-text',
+    setup(build) {
+        build.onResolve({ filter: /^\.\/text\.js$/ }, () => ({
+            path: fileURLToPath(new URL('./src/text-browser.ts', import.meta.url)),
+        }));
+    },
+};
 
 /**
  * A browser entry: an ESM build with its own declaration file (index.d.ts would advertise the
@@ -10,6 +24,7 @@ function browserBuilds(name: string, svgoAlias: string, extra: Options = {}): Op
         entry,
         sourcemap: false,
         platform: 'browser',
+        esbuildPlugins: [browserText],
         esbuildOptions(o) {
             o.alias = { ...(o.alias ?? {}), svgo: svgoAlias };
         },
@@ -21,6 +36,8 @@ function browserBuilds(name: string, svgoAlias: string, extra: Options = {}): Op
     ];
 }
 
+// No `clean` here: these builds run in parallel, and a config that empties dist/ can delete files
+// another one has already written (browser.d.ts went missing in CI). The build script cleans first.
 export default defineConfig([
     // Node library, CommonJS + its types. `shims` replaces `import.meta.url` (renderFallbackPng
     // loads its optional peer @resvg/resvg-js with createRequire(import.meta.url)), which is empty
@@ -30,7 +47,6 @@ export default defineConfig([
         entry: ['src/index.ts'],
         format: ['cjs'],
         dts: true,
-        clean: true,
         sourcemap: false,
         target: 'node18',
         shims: true,

@@ -119,6 +119,30 @@ describe('Android resource names', () => {
         );
         expect(existsSync(out)).toBe(false);
     });
+
+    it('convertDir fails before writing anything when two files get the same output, without androidNames', () => {
+        const src = join(dir, 'src');
+        mkdirSync(src);
+        writeFileSync(join(src, 'a.svg'), ICON);
+        writeFileSync(join(src, 'a.SVG'), ICON);
+        const out = join(dir, 'out');
+        expect(() => convertDir(src, out)).toThrow(
+            `Output collision (nothing written):\n  ${join(out, 'a.xml')}: ${join(src, 'a.SVG')}, ${join(src, 'a.svg')}`,
+        );
+        expect(existsSync(out)).toBe(false);
+    });
+
+    it('convertDir fails before writing anything when two outputs differ only by case', () => {
+        const src = join(dir, 'src');
+        mkdirSync(src);
+        writeFileSync(join(src, 'A.svg'), ICON);
+        writeFileSync(join(src, 'a.svg'), ICON);
+        const out = join(dir, 'out');
+        expect(() => convertDir(src, out)).toThrow(
+            `Output collision (nothing written):\n  ${join(out, 'A.xml')}, ${join(out, 'a.xml')}: ${join(src, 'A.svg')}, ${join(src, 'a.svg')}`,
+        );
+        expect(existsSync(out)).toBe(false);
+    });
 });
 
 describe('listSvgFiles', () => {
@@ -170,13 +194,20 @@ describe('findOutputCollisions', () => {
         { input: 'c.svg', output: 'out/c.xml' },
     ];
 
-    it('groups the inputs sharing an output with androidNames', () => {
-        expect(findOutputCollisions(entries, { androidNames: true })).toEqual([
-            { name: 'out/x.xml', inputs: ['a/x.svg', 'b/x.svg'] },
-        ]);
+    it('groups the inputs sharing an output path', () => {
+        expect(findOutputCollisions(entries)).toEqual([{ name: 'out/x.xml', inputs: ['a/x.svg', 'b/x.svg'] }]);
     });
 
-    it('is not checked without androidNames', () => {
-        expect(findOutputCollisions(entries)).toEqual([]);
+    it('is empty when every output is distinct', () => {
+        expect(findOutputCollisions(entries.slice(1))).toEqual([]);
+    });
+
+    it('groups output paths differing only by case (one file on macOS and Windows)', () => {
+        expect(
+            findOutputCollisions([
+                { input: 'aBc.svg', output: 'out/ABc.kt' },
+                { input: 'abC.svg', output: 'out/AbC.kt' },
+            ]),
+        ).toEqual([{ name: 'out/ABc.kt, out/AbC.kt', inputs: ['aBc.svg', 'abC.svg'] }]);
     });
 });

@@ -1,4 +1,4 @@
-import { styleDeclarations } from './style.js';
+import { isUnresolvableCssLength, styleDeclarations } from './style.js';
 import { parseLength } from './units.js';
 
 type Attrs = Record<string, string>;
@@ -29,15 +29,14 @@ const GEOMETRY_PROPERTIES: Record<string, Record<string, GeometryKind>> = {
 };
 /** CSS-wide keywords that resolve to the initial value here (geometry properties are not inherited). */
 const INITIAL_KEYWORDS = new Set(['initial', 'unset', 'revert', 'revert-layer']);
-const IMPORTANT = /\s*!\s*important\s*$/i;
 
 /**
  * The value a geometry declaration computes to, as an attribute value the switch below reads, or
  * undefined when the declaration is invalid (CSS then drops it and the attribute applies). Lengths
- * the converter cannot resolve (`ex`, `ch`, `calc()`…) count as invalid.
+ * the converter cannot resolve (`ex`, `ch`, `calc()`…) count as invalid here; {@link
+ * unresolvedShapeLengths} reports them.
  */
-function cssGeometryValue(name: string, kind: GeometryKind, raw: string): string | undefined {
-    const value = raw.replace(IMPORTANT, '').trim();
+function cssGeometryValue(name: string, kind: GeometryKind, value: string): string | undefined {
     const keyword = value.toLowerCase();
     if (INITIAL_KEYWORDS.has(keyword)) return kind === 'radius' ? 'auto' : '0';
     if (keyword === 'auto') {
@@ -51,20 +50,66 @@ function cssGeometryValue(name: string, kind: GeometryKind, raw: string): string
 }
 
 /**
+ * Per geometry property of the inline `style`, the declaration that applies among those `accepted`:
+ * the last `!important` one, else the last one (CSS Cascade §6.4, within one declaration block).
+ */
+function winningDeclarations(
+    name: string,
+    attrs: Attrs,
+    accepted: (kind: GeometryKind, value: string) => boolean,
+): Map<string, string> {
+    const properties = GEOMETRY_PROPERTIES[name];
+    const out = new Map<string, string>();
+    if (!properties || !attrs.style) return out;
+    const important = new Set<string>();
+    for (const [key, value, isImportant] of styleDeclarations(attrs.style)) {
+        const kind = properties[key];
+        if (!kind || !accepted(kind, value)) continue;
+        if (isImportant) important.add(key);
+        else if (important.has(key)) continue;
+        out.set(key, value);
+    }
+    return out;
+}
+
+/** Whether a declaration is valid CSS but its length cannot be resolved here (see {@link isUnresolvableCssLength}). */
+const unresolvable = (kind: GeometryKind, value: string): boolean =>
+    isUnresolvableCssLength(value, kind !== 'position');
+
+/**
+ * The geometry declarations of the inline `style` a browser would apply but the converter cannot
+ * resolve, so the attribute (or a valid earlier declaration) applies instead: per property, the
+ * declaration that wins the cascade when it is one of those.
+ */
+function unresolvedCssGeometry(name: string, attrs: Attrs): Map<string, string> {
+    const winners = winningDeclarations(
+        name,
+        attrs,
+        (kind, value) => cssGeometryValue(name, kind, value) !== undefined || unresolvable(kind, value),
+    );
+    const properties = GEOMETRY_PROPERTIES[name]!;
+    for (const [key, value] of winners) if (!unresolvable(properties[key]!, value)) winners.delete(key);
+    return winners;
+}
+
+/**
  * Applies the geometry properties of the inline `style` over the attributes of the same name: in
- * SVG 2 they are CSS properties, so a valid declaration wins over the attribute (the last valid one
- * when repeated). svgo inlines `<style>` rules into `style` first when optimizing.
+ * SVG 2 they are CSS properties, so a valid declaration wins over the attribute (when repeated, the
+ * last valid `!important` one, else the last valid one). svgo inlines `<style>` rules into `style`
+ * first when optimizing.
  */
 function withCssGeometry(name: string, attrs: Attrs): Attrs {
     const properties = GEOMETRY_PROPERTIES[name];
     if (!properties || !attrs.style) return attrs;
-    let resolved: Attrs | undefined;
-    for (const [key, raw] of styleDeclarations(attrs.style)) {
-        const kind = properties[key];
-        const value = kind && cssGeometryValue(name, kind, raw);
-        if (value !== undefined) (resolved ??= { ...attrs })[key] = value;
-    }
-    return resolved ?? attrs;
+    const winners = winningDeclarations(
+        name,
+        attrs,
+        (kind, value) => cssGeometryValue(name, kind, value) !== undefined,
+    );
+    if (!winners.size) return attrs;
+    const resolved = { ...attrs };
+    for (const [key, value] of winners) resolved[key] = cssGeometryValue(name, properties[key]!, value)!;
+    return resolved;
 }
 
 export function shapeToPathData(name: string, ownAttrs: Attrs, options: ShapeOptions = {}): string | null {
@@ -83,6 +128,14 @@ export function shapeToPathData(name: string, ownAttrs: Attrs, options: ShapeOpt
         const parsed = parseLength(attrs[key], ref);
         return Number.isNaN(parsed) ? 0 : parsed;
     };
+    /**
+     * Reads an `rx` / `ry`; undefined for `auto` (SVG 2): a missing, `auto`, negative or unparsable
+     * radius, which takes the other one.
+     */
+    const radius = (key: string, axis: 'x' | 'y'): number | undefined => {
+        const v = parseLength(attrs[key], axis === 'x' ? viewport?.width : viewport?.height);
+        return v >= 0 ? v : undefined;
+    };
     switch (name) {
         case 'rect': {
             const w = n('width', 'x');
@@ -90,12 +143,8 @@ export function shapeToPathData(name: string, ownAttrs: Attrs, options: ShapeOpt
             if (w <= 0 || h <= 0) return null;
             const x = n('x', 'x');
             const y = n('y', 'y');
-            // SVG 2 used radii: a missing, `auto`, negative or unparsable radius is `auto` and takes
-            // the other radius (both `auto` → square corners); each is then clamped to half the side.
-            const radius = (key: string, axis: 'x' | 'y'): number | undefined => {
-                const v = parseLength(attrs[key], axis === 'x' ? viewport?.width : viewport?.height);
-                return v >= 0 ? v : undefined;
-            };
+            // SVG 2 used radii: an `auto` radius takes the other one (both `auto` → square corners);
+            // each is then clamped to half the side.
             const rxUsed = radius('rx', 'x');
             const ryUsed = radius('ry', 'y');
             const rx = Math.min(rxUsed ?? ryUsed ?? 0, w / 2);
@@ -118,8 +167,6 @@ export function shapeToPathData(name: string, ownAttrs: Attrs, options: ShapeOpt
         }
         case 'ellipse': {
             // An `auto` radius takes the other one (both `auto` → 0, not rendered).
-            const radius = (key: string, axis: 'x' | 'y'): number | undefined =>
-                attrs[key]?.trim().toLowerCase() === 'auto' ? undefined : n(key, axis);
             const rxUsed = radius('rx', 'x');
             const ryUsed = radius('ry', 'y');
             const rx = rxUsed ?? ryUsed ?? 0;
@@ -146,6 +193,41 @@ export function shapeToPathData(name: string, ownAttrs: Attrs, options: ShapeOpt
         default:
             return null;
     }
+}
+
+/** Length attributes of each shape, with the axis their percentages resolve against (d: diagonal). */
+const SHAPE_LENGTHS: Record<string, Record<string, 'x' | 'y' | 'd'>> = {
+    rect: { x: 'x', y: 'y', width: 'x', height: 'y', rx: 'x', ry: 'y' },
+    circle: { cx: 'x', cy: 'y', r: 'd' },
+    ellipse: { cx: 'x', cy: 'y', rx: 'x', ry: 'y' },
+    line: { x1: 'x', y1: 'y', x2: 'x', y2: 'y' },
+};
+
+/**
+ * The length attributes of a shape that are set but cannot be resolved (`ex`, `ch`, garbage…), as
+ * {@link shapeToPathData} reads them (a valid CSS geometry property wins), with the value used
+ * instead: `auto` for a radius (SVG 2), else 0. The keyword `auto` is resolved, never listed. A CSS
+ * geometry declaration a browser would apply but the converter cannot resolve (`rx:1ex`,
+ * `width:calc(…)`) is listed in place of its attribute, with the attribute value as the one used.
+ */
+export function unresolvedShapeLengths(
+    name: string,
+    ownAttrs: Attrs,
+    viewport: ShapeViewport,
+): { attr: string; value: string; fallback: string }[] {
+    const attrs = withCssGeometry(name, ownAttrs);
+    const diagonal = Math.sqrt((viewport.width ** 2 + viewport.height ** 2) / 2);
+    const refs = { x: viewport.width, y: viewport.height, d: diagonal };
+    const css = unresolvedCssGeometry(name, ownAttrs);
+    return Object.entries(SHAPE_LENGTHS[name] ?? {}).flatMap(([attr, axis]) => {
+        const value = attrs[attr]?.trim();
+        const fallback = attr === 'rx' || attr === 'ry' ? 'auto' : '0';
+        const resolved = value !== undefined && (value === 'auto' || !Number.isNaN(parseLength(value, refs[axis])));
+        const cssValue = css.get(attr);
+        if (cssValue !== undefined) return [{ attr, value: cssValue, fallback: resolved ? value : fallback }];
+        if (value === undefined || value === '' || resolved) return [];
+        return [{ attr, value, fallback }];
+    });
 }
 
 export const SHAPE_NAMES = new Set(['rect', 'circle', 'ellipse', 'line', 'polyline', 'polygon']);

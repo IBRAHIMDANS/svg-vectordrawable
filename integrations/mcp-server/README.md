@@ -14,14 +14,22 @@ Requires Node.js 18 or later.
 
 SVG markup → VectorDrawable XML.
 
-| Argument         | Type                       | Description                                                                                      |
-| ---------------- | -------------------------- | ------------------------------------------------------------------------------------------------ |
-| `svg`            | string (required)          | The SVG document (markup, not a path or URL). At most 2 MB.                                      |
-| `strict`         | `true`, `false`, `"lossy"` | Fail instead of warning: `true` on lossy or approximated output, `"lossy"` on lossy output only. |
-| `currentColor`   | string                     | CSS color substituted for `currentColor`. Default `#000000`.                                     |
-| `floatPrecision` | integer 0–20               | Decimal places kept for generated numbers. Default 3.                                            |
-| `minSdk`         | integer ≥ 1                | The app's `minSdk`: adds a `min-sdk-exceeded` warning when the output needs a higher API level.  |
-| `tint`           | string                     | `android:tint` on the `<vector>`: `#RRGGBB`, `#AARRGGBB`, `@color/…` or `?attr/…`.               |
+| Argument         | Type                       | Description                                                                                                                 |
+| ---------------- | -------------------------- | --------------------------------------------------------------------------------------------------------------------------- |
+| `svg`            | string (required)          | The SVG document (markup, not a path or URL). At most 2 MB.                                                                 |
+| `strict`         | `true`, `false`, `"lossy"` | Fail instead of warning: `true` on lossy or approximated output, `"lossy"` on lossy output only.                            |
+| `rules`          | object                     | Severity per warning code (`"off"`, `"warn"`, `"error"`), overriding `strict`, e.g. `{ "opacity-approximated": "warn" }`.   |
+| `currentColor`   | string                     | What `currentColor` stands for: a CSS color, or a color reference (`?attr/…`, `@color/…`) emitted as is. Default `#000000`. |
+| `colorMap`       | object                     | SVG colors to color references, e.g. `{ "#1A73E8": "@color/brand" }`, so the drawable follows the theme.                    |
+| `floatPrecision` | integer 0–20               | Decimal places kept for generated numbers. Default 3.                                                                       |
+| `minSdk`         | integer ≥ 1                | The app's `minSdk`: adds a `min-sdk-exceeded` warning when the output needs a higher API level.                             |
+| `tint`           | string                     | `android:tint` on the `<vector>`: `#RRGGBB`, `#AARRGGBB`, `@color/…` or `?attr/…`.                                          |
+| `autoMirrored`   | boolean                    | Adds `android:autoMirrored="true"`: Android flips the drawable in right-to-left layouts (arrows, chevrons).                 |
+| `width`          | number > 0                 | `android:width` in dp, replacing the SVG size (the viewport is unchanged). Alone, the height keeps the aspect ratio.        |
+| `height`         | number > 0                 | `android:height` in dp; same rules as `width`. With both, a different ratio stretches the drawing, as on Android.           |
+
+A color reference is `@[package:]color/name` or `?[package:]attr/name`; a malformed `currentColor` or
+`colorMap` entry is a tool error.
 
 Result (`structuredContent`, also serialized as JSON in the text content):
 
@@ -91,10 +99,9 @@ The server talks MCP over stdin/stdout; it does not read files or open network c
 
 ## Option coverage
 
-The tools expose the options of the published `svg-vectordrawable` release they depend on (0.3.x).
-Not yet exposed, because 0.3.0 does not have them (it would silently ignore them): `autoMirrored`,
-`width`, `height`, `colorMap`, and color references (`?attr/…`, `@color/…`) as `currentColor`. They
-exist in the library's development branch and will be added here once released.
+The tools expose the options of the published `svg-vectordrawable` release they depend on (0.4.x, see
+`package.json`). Not exposed: `optimize`, `svgoConfig`, `fillBlackForUnfilled`, `indent`, `xmlTag`
+(use the library or its CLI for those).
 
 ## Development
 

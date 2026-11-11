@@ -1,11 +1,19 @@
 import type { BBox, Viewport, XastElement } from './ast.js';
-import { toAndroidColor } from './color.js';
+import { linearToSrgb, srgbToLinear, toAndroidColor } from './color.js';
 import type { ColorRefs } from './colorRef.js';
 import { ANIMATIONS } from './elements.js';
 import { presentation } from './style.js';
-import { applyPoint, IDENTITY, multiply, parseTransform, scaleFactor, type Matrix } from './transform.js';
+import {
+    applyPoint,
+    IDENTITY,
+    isInvalidTransform,
+    multiply,
+    parseTransform,
+    scaleFactor,
+    type Matrix,
+} from './transform.js';
 import type { Warning } from './types.js';
-import { parseLength } from './units.js';
+import { parseLength, VALID_UNRESOLVED_LENGTH } from './units.js';
 
 /** A gradient color stop, with its offset normalized to [0, 1]. */
 interface GradientStop {
@@ -94,8 +102,9 @@ function linearEnd(m: Matrix, vx: number, vy: number, sx: number, sy: number): [
 
 /**
  * Parses a coordinate: a length in user units (absolute units resolved, `1in` → 96, in
- * objectBoundingBox units too, per SVG) or a percentage of `ref`. `ex` / `ch` or malformed
- * values keep their leading number, as before; nothing parseable yields `fallback`.
+ * objectBoundingBox units too, per SVG) or a percentage of `ref`. `ex` / `ch` keep their leading
+ * number; a value without one (`calc()`) yields `fallback`. Invalid values never get here
+ * ({@link isCoordinate}).
  */
 function coord(value: string | undefined, fallback: number, ref: number): number {
     if (value === undefined) return fallback;
@@ -134,8 +143,12 @@ function normalizeStops(stops: GradientStop[]): GradientStop[] {
     return out;
 }
 
-/** true for a coordinate {@link coord} reads (a length, a percentage, or a leading number). */
-const isCoordinate = (v: string): boolean => !Number.isNaN(parseLength(v, 1)) || !Number.isNaN(parseFloat(v));
+/**
+ * true for a valid coordinate: a length {@link coord} resolves, or one a browser resolves and the
+ * converter cannot (`ex`, `ch`, `calc()`…). Anything else (`abc`, `10abc`) is invalid, like in
+ * Chrome and Firefox, which do not keep the leading number.
+ */
+const isCoordinate = (v: string): boolean => !Number.isNaN(parseLength(v, 1)) || VALID_UNRESOLVED_LENGTH.test(v.trim());
 
 /** Valid values of the attributes a gradient inherits through `href`. */
 const VALID: Record<string, (v: string) => boolean> = {
@@ -173,11 +186,6 @@ function isLinearRgb(el: XastElement, ancestors: readonly XastElement[]): boolea
     }
     return false;
 }
-
-/** Encoded sRGB component (0–1) → linear light. */
-const toLinear = (c: number): number => (c <= 0.04045 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4);
-/** Linear light (0–1) → encoded sRGB component. */
-const toEncoded = (l: number): number => (l <= 0.0031308 ? 12.92 * l : 1.055 * l ** (1 / 2.4) - 0.055);
 
 /**
  * Largest residual a `linearRGB` gradient may keep, in 8-bit channel units: 1 % of 255. Below it the
@@ -220,13 +228,13 @@ const toHex = (channels: number[]): string =>
  */
 function linearRgbSegment(o0: number, c0: number[], o1: number, c1: number[]): GradientStop[] {
     if (o1 - o0 < 1e-4) return []; // a hard stop: nothing is interpolated
-    const l0 = c0.map((c, k) => (k === 0 ? c / 255 : toLinear(c / 255)));
-    const l1 = c1.map((c, k) => (k === 0 ? c / 255 : toLinear(c / 255)));
+    const l0 = c0.map((c, k) => (k === 0 ? c / 255 : srgbToLinear(c / 255)));
+    const l1 = c1.map((c, k) => (k === 0 ? c / 255 : srgbToLinear(c / 255)));
     /** The exact blend at offset x. */
     const exact = (x: number): number[] =>
         l0.map((l, k) => {
             const v = l + ((l1[k]! - l) * (x - o0)) / (o1 - o0);
-            return 255 * (k === 0 ? v : toEncoded(v));
+            return 255 * (k === 0 ? v : linearToSrgb(v));
         });
     const n = LINEAR_RGB_GRID * LINEAR_RGB_SAMPLES;
     const samples = Array.from({ length: n + 1 }, (_, k) => {
@@ -306,9 +314,9 @@ function once(fn: () => void): () => void {
 /**
  * Builds the gradient lookup, resolving `href`/`xlink:href` inheritance (shared stops/attributes).
  * Coordinates are kept raw; placement happens in {@link resolveGradient} so objectBoundingBox
- * gradients can use the filled path's bounding box. Gradients without stops are left out, and
- * so are those with a non-invertible gradientTransform (an invalid paint server: the paint's
- * fallback color applies). What a gradient loses goes to `warn` when it is first used (see
+ * gradients can use the filled path's bounding box. A gradient without stops is kept with
+ * `stops: []` (it paints none, fallback color or not); one with a non-invertible gradientTransform
+ * is left out (an invalid paint server: the paint's fallback color applies). What a gradient loses goes to `warn` when it is first used (see
  * {@link RawGradient.report}).
  */
 export function collectGradients(
@@ -364,6 +372,16 @@ export function collectGradients(
         const stopEls =
             chain.map((g) => (g.children ?? []).filter((c) => c.name === 'stop')).find((s) => s.length) ?? [];
         const notes: Warning[] = [];
+        // A valid length the converter cannot resolve: {@link coord} keeps its leading number (`1ex`),
+        // or the initial value without one (`calc()`). (An invalid value, `abc` / `10abc`, is dropped by
+        // specifiedAttrs: the template's or initial value applies, per SVG 2.)
+        for (const [attr, value] of Object.entries(a))
+            if (VALID[attr] === isCoordinate && Number.isNaN(parseLength(value, 1)))
+                notes.push({
+                    code: 'unsupported-attribute',
+                    message: `Gradient "${id}" has ${attr}="${value.trim()}", not a length the converter can resolve (ex, ch, calc()…); ${Number.isNaN(parseFloat(value)) ? 'the initial value' : 'its leading number'} is used.`,
+                    node: el.name!,
+                });
         const stopColor = (s: XastElement, opacity: number | undefined): string => {
             const value = presentation(s, 'stop-color') ?? '#000';
             const color = colors ? colors.stop(value, opacity, id) : toAndroidColor(value, opacity, currentColor);
@@ -384,7 +402,18 @@ export function collectGradients(
                 return { offset: parseOffset(presentation(s, 'offset')), color };
             }),
         );
-        if (declared.length === 0) continue;
+        if (declared.length === 0) {
+            // No stop paints none, even over a fallback color (SVG 1.1 §13.2.4): kept with `stops: []`
+            // so the paint code tells it from an unknown reference or an invalid paint server.
+            out.set(id, {
+                type: el.name === 'radialGradient' ? 'radial' : 'linear',
+                objectBox: (a.gradientUnits ?? 'objectBoundingBox') !== 'userSpaceOnUse',
+                attrs: a,
+                matrix: null,
+                stops: [],
+            });
+            continue;
+        }
         const linear = isLinearRgb(el, ancestors(el));
         // linearRGB: intermediate stops make the sRGB rendering match; reported when they cannot.
         const expanded = linear ? linearRgbStops(declared) : declared;
@@ -403,6 +432,18 @@ export function collectGradients(
                         message: `<${child.name}> in gradient "${id}" cannot be represented in a VectorDrawable; the static value is used.`,
                         node: child.name!,
                     });
+        // An invalid list is ignored (specifiedAttrs), as a shape's invalid transform is (render.ts
+        // reports it too): the value of the nearest template with a valid one, if any, applies.
+        for (const g of chain) {
+            const value = g.attributes?.gradientTransform;
+            if (VALID.gradientTransform!(value ?? '')) break;
+            if (isInvalidTransform(value))
+                notes.push({
+                    code: 'unsupported-attribute',
+                    message: `Gradient "${id}" has gradientTransform="${value!.trim()}", not a valid transform list; ignored.`,
+                    node: el.name!,
+                });
+        }
         const matrix = parseTransform(a.gradientTransform);
         // A non-invertible gradientTransform makes the paint server invalid (CSS Transforms 1 §8):
         // like browsers (wpt gradient-transform-01/02), the paint then uses its fallback color.

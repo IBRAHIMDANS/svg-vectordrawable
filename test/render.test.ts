@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
-import { convert } from '../src/index.js';
+import { ConversionError, convert } from '../src/index.js';
 import { failsConditions, foreignElements, switchChild } from '../src/elements.js';
 import type { XastElement } from '../src/ast.js';
 import { compareSvgs, DEFAULT_MAX_MISMATCH } from './visual/compare.js';
@@ -47,13 +47,12 @@ describe('elements outside the SVG namespace are not rendered', () => {
         expect(pathCount(xml)).toBe(1);
     });
 
-    it.each(MODES)(
-        'still reports a prefixed element of the SVG namespace (never dropped silently) (optimize: %s)',
-        (optimize) => {
-            const doc = svg('<s:rect width="4" height="4"/>', ` xmlns:s="${SVG_NS}"`);
-            expect(codes(doc, optimize)).toEqual(['empty-path']);
-        },
-    );
+    it.each(MODES)('draws a prefixed element of the SVG namespace, as a browser does (optimize: %s)', (optimize) => {
+        const doc = svg('<s:rect width="4" height="4"/>', ` xmlns:s="${SVG_NS}"`);
+        const { xml, warnings } = convert(doc, { optimize, strict: true });
+        expect(warnings).toEqual([]);
+        expect(pathCount(xml)).toBe(1);
+    });
 });
 
 describe('non-rendering SVG elements are skipped without a warning', () => {
@@ -72,6 +71,63 @@ describe('non-rendering SVG elements are skipped without a warning', () => {
 
     it.each(MODES)('an unsupported element under display:none is not reported (optimize: %s)', (optimize) => {
         expect(codes(svg(`<image display="none" href="a.png" width="4" height="4"/>${RECT}`), optimize)).toEqual([]);
+    });
+});
+
+describe('HTML media elements in the SVG namespace and an empty <foreignObject> draw nothing (T-174)', () => {
+    // Checked in Chrome and Firefox (2026-11-11): none of these draws, nor its subtree.
+    const MEDIA = ['video', 'audio', 'iframe', 'canvas'] as const;
+    const EMPTY_FO = {
+        empty: '<foreignObject width="24" height="24"/>',
+        blank: '<foreignObject width="24" height="24">  \n </foreignObject>',
+        comment: '<foreignObject width="24" height="24"><!-- nothing --></foreignObject>',
+    };
+    const silentInBothModes = (doc: string, paths: number): void => {
+        for (const optimize of MODES) {
+            const { xml, warnings } = convert(doc, { optimize, strict: true });
+            expect(warnings).toEqual([]);
+            expect(pathCount(xml)).toBe(paths);
+        }
+    };
+
+    it.each(MEDIA)('<%s> alone, with a child, beside a <rect>: silent in both modes, strict accepts', (name) => {
+        silentInBothModes(svg(`<${name} width="24" height="24" src="a.mp4"/>`), 0);
+        silentInBothModes(svg(`<${name} width="24" height="24"><rect width="4" height="4"/></${name}>`), 0);
+        silentInBothModes(svg(`<${name} width="24" height="24"/>${RECT}`), 1);
+    });
+
+    it.each(Object.entries(EMPTY_FO))(
+        '%s <foreignObject>, alone and beside a <rect>: silent in both modes',
+        (_, fo) => {
+            silentInBothModes(svg(fo), 0);
+            silentInBothModes(svg(`${fo}${RECT}`), 1);
+        },
+    );
+
+    it.each(MODES)('a <foreignObject> with content is still reported (optimize: %s)', (optimize) => {
+        expect(codes(svg(`<foreignObject width="24" height="24">hi</foreignObject>${RECT}`), optimize)).toEqual([
+            'unsupported-element',
+        ]);
+    });
+
+    it.each(MODES)('their CSS and the resources they reference are not reported (optimize: %s)', (optimize) => {
+        const doc = svg(
+            '<defs><pattern id="p" width="4" height="4"><rect width="4" height="4" style="mix-blend-mode: screen"/></pattern></defs>' +
+                '<video fill="url(#p)" style="mix-blend-mode: multiply"><rect style="mix-blend-mode: screen"/></video>' +
+                '<foreignObject width="1" height="1" style="mix-blend-mode: multiply"/>' +
+                RECT,
+        );
+        expect(codes(doc, optimize)).toEqual([]);
+    });
+
+    it('a root without a viewBox holding only them draws nothing: no crop warning', () => {
+        for (const inner of ['<video/>', '<canvas width="4" height="4"/>', EMPTY_FO.empty])
+            silentInBothModes(`<svg xmlns="${SVG_NS}">${inner}</svg>`, 0);
+    });
+
+    it('a <switch> passes over a media element (like Firefox), picks an empty <foreignObject> (both browsers)', () => {
+        silentInBothModes(svg(`<switch><video width="24" height="24"/>${RECT}</switch>`), 1);
+        silentInBothModes(svg(`<switch>${EMPTY_FO.empty}${RECT}</switch>`), 0);
     });
 });
 
@@ -94,6 +150,57 @@ describe('SMIL animation elements are reported', () => {
             ['unsupported-element', 'set'],
             ['unsupported-element', 'animateTransform'],
         ]);
+    });
+});
+
+describe('an unsupported element is reported once per name (T-172)', () => {
+    const FO =
+        '<foreignObject width="10" height="10"><div xmlns="http://www.w3.org/1999/xhtml">hi</div></foreignObject>';
+    const IMAGE = '<image href="a.png" width="4" height="4"/>';
+    const message = (name: string): string => `<${name}> cannot be represented in a VectorDrawable; skipped.`;
+    const reported = (doc: string, optimize: boolean): [string, string][] =>
+        convert(doc, { optimize }).warnings.map((w) => [w.code, w.message]);
+    const three = svg(`${FO}<g>${FO}</g>${FO}${RECT}`);
+    const mixed = svg(`${FO}${IMAGE}${FO}${IMAGE}${RECT}`);
+    const animated = svg(
+        '<rect width="4" height="4"><set attributeName="fill" to="red"/></rect>' +
+            '<g><set attributeName="fill" to="red"/><rect width="2" height="2"/></g>',
+    );
+
+    it.each(MODES)('three <foreignObject> → one warning, same output as one (optimize: %s)', (optimize) => {
+        expect(reported(three, optimize)).toEqual([['unsupported-element', message('foreignObject')]]);
+        expect(convert(three, { optimize }).xml).toBe(convert(svg(`${FO}${RECT}`), { optimize }).xml);
+    });
+
+    it.each(MODES)('<foreignObject> and <image> stay two warnings (optimize: %s)', (optimize) => {
+        expect(reported(mixed, optimize)).toEqual([
+            ['unsupported-element', message('foreignObject')],
+            ['unsupported-element', message('image')],
+        ]);
+    });
+
+    it.each(MODES)('a <set> in a shape and in a group → one warning (optimize: %s)', (optimize) => {
+        expect(reported(animated, optimize)).toEqual([['unsupported-element', message('set')]]);
+    });
+
+    it.each(MODES)('strict rejects the same files with the same error (optimize: %s)', (optimize) => {
+        for (const doc of [three, mixed, animated]) {
+            const [first] = convert(doc, { optimize }).warnings;
+            let thrown: unknown;
+            try {
+                convert(doc, { optimize, strict: true });
+            } catch (error) {
+                thrown = error;
+            }
+            expect(thrown).toBeInstanceOf(ConversionError);
+            expect((thrown as ConversionError).warning).toEqual(first);
+            expect(() => convert(doc, { optimize, strict: 'lossy' })).toThrow(ConversionError);
+        }
+    });
+
+    it('each conversion reports it again', () => {
+        expect(reported(three, false)).toHaveLength(1);
+        expect(reported(three, false)).toHaveLength(1);
     });
 });
 

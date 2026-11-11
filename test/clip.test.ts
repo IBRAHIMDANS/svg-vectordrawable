@@ -309,9 +309,10 @@ describe('CSS basic shapes in clip-path (TASK-077)', () => {
                 expect(clipCount(xml)).toBe(1);
             });
 
-            it('reports a shape on an element whose bbox is unknown (a <switch>)', () => {
+            it('measures a <switch> by the child it renders', () => {
                 const doc = svg(`<switch clip-path="circle()"><rect ${RECT}/></switch>`);
-                expect(codes(doc, optimize)).toEqual(['unsupported-clip-path']);
+                expect(codes(doc, optimize)).toEqual([]);
+                expectRendersLike(doc, optimize, clipped('<circle cx="12" cy="12" r="8"/>'));
             });
         });
     }
@@ -423,16 +424,29 @@ describe('masks with fill-rule="evenodd" content (TASK-079)', () => {
             ));
     }
 
-    it('keeps the warning when evenodd contours cross (no nonzero equivalent by orientation)', () => {
-        const doc = svg(
-            `<mask id="m"><path d="M2 2h12v12H2zM8 8h12v12H8z" fill="#fff" fill-rule="evenodd"/></mask>${SQUARE}`,
-        );
+    // No nonzero equivalent by orientation: filled nonzero (the union), reported as lossy, like an
+    // evenodd clip-path (T-66).
+    it('fills content whose evenodd contours cross nonzero, with a lossy warning', () => {
+        const content = (rule: string): string =>
+            `<mask id="m"><path d="M2 2h12v12H2zM8 8h12v12H8z" fill="#fff" fill-rule="${rule}"/></mask>${SQUARE}`;
+        const doc = svg(content('evenodd'));
         for (const optimize of MODES) {
             const messages = maskMessages(doc, optimize);
             expect(messages).toHaveLength(1);
-            expect(messages[0]).toMatch(/evenodd.*crossing/);
-            expect(clipCount(convert(doc, { optimize }).xml)).toBe(0);
+            expect(messages[0]).toMatch(/evenodd.*crossing.*nonzero is used/);
+            expect(codes(doc, optimize)).toEqual(['unsupported-attribute']);
+            expect(clipCount(convert(doc, { optimize }).xml)).toBe(1);
+            expectRendersLike(doc, optimize, svg(content('nonzero')));
+            expect(() => convert(doc, { optimize, strict: 'lossy' })).toThrow(/nonzero is used/);
         }
+    });
+
+    it('reports the nonzero fill once per mask, whatever the number of masked elements', () => {
+        const doc = svg(
+            '<mask id="m" maskContentUnits="objectBoundingBox"><path d="M0 0h.6v.6H0zM.4 .4h.6v.6h-.6z" fill="#fff" fill-rule="evenodd"/></mask>' +
+                '<rect width="10" height="10" fill="#E53935" mask="url(#m)"/><rect x="12" y="12" width="10" height="10" fill="#1E88E5" mask="url(#m)"/>',
+        );
+        for (const optimize of MODES) expect(maskMessages(doc, optimize)).toHaveLength(1);
     });
 
     // Same structure as brave/leo `country-ke` (a Figma flag export, redrawn here): stripes under a
@@ -652,9 +666,6 @@ describe('masks of uniform non-white luminance and nested masks (TASK-092)', () 
         const twoValues =
             '<rect x="2" y="2" width="10" height="10" fill="#fff"/><rect x="12" y="12" width="10" height="10" fill="#808080"/>';
         expectRefused(svg(maskOf(twoValues) + FULL), /not uniform/);
-        // White under black: the black shape cuts a hole, which is no uniform value.
-        const hole = '<rect width="24" height="24" fill="#fff"/><rect x="8" y="8" width="8" height="8"/>';
-        expectRefused(svg(maskOf(hole) + FULL), /not uniform/);
     });
 
     it('keeps the warning for overlapping translucent shapes (their values compose)', () => {
@@ -663,12 +674,32 @@ describe('masks of uniform non-white luminance and nested masks (TASK-092)', () 
         expectRefused(svg(maskOf(content) + FULL), /translucent content with overlapping shapes/);
     });
 
-    it('keeps the warning for a gray mask under color-interpolation="linearRGB", not for a white one', () => {
+    it('linearizes a gray mask under color-interpolation="linearRGB" (on the mask or inherited)', () => {
+        // Chrome and Firefox: #808080 reads 0.216 in linearRGB; resvg ignores linearRGB, so the
+        // reference is the sRGB gray of the same luminance (#373737 = 55/255).
         const gray = '<rect x="4" y="4" width="16" height="16" fill="#808080"/>';
-        expectRefused(svg(maskOf(gray, ' color-interpolation="linearRGB"') + FULL), /linearRGB/);
-        expectRefused(svg(`<g color-interpolation="linearRGB">${maskOf(gray)}</g>${FULL}`), /linearRGB/);
+        const reference = svg(maskOf('<rect x="4" y="4" width="16" height="16" fill="#373737"/>') + FULL);
+        for (const doc of [
+            svg(maskOf(gray, ' color-interpolation="linearRGB"') + FULL),
+            svg(`<g color-interpolation="linearRGB">${maskOf(gray)}</g>${FULL}`),
+        ])
+            for (const optimize of MODES) {
+                const { xml, warnings } = convert(doc, { optimize });
+                expect(warnings).toEqual([]);
+                expect(clipCount(xml)).toBe(1);
+                expect(Number(fillAlphas(xml)[0])).toBeCloseTo(0.216, 3);
+                expectRendersLike(doc, optimize, reference);
+            }
+        // An sRGB mask under a linearRGB ancestor reads the encoded value.
+        const back = svg(
+            `<g color-interpolation="linearRGB">${maskOf(gray, ' color-interpolation="sRGB"')}</g>${FULL}`,
+        );
+        expect(fillAlphas(expectExact(back))).toEqual(['0.502']);
+        // White and black are left unchanged by linearizing.
         const white = '<rect x="4" y="4" width="16" height="16" fill="#fff"/>';
-        expectExact(svg(maskOf(white, ' color-interpolation="linearRGB"') + FULL));
+        expect(fillAlphas(expectExact(svg(maskOf(white, ' color-interpolation="linearRGB"') + FULL)))).toEqual([]);
+        const hole = '<rect width="24" height="24" fill="#fff"/><rect x="8" y="8" width="8" height="8" fill="#000"/>';
+        expectExact(svg(maskOf(hole, ' color-interpolation="linearRGB"') + FULL));
     });
 
     describe('nested masks', () => {
@@ -716,12 +747,6 @@ describe('masks of uniform non-white luminance and nested masks (TASK-092)', () 
             const inexact =
                 '<mask id="i"><rect width="12" height="24" fill="#fff"/><rect x="12" width="12" height="24" fill="#808080"/></mask>';
             expectRefused(svg(inexact + maskOf(MASKED_CIRCLE) + FULL), /mask inside the mask \(.*not uniform/);
-            // After brave/leo country-sh: a stroke-only element under a Figma "outside stroke" mask
-            // (white rect, black shape on top) is not dropped: its inner mask is not exact.
-            const SHAPE = 'M6 6c0 7-.5 12 6 12s6-6 6-12z';
-            const outside = `<mask id="g" fill="#000"><path fill="#fff" d="M4 4h16v16H4z"/><path d="${SHAPE}"/></mask>`;
-            const content = `<path fill="#fff" d="${SHAPE}"/>${outside}<path fill="none" stroke="#fff" d="${SHAPE}" mask="url(#g)"/>`;
-            expectRefused(svg(maskOf(content) + FULL), /mask inside the mask \(.*not uniform/);
         });
 
         it('refuses a mask used inside its own content', () => {
@@ -729,4 +754,853 @@ describe('masks of uniform non-white luminance and nested masks (TASK-092)', () 
             expectRefused(svg(selfMasked + FULL), /inside its own content/);
         });
     });
+});
+
+describe('masks cutting black holes in a white rectangle (T-12)', () => {
+    // Figma "outside stroke" masks (brave/leo country-*): a white rectangle, then black shapes on top.
+    const SHAPE = 'M6 6c0 7-.5 12 6 12s6-6 6-12z';
+    const RECT = '<path fill="#fff" d="M4 4h16v16H4z"/>';
+    const FULL = '<path d="M0 0h24v24H0z" fill="#E53935" mask="url(#m)"/>';
+    const maskOf = (content: string, attrs = ''): string => `<mask id="m"${attrs}>${content}</mask>`;
+
+    function expectExact(doc: string): void {
+        for (const optimize of MODES) {
+            const { xml, warnings } = convert(doc, { optimize });
+            expect(warnings).toEqual([]);
+            expect(xml).not.toContain('mask');
+            expect(clipCount(xml)).toBe(1);
+            expectRendersLike(doc, optimize);
+        }
+    }
+
+    function expectRefused(doc: string, reason: RegExp): void {
+        for (const optimize of MODES) {
+            const { xml, warnings } = convert(doc, { optimize });
+            const masks = warnings.filter((w) => w.message.includes('mask on'));
+            expect(masks.map((w) => w.code)).toEqual(['unsupported-attribute']);
+            expect(masks[0]!.message).toMatch(reason);
+            expect(clipCount(xml)).toBe(0);
+        }
+    }
+
+    it.each([
+        ['a curved shape (inheriting fill="#000" from the mask)', `<path d="${SHAPE}"/>`, ' fill="#000"'],
+        ['a <rect>', '<rect x="8" y="8" width="8" height="8"/>', ''],
+        ['an evenodd ring', '<path fill-rule="evenodd" d="M6 6h12v12H6zM9 9h6v6H9z"/>', ''],
+        ['a nonzero ring (opposite windings)', '<path d="M6 6h12v12H6zM9 9v6h6V9z"/>', ''],
+        ['a reversed shape', '<path d="M8 8v8h8V8z"/>', ''],
+        [
+            'two disjoint shapes',
+            '<rect x="5" y="5" width="5" height="5"/><rect x="12" y="12" width="6" height="6"/>',
+            '',
+        ],
+        ['a shape touching the edge', '<rect x="4" y="8" width="8" height="8" fill="black"/>', ''],
+    ])('clips by subtraction for %s', (_, holes, attrs) => {
+        expectExact(svg(maskOf(RECT + holes, attrs) + FULL));
+    });
+
+    it('cuts the hole out of a translucent or gray rectangle, and under objectBoundingBox content', () => {
+        expectExact(svg(maskOf(`<path fill="#808080" d="M4 4h16v16H4z"/><path d="${SHAPE}"/>`) + FULL));
+        expectExact(
+            svg(maskOf(`<rect width="24" height="24" fill="#fff" fill-opacity="0.5"/><path d="${SHAPE}"/>`) + FULL),
+        );
+        const box = '<rect width="1" height="1" fill="#fff"/><rect x="0.25" y="0.25" width="0.5" height="0.5"/>';
+        expectExact(svg(maskOf(box, ' maskContentUnits="objectBoundingBox"') + FULL));
+    });
+
+    it('converts a stroke drawn under an outside-stroke mask exactly (brave/leo country-sh)', () => {
+        const outside = `<mask id="m" maskUnits="userSpaceOnUse" x="4" y="4" width="16" height="16" fill="#000">${RECT}<path d="${SHAPE}"/></mask>`;
+        expectExact(svg(`${outside}<path fill="none" stroke="#E53935" stroke-width="3" d="${SHAPE}" mask="url(#m)"/>`));
+    });
+
+    it('drops a stroke-only element under such a mask inside another mask (mask-approximated)', () => {
+        const outside = `<mask id="g" fill="#000">${RECT}<path d="${SHAPE}"/></mask>`;
+        const content = `<path fill="#fff" d="${SHAPE}"/>${outside}<path fill="none" stroke="#fff" d="${SHAPE}" mask="url(#g)"/>`;
+        const doc = svg(maskOf(content) + FULL);
+        for (const optimize of MODES) {
+            const { xml, warnings } = convert(doc, { optimize });
+            expect(warnings.map((w) => w.code)).toEqual(['mask-approximated']);
+            expect(clipCount(xml)).toBe(1);
+        }
+    });
+
+    it.each([
+        ['a shape not entirely inside', '<rect x="16" y="16" width="8" height="8"/>', /not uniform/],
+        [
+            'overlapping shapes',
+            '<rect x="6" y="6" width="8" height="8"/><rect x="10" y="10" width="8" height="8"/>',
+            /not uniform/,
+        ],
+        ['a translucent black shape', '<rect x="8" y="8" width="8" height="8" fill-opacity="0.5"/>', /not uniform/],
+        ['a nested contour of the same winding', '<path d="M6 6h12v12H6zM9 9h6v6H9z"/>', /not uniform/],
+        ['crossing contours', '<path fill-rule="evenodd" d="M6 6h8v8H6zM10 10h8v8h-8z"/>', /not uniform/],
+        [
+            'white painted over the hole',
+            '<rect x="8" y="8" width="8" height="8"/><rect x="10" y="10" width="2" height="2" fill="#fff"/>',
+            /paints over a hole/,
+        ],
+    ])('keeps the warning for %s', (_, holes, reason) => {
+        expectRefused(svg(maskOf(RECT + holes) + FULL), reason);
+    });
+
+    it('keeps the warning when the white content is not one rectangle', () => {
+        const hole = '<rect x="8" y="8" width="2" height="2"/>';
+        expectRefused(svg(maskOf(`<circle cx="12" cy="12" r="8" fill="#fff"/>${hole}`) + FULL), /not uniform/);
+        const two =
+            '<rect x="4" y="4" width="8" height="16" fill="#fff"/><rect x="12" y="4" width="8" height="16" fill="#fff"/>';
+        expectRefused(svg(maskOf(two + hole) + FULL), /not uniform/);
+        const rotated = '<rect x="4" y="4" width="16" height="16" fill="#fff" transform="rotate(10 12 12)"/>';
+        expectRefused(svg(maskOf(rotated + hole) + FULL), /not uniform/);
+        // Black first: the white rectangle paints over it (no hole), still another value.
+        expectRefused(svg(maskOf(hole + RECT) + FULL), /not uniform/);
+    });
+
+    it('unites a black shape with the rectangle of an alpha mask (alpha 1: no hole)', () => {
+        const doc = svg(maskOf(`${RECT}<rect x="8" y="8" width="8" height="8"/>`, ' mask-type="alpha"') + FULL);
+        for (const optimize of MODES) {
+            const { warnings } = convert(doc, { optimize });
+            expect(warnings).toEqual([]);
+            expectRendersLike(doc, optimize);
+        }
+    });
+});
+
+describe('unresolved shape lengths in clip and mask content (T-29)', () => {
+    const lengthWarnings = (doc: string, optimize: boolean) =>
+        convert(doc, { optimize }).warnings.filter((w) => w.message.includes('is not a length'));
+
+    it('warns once for a clipPath rect width in ex used by two elements', () => {
+        const doc = svg(
+            '<clipPath id="c"><rect x="4" y="4" width="1ex" height="16"/></clipPath>' +
+                '<g clip-path="url(#c)">' +
+                CIRCLE +
+                '</g><g clip-path="url(#c)">' +
+                CIRCLE +
+                '</g>',
+        );
+        for (const optimize of MODES) {
+            const warnings = lengthWarnings(doc, optimize);
+            expect(warnings.map((w) => [w.code, w.node])).toEqual([['unsupported-attribute', 'rect']]);
+            expect(warnings[0]!.message).toBe(
+                'width="1ex" on <rect> is not a length the converter can resolve (ex, ch, calc()…); 0 is used.',
+            );
+        }
+    });
+
+    it('warns for a mask content circle radius in ex', () => {
+        const doc = svg(
+            '<mask id="m"><rect x="4" y="4" width="16" height="16" fill="#fff"/>' +
+                '<circle cx="12" cy="12" r="1ex" fill="#fff"/></mask>' +
+                '<path d="M0 0h24v24H0z" fill="#E53935" mask="url(#m)"/>',
+        );
+        for (const optimize of MODES) {
+            const warnings = lengthWarnings(doc, optimize);
+            expect(warnings.map((w) => [w.code, w.node])).toEqual([['unsupported-attribute', 'circle']]);
+            expect(warnings[0]!.message).toMatch(/^r="1ex" on <circle>/);
+        }
+    });
+});
+
+describe('<switch> bounding box and systemLanguage in clip and mask content (T-47)', () => {
+    const SQUARE = '<rect x="4" y="4" width="16" height="16" fill="#E53935"/>';
+    const BIG = '<rect x="0" y="0" width="24" height="24" fill="#3949AB"/>';
+    const MASK = '<mask id="m" maskContentUnits="objectBoundingBox"><rect width="0.5" height="1" fill="#fff"/></mask>';
+    // The <switch> renders SQUARE only: BIG is skipped by its condition, or comes after the pick.
+    const SWITCHES = [
+        ['one child', SQUARE],
+        ['requiredExtensions on the first child', BIG.replace('/>', ' requiredExtensions="x"/>') + SQUARE],
+        ['an empty systemLanguage on the first child', BIG.replace('/>', ' systemLanguage=""/>') + SQUARE],
+        ['a second child', SQUARE + BIG],
+    ] as const;
+
+    for (const optimize of MODES) {
+        describe(`optimize: ${optimize}`, () => {
+            for (const [name, children] of SWITCHES) {
+                it.each([
+                    ['inset(4px)', '<rect x="8" y="8" width="8" height="8" fill="#E53935"/>'],
+                    ['circle()', '<circle cx="12" cy="12" r="8" fill="#E53935"/>'],
+                ])(`clips a <switch> with ${name} by its child's box: %s`, (shape, reference) => {
+                    const doc = svg(`<switch clip-path="${shape}">${children}</switch>`);
+                    const { xml, warnings } = convert(doc, { optimize, strict: true });
+                    expect(warnings).toEqual([]);
+                    expect(clipCount(xml)).toBe(1);
+                    expectRendersLike(doc, optimize, svg(reference));
+                });
+
+                it(`masks a <switch> with ${name} in objectBoundingBox units`, () => {
+                    const doc = svg(`${MASK}<switch mask="url(#m)">${children}</switch>`);
+                    const { xml, warnings } = convert(doc, { optimize, strict: true });
+                    expect(warnings).toEqual([]);
+                    expect(xml).not.toContain('mask');
+                    expectRendersLike(doc, optimize, svg('<rect x="4" y="4" width="8" height="16" fill="#E53935"/>'));
+                });
+            }
+
+            it('measures a <switch> inside a measured group, and one without child as empty', () => {
+                const nested = svg(`<g clip-path="inset(4px)"><switch>${SQUARE}</switch><switch/></g>`);
+                expect(convert(nested, { optimize, strict: true }).warnings).toEqual([]);
+                expectRendersLike(nested, optimize, svg('<rect x="8" y="8" width="8" height="8" fill="#E53935"/>'));
+            });
+
+            it('measures the child a language-dependent <switch> renders (reported once by the renderer)', () => {
+                const doc = svg(
+                    `<switch clip-path="inset(4px)">${BIG.replace('/>', ' systemLanguage="zz"/>')}${SQUARE}</switch>`,
+                );
+                const { xml, warnings } = convert(doc, { optimize });
+                expect(warnings.map((w) => w.message)).toEqual([expect.stringMatching(/children of <switch>/)]);
+                expect(clipCount(xml)).toBe(1);
+                expectRendersLike(doc, optimize, svg('<rect x="8" y="8" width="8" height="8" fill="#E53935"/>'));
+            });
+
+            it('reports a non-empty systemLanguage on <clipPath> and <mask> content (used as if it passed)', () => {
+                const clip = svg(
+                    `<clipPath id="c"><rect systemLanguage="zz" x="4" y="4" width="16" height="16"/></clipPath>${BIG.replace('/>', ' clip-path="url(#c)"/>')}`,
+                );
+                const mask = svg(
+                    `<mask id="m"><g systemLanguage="zz"><rect x="4" y="4" width="16" height="16" fill="#fff"/></g></mask>${BIG.replace('/>', ' mask="url(#m)"/>')}`,
+                );
+                for (const doc of [clip, mask]) {
+                    const { xml, warnings } = convert(doc, { optimize });
+                    expect(warnings.map((w) => w.code)).toEqual(['unsupported-attribute']);
+                    expect(warnings[0]!.message).toMatch(/^systemLanguage on <\w+> depends on the device language/);
+                    expect(clipCount(xml)).toBe(1);
+                    expect(() => convert(doc, { optimize, strict: true })).toThrow(/systemLanguage/);
+                }
+            });
+        });
+    }
+});
+
+describe('empty <clipPath> and <switch> in clip and mask content (T-75)', () => {
+    // CSS Masking 1 §6.1: a clipping path without rendered content clips the element away entirely.
+    const DOT = '<circle cx="3" cy="3" r="2" fill="#1E88E5"/>';
+    const RED = '<rect width="24" height="24" fill="#E53935"';
+    const EMPTY_CLIPS = [
+        ['no child', '<clipPath id="c"/>'],
+        ['an empty group', '<clipPath id="c"><g/></clipPath>'],
+        ['a display="none" child', '<clipPath id="c"><rect width="10" height="10" display="none"/></clipPath>'],
+        [
+            'a style="display:none" group',
+            '<clipPath id="c"><g style="display:none"><rect width="10" height="10"/></g></clipPath>',
+        ],
+        ['a failing condition', '<clipPath id="c"><rect requiredExtensions="" width="10" height="10"/></clipPath>'],
+        [
+            'a <switch> (not a permitted child)',
+            '<clipPath id="c"><switch><rect width="10" height="10"/></switch></clipPath>',
+        ],
+    ] as const;
+
+    for (const optimize of MODES) {
+        describe(`optimize: ${optimize}`, () => {
+            for (const [name, clip] of EMPTY_CLIPS) {
+                it(`draws nothing of an element clipped by a <clipPath> with ${name}, without warning`, () => {
+                    for (const target of [
+                        `${RED} clip-path="url(#c)"/>`,
+                        `<g clip-path="url(#c)">${RED}/></g>`,
+                        `<g clip-path="url(#c)" transform="rotate(30 12 12)">${RED}/></g>`,
+                    ]) {
+                        const doc = svg(`${clip}${target}${DOT}`);
+                        const { xml, warnings } = convert(doc, { optimize, strict: true });
+                        expect(warnings).toEqual([]);
+                        expectRendersLike(doc, optimize, svg(DOT));
+                        if (!target.includes('rotate')) expect(xml).not.toContain('E53935');
+                    }
+                });
+            }
+
+            it('ignores a <switch> next to other <clipPath> content, without warning', () => {
+                const doc = svg(
+                    `<clipPath id="c"><switch><rect width="24" height="24"/></switch><rect x="4" y="4" width="8" height="8"/></clipPath>${RED} clip-path="url(#c)"/>`,
+                );
+                const { xml, warnings } = convert(doc, { optimize, strict: true });
+                expect(warnings).toEqual([]);
+                expect(clipCount(xml)).toBe(1);
+                expectRendersLike(doc, optimize, svg('<rect x="4" y="4" width="8" height="8" fill="#E53935"/>'));
+            });
+
+            it('keeps the warning (and the unclipped element) for content that cannot be converted', () => {
+                const doc = svg(`<clipPath id="c"><text>x</text></clipPath>${RED} clip-path="url(#c)"/>`);
+                const { xml, warnings } = convert(doc, { optimize });
+                expect(warnings.map((w) => w.code)).toEqual(['unsupported-clip-path', 'unsupported-clip-path']);
+                expect(warnings[0]!.message).toMatch(/<text> inside a <clipPath> cannot be converted/);
+                expect(warnings[1]!.message).toMatch(/produced no geometry/);
+                expect(xml).toContain('E53935');
+            });
+
+            it('masks by the child a <switch> inside a <mask> picks, like a group', () => {
+                const doc = svg(
+                    `<mask id="m"><switch><rect requiredExtensions="" width="24" height="24" fill="#fff"/><rect width="10" height="10" fill="#fff"/><rect width="24" height="24" fill="#fff"/></switch></mask>${RED} mask="url(#m)"/>`,
+                );
+                const { xml, warnings } = convert(doc, { optimize, strict: true });
+                expect(warnings).toEqual([]);
+                expect(xml).not.toContain('mask');
+                expect(clipCount(xml)).toBe(1);
+                expectRendersLike(doc, optimize, svg('<rect width="10" height="10" fill="#E53935"/>'));
+            });
+
+            it('treats a <mask> whose <switch> picks nothing like an empty mask', () => {
+                const doc = svg(`<mask id="m"><switch/></mask>${RED} mask="url(#m)"/>${DOT}`);
+                const empty = svg(`<mask id="m"/>${RED} mask="url(#m)"/>${DOT}`);
+                expect(codes(doc, optimize)).toEqual(codes(empty, optimize));
+            });
+        });
+    }
+});
+
+describe('empty <mask> and zero-size <clipPath> content (T-102)', () => {
+    // CSS Masking 1 §7.1: no rendered mask content is a mask value of 0 everywhere; §6.1 for clips.
+    const DOT = '<circle cx="3" cy="3" r="2" fill="#1E88E5"/>';
+    const RED = '<rect width="24" height="24" fill="#E53935"';
+    const TARGETS = [
+        (ref: string, id: string) => `${RED} ${ref}="url(#${id})"/>`,
+        (ref: string, id: string) => `<g ${ref}="url(#${id})">${RED}/></g>`,
+        (ref: string, id: string) => `<g ${ref}="url(#${id})" transform="rotate(30 12 12)">${RED}/></g>`,
+    ];
+    const EMPTY_MASKS = [
+        ['no child', '<mask id="m"/>'],
+        ['a <switch> that picks nothing', '<mask id="m"><switch/></mask>'],
+        ['a zero-size shape', '<mask id="m"><rect width="0" height="5" fill="#fff"/></mask>'],
+        ['a hidden shape', '<mask id="m"><rect width="10" height="10" fill="#fff" display="none"/></mask>'],
+        ['an empty region', '<mask id="m" maskUnits="userSpaceOnUse" width="0"/>'],
+    ] as const;
+    const ZERO_CLIPS = [
+        ['a zero-width rect', '<clipPath id="c"><rect width="0" height="10"/></clipPath>'],
+        ['a zero-radius circle', '<clipPath id="c"><circle cx="5" cy="5" r="0"/></clipPath>'],
+        ['a path without d', '<clipPath id="c"><path/></clipPath>'],
+    ] as const;
+    const cases = [
+        ...EMPTY_MASKS.map(([name, def]) => [`a <mask> with ${name}`, def, 'mask', 'm'] as const),
+        ...ZERO_CLIPS.map(([name, def]) => [`a <clipPath> with ${name}`, def, 'clip-path', 'c'] as const),
+    ];
+
+    for (const optimize of MODES) {
+        describe(`optimize: ${optimize}`, () => {
+            for (const [name, def, ref, id] of cases) {
+                it(`draws nothing of an element under ${name}, without warning`, () => {
+                    for (const target of TARGETS) {
+                        const doc = svg(`${def}${target(ref, id)}${DOT}`);
+                        const { xml, warnings } = convert(doc, { optimize, strict: true });
+                        expect(warnings).toEqual([]);
+                        expectRendersLike(doc, optimize, svg(DOT));
+                        // A rotated group keeps its clip on the group: drawn content clipped away.
+                        if (target !== TARGETS[2]) expect(xml).not.toContain('E53935');
+                    }
+                });
+            }
+
+            it('ignores a zero-size shape next to other <clipPath> content', () => {
+                const doc = svg(
+                    `<clipPath id="c"><rect width="0" height="10"/><rect x="4" y="4" width="8" height="8"/></clipPath>${RED} clip-path="url(#c)"/>`,
+                );
+                const { xml, warnings } = convert(doc, { optimize, strict: true });
+                expect(warnings).toEqual([]);
+                expect(clipCount(xml)).toBe(1);
+                expectRendersLike(doc, optimize, svg('<rect x="4" y="4" width="8" height="8" fill="#E53935"/>'));
+            });
+
+            it('hides the content of a mask whose own content is masked by an empty mask', () => {
+                const doc = svg(
+                    `<mask id="e"/><mask id="m"><rect width="10" height="10" fill="#fff" mask="url(#e)"/></mask>${RED} mask="url(#m)"/>${DOT}`,
+                );
+                const { xml, warnings } = convert(doc, { optimize, strict: true });
+                expect(warnings).toEqual([]);
+                expectRendersLike(doc, optimize, svg(DOT));
+                expect(xml).not.toContain('E53935');
+            });
+
+            it('keeps refusing a mask whose content only paints strokes', () => {
+                const doc = svg(
+                    `<mask id="m"><rect width="10" height="10" fill="none" stroke="#fff"/></mask>${RED} mask="url(#m)"/>`,
+                );
+                const { warnings } = convert(doc, { optimize });
+                expect(warnings.map((w) => w.message).join('\n')).toMatch(/only paints strokes/);
+            });
+        });
+    }
+});
+
+describe('empty clip on a group kept as an Android <group> (T-117)', () => {
+    const BODY = '<path d="M0 0h10v10H0z" fill="#E53935"/>';
+    const DOT = '<circle cx="20" cy="20" r="2" fill="#1E88E5"/>';
+
+    for (const optimize of MODES) {
+        describe(`optimize: ${optimize}`, () => {
+            it('drops a translated group clipped by an empty <clipPath>, without warning', () => {
+                const doc = svg(
+                    `<clipPath id="c"/><g transform="translate(2 3)" clip-path="url(#c)">${BODY}</g>${DOT}`,
+                );
+                const { xml, warnings } = convert(doc, { optimize, strict: true });
+                expect(warnings).toEqual([]);
+                expect(xml).not.toContain('<group');
+                expect(xml).not.toContain('M0,0Z');
+                expect(xml).not.toContain('E53935');
+                expectRendersLike(doc, optimize, svg(DOT));
+            });
+
+            it('drops a named group clipped by an empty <clipPath> and frees its name (preserveIds)', () => {
+                const doc = svg(
+                    `<clipPath id="c"/><g id="a" transform="translate(2 3)" clip-path="url(#c)">${BODY}</g>${DOT}`,
+                );
+                const { xml, warnings } = convert(doc, { optimize, strict: true, preserveIds: true });
+                expect(warnings).toEqual([]);
+                expect(xml).not.toContain('<group');
+                expect(xml).not.toContain('M0,0Z');
+                expect(xml).not.toContain('android:name="a"');
+                expect(xml).not.toContain('E53935');
+            });
+
+            it('drops a named untransformed group clipped by an empty <clipPath> (preserveIds)', () => {
+                const doc = svg(`<clipPath id="c"/><g id="a" clip-path="url(#c)">${BODY}</g>${DOT}`);
+                const { xml, warnings } = convert(doc, { optimize, strict: true, preserveIds: true });
+                expect(warnings).toEqual([]);
+                expect(xml).not.toContain('<group');
+                expect(xml).not.toContain('E53935');
+            });
+
+            it('keeps a translated group with a non-empty clip unchanged', () => {
+                const doc = svg(
+                    `<clipPath id="c"><rect width="5" height="5"/></clipPath><g transform="translate(2 3)" clip-path="url(#c)">${BODY}</g>`,
+                );
+                const { xml, warnings } = convert(doc, { optimize, strict: true });
+                expect(warnings).toEqual([]);
+                expect(xml).toContain('android:translateX="2"');
+                expect(clipCount(xml)).toBe(1);
+                expect(xml).toContain('E53935');
+                expectRendersLike(doc, optimize);
+            });
+        });
+    }
+});
+
+describe('clip precision under a scale above 1 (T-134)', () => {
+    const TINY_CLIP = '<clipPath id="c"><rect x="0.00123" y="0.00123" width="0.01" height="0.01"/></clipPath>';
+    const TINY = '<rect width="0.024" height="0.024"/>';
+    const SCALED_CLIP =
+        '<clipPath id="c" transform="scale(1000)"><rect x="0.00123" y="0.00377" width="0.0104" height="0.0104"/></clipPath>';
+    const OBB_MASK =
+        '<mask id="m" maskContentUnits="objectBoundingBox"><rect x="0.123456" y="0.123456" width="0.5" height="0.5" fill="#fff"/></mask>';
+    const clipData = (xml: string): string[] =>
+        [...xml.matchAll(/<clip-path android:pathData="([^"]*)"/g)].map((m) => m[1]!);
+
+    for (const optimize of MODES) {
+        describe(`optimize: ${optimize}`, () => {
+            it('keeps the decimals of a clip on a leaf under scale(1000)', () => {
+                const doc = svg(
+                    `${TINY_CLIP}<g transform="scale(1000)"><rect width="0.024" height="0.024" clip-path="url(#c)"/></g>`,
+                );
+                const { xml, warnings } = convert(doc, { optimize });
+                expect(warnings).toEqual([]);
+                expect(clipData(xml).join()).toContain('.00123');
+                expectRendersLike(doc, optimize);
+            });
+
+            it('keeps the decimals of a clip on a group scaled by 1000', () => {
+                const doc = svg(`${TINY_CLIP}<g transform="scale(1000)" clip-path="url(#c)">${TINY}</g>`);
+                const { xml, warnings } = convert(doc, { optimize });
+                expect(warnings).toEqual([]);
+                expect(clipData(xml).join()).toContain('.00123');
+                expectRendersLike(doc, optimize);
+            });
+
+            it('keeps the decimals of clip content under its own transform="scale(1000)"', () => {
+                const doc = svg(`${SCALED_CLIP}<rect width="24" height="24" clip-path="url(#c)"/>`);
+                const { xml, warnings } = convert(doc, { optimize });
+                expect(warnings).toEqual([]);
+                expect(clipData(xml)[0]).toMatch(/^M1\.23[ ,]3\.77/);
+                expectRendersLike(doc, optimize);
+            });
+
+            it('keeps the decimals of a clip on a group whose scale(1000) is baked (skew)', () => {
+                const doc = svg(
+                    `${TINY_CLIP}<g transform="matrix(1000 0 300 1000 0 0)" clip-path="url(#c)">${TINY}</g>`,
+                );
+                expect(convert(doc, { optimize }).warnings).toEqual([]);
+                expectRendersLike(doc, optimize);
+            });
+
+            it('keeps the decimals of a clip on a leaf under a baked scale(1000)', () => {
+                const doc = svg(
+                    `${TINY_CLIP}<g transform="skewX(10)"><g transform="scale(1000)"><rect width="0.024" height="0.024" clip-path="url(#c)"/></g></g>`,
+                );
+                expect(convert(doc, { optimize }).warnings).toEqual([]);
+                expectRendersLike(doc, optimize);
+            });
+
+            it('resolves one clip at each precision it is drawn at, reported once', () => {
+                const clip =
+                    '<clipPath id="c"><rect x="0.00123" y="0.00123" width="0.01" height="0.01"/><path clip-rule="evenodd" d="M0.02 0.02L0.03 0.03L0.03 0.02L0.02 0.03Z"/></clipPath>';
+                const doc = svg(
+                    `${clip}<rect width="0.012" height="0.012" clip-path="url(#c)"/><g transform="scale(1000)"><rect width="0.024" height="0.024" clip-path="url(#c)"/></g>`,
+                );
+                const { xml, warnings } = convert(doc, { optimize });
+                const data = clipData(xml);
+                expect(data).toHaveLength(2);
+                // Rounded to 3 decimals at the top level (svgo keeps them: it paths the rect itself).
+                if (!optimize) expect(data[0]).toMatch(/^M0\.001,0\.001/);
+                expect(data[1]).toContain('.00123');
+                expect(warnings.filter((w) => w.code === 'unsupported-clip-path')).toHaveLength(1);
+            });
+
+            it('keeps floatPrecision decimals in an objectBoundingBox mask', () => {
+                const doc = svg(`${OBB_MASK}<rect x="2" y="2" width="20" height="20" mask="url(#m)"/>`);
+                const { xml, warnings } = convert(doc, { optimize, floatPrecision: 5 });
+                expect(warnings).toEqual([]);
+                // svgo rounds the mask content to 5 decimals in bbox units first (0.12346 × 20).
+                expect(clipData(xml)[0]).toMatch(optimize ? /^M4\.4692 4\.4692/ : /^M4\.46912 4\.46912/);
+                expectRendersLike(doc, optimize);
+            });
+        });
+    }
+
+    // optimize: false only: svgo rounds the clip content itself.
+    it('leaves a clip unchanged without a scale above 1', () => {
+        const doc = svg(
+            `${TINY_CLIP}<g transform="scale(0.5)"><rect width="0.024" height="0.024" clip-path="url(#c)"/></g>`,
+        );
+        expect(clipData(convert(doc, { optimize: false }).xml)).toEqual(['M0.001,0.001h0.01v0.01h-0.01z']);
+    });
+
+    it('scales the precision of objectBoundingBox mask content by the box size', () => {
+        const doc = svg(`${OBB_MASK}<rect x="2" y="2" width="20" height="20" mask="url(#m)"/>`);
+        expect(clipData(convert(doc, { optimize: false, floatPrecision: 2 }).xml)[0]).toMatch(/^M4\.47 4\.47/);
+    });
+});
+
+describe('mask precision under a scale above 1 (T-140)', () => {
+    const TINY_MASK =
+        '<mask id="m" maskUnits="userSpaceOnUse" x="0" y="0" width="0.02" height="0.02"><rect x="0.00123" y="0.00123" width="0.01" height="0.01" fill="#fff"/></mask>';
+    const TINY = '<rect width="0.024" height="0.024"/>';
+    const clipData = (xml: string): string[] =>
+        [...xml.matchAll(/<clip-path android:pathData="([^"]*)"/g)].map((m) => m[1]!);
+
+    for (const optimize of MODES) {
+        describe(`optimize: ${optimize}`, () => {
+            it('keeps the decimals of a mask on a leaf under scale(1000)', () => {
+                const doc = svg(
+                    `${TINY_MASK}<g transform="scale(1000)"><rect width="0.024" height="0.024" mask="url(#m)"/></g>`,
+                );
+                const { xml, warnings } = convert(doc, { optimize });
+                expect(warnings).toEqual([]);
+                expect(clipData(xml).join()).toContain('.00123');
+                expectRendersLike(doc, optimize);
+            });
+
+            it('keeps the decimals of a mask on a group scaled by 1000', () => {
+                const doc = svg(`${TINY_MASK}<g transform="scale(1000)" mask="url(#m)">${TINY}</g>`);
+                const { xml, warnings } = convert(doc, { optimize });
+                expect(warnings).toEqual([]);
+                expect(clipData(xml).join()).toContain('.00123');
+                expectRendersLike(doc, optimize);
+            });
+
+            it('keeps the decimals of a mask on a leaf with its own transform="scale(1000)"', () => {
+                const doc = svg(
+                    `${TINY_MASK}<rect transform="scale(1000)" width="0.024" height="0.024" mask="url(#m)"/>`,
+                );
+                const { xml, warnings } = convert(doc, { optimize });
+                expect(warnings).toEqual([]);
+                expect(clipData(xml).join()).toContain('.00123');
+                expectRendersLike(doc, optimize);
+            });
+
+            it('keeps the decimals of a mask on a leaf under a baked scale(1000)', () => {
+                const doc = svg(
+                    `${TINY_MASK}<g transform="skewX(10)"><g transform="scale(1000)"><rect width="0.024" height="0.024" mask="url(#m)"/></g></g>`,
+                );
+                expect(convert(doc, { optimize }).warnings).toEqual([]);
+                expectRendersLike(doc, optimize);
+            });
+
+            it('keeps the decimals of a nested mask under scale(1000)', () => {
+                const doc = svg(
+                    `${TINY_MASK}<mask id="n" maskUnits="userSpaceOnUse" x="0" y="0" width="0.02" height="0.02"><rect width="0.02" height="0.02" fill="#fff" mask="url(#m)"/></mask>` +
+                        `<g transform="scale(1000)"><rect width="0.024" height="0.024" mask="url(#n)"/></g>`,
+                );
+                const { xml, warnings } = convert(doc, { optimize });
+                expect(warnings).toEqual([]);
+                expect(clipData(xml).join()).toContain('.00123');
+                expectRendersLike(doc, optimize);
+            });
+
+            it('measures the objectBoundingBox of a masked element under scale(1000) at its precision', () => {
+                const doc = svg(
+                    '<mask id="o" maskContentUnits="objectBoundingBox"><rect x="0.25" y="0.25" width="0.5" height="0.5" fill="#fff"/></mask>' +
+                        '<g transform="scale(1000)"><rect x="0.00123" y="0.00123" width="0.01" height="0.01" mask="url(#o)"/></g>',
+                );
+                const { xml, warnings } = convert(doc, { optimize });
+                expect(warnings).toEqual([]);
+                expect(clipData(xml).join()).toContain('.00373');
+                expectRendersLike(doc, optimize);
+            });
+
+            it('resolves one mask at each precision it is drawn at, reported once', () => {
+                const mask =
+                    '<mask id="m" maskUnits="userSpaceOnUse" x="0" y="0" width="0.02" height="0.02"><rect x="0.00123" y="0.00123" width="0.01" height="0.01" fill="#fff" stroke="#fff" stroke-width="0.001"/></mask>';
+                const doc = svg(
+                    `${mask}<rect width="0.012" height="0.012" mask="url(#m)"/><g transform="scale(1000)"><rect width="0.024" height="0.024" mask="url(#m)"/></g>`,
+                );
+                const { xml, warnings } = convert(doc, { optimize });
+                const data = clipData(xml);
+                expect(data).toHaveLength(2);
+                expect(data[0]).not.toContain('.00123');
+                expect(data[1]).toContain('.00123');
+                expect(warnings.map((w) => w.code)).toEqual(['mask-approximated']);
+            });
+        });
+    }
+
+    // optimize: false only: svgo rounds the mask content itself.
+    it('leaves a mask unchanged without a scale above 1', () => {
+        const doc = svg(
+            `${TINY_MASK}<g transform="scale(0.5)"><rect width="0.024" height="0.024" mask="url(#m)"/></g>`,
+        );
+        expect(clipData(convert(doc, { optimize: false }).xml)).toEqual(['M.001.001h.01v.01H.001Z']);
+    });
+});
+
+describe('invalid transform in <clipPath> and <mask> content (T-88)', () => {
+    const ignored = (value: string, node: string) => ({
+        code: 'unsupported-attribute',
+        message: `transform="${value}" on <${node}> is not a valid transform list; ignored.`,
+        node,
+    });
+    // svgo turns the <rect> into a <path>: the warning names the element it reads, like a drawn shape's.
+    const rectNode = (optimize: boolean): string => (optimize ? 'path' : 'rect');
+    const RECT = '<rect width="12" height="12" fill="#fff"/>';
+    const CLIPPED = '<rect width="24" height="24" clip-path="url(#c)"/>';
+    const MASKED = '<rect width="24" height="24" mask="url(#m)"/>';
+    const cases = (optimize: boolean) => [
+        {
+            name: 'on the <clipPath>',
+            doc: svg(`<clipPath id="c" transform="translate(foo 5)">${RECT}</clipPath>${CLIPPED}`),
+            reference: svg(`<clipPath id="c">${RECT}</clipPath>${CLIPPED}`),
+            warning: ignored('translate(foo 5)', 'clipPath'),
+        },
+        {
+            name: 'on <clipPath> content',
+            doc: svg(
+                `<clipPath id="c"><rect transform="translate(foo 2)" width="12" height="12"/></clipPath>${CLIPPED}`,
+            ),
+            reference: svg(`<clipPath id="c">${RECT}</clipPath>${CLIPPED}`),
+            warning: ignored('translate(foo 2)', rectNode(optimize)),
+        },
+        {
+            // A <g> is no permitted child of <clipPath> (svgo drops it): only in mask content.
+            name: 'on a group in <mask> content',
+            doc: svg(`<mask id="m"><g transform="rotate(foo)">${RECT}</g></mask>${MASKED}`),
+            reference: svg(`<mask id="m">${RECT}</mask>${MASKED}`),
+            warning: ignored('rotate(foo)', 'g'),
+        },
+        {
+            name: 'on <mask> content',
+            doc: svg(
+                `<mask id="m"><rect transform="translate(foo 2)" width="12" height="12" fill="#fff"/></mask>${MASKED}`,
+            ),
+            reference: svg(`<mask id="m">${RECT}</mask>${MASKED}`),
+            warning: ignored('translate(foo 2)', rectNode(optimize)),
+        },
+    ];
+
+    for (const optimize of MODES) {
+        describe(`optimize: ${optimize}`, () => {
+            for (const { name, doc, reference, warning } of cases(optimize)) {
+                it(`reports an invalid transform ${name} and ignores it`, () => {
+                    const { xml, warnings } = convert(doc, { optimize });
+                    expect(warnings).toEqual([warning]);
+                    expect(xml).toBe(convert(reference, { optimize }).xml);
+                    expectRendersLike(doc, optimize, reference);
+                    expect(() => convert(doc, { optimize, strict: true })).toThrow(/not a valid transform list/);
+                });
+            }
+
+            it('reports an invalid transform in a clip used twice once', () => {
+                const doc = svg(
+                    `<clipPath id="c"><rect transform="translate(foo 2)" width="12" height="12"/></clipPath>` +
+                        `${CLIPPED}<g transform="scale(1000)"><rect width="0.024" height="0.024" clip-path="url(#c)"/></g>`,
+                );
+                expect(convert(doc, { optimize }).warnings).toEqual([ignored('translate(foo 2)', rectNode(optimize))]);
+            });
+
+            it('does not report an empty or valid transform in clip content', () => {
+                const doc = svg(
+                    `<clipPath id="c" transform=""><rect transform="translate(2 2)" width="12" height="12"/></clipPath>${CLIPPED}`,
+                );
+                expect(convert(doc, { optimize, strict: true }).warnings).toEqual([]);
+            });
+        });
+    }
+});
+
+describe('content dropped by a clip that clips everything (T-125)', () => {
+    const GRADIENT =
+        '<linearGradient id="g"><stop offset="0" stop-color="#f00"/><stop offset="1" stop-color="#00f"/></linearGradient>';
+    const FILLED = '<rect width="10" height="10" fill="url(#g)"/>';
+    const DOT = '<rect x="12" width="5" height="5"/>';
+    const cases = [
+        ['a group', `<clipPath id="c"/><g clip-path="url(#c)">${FILLED}</g>`],
+        ['a transformed group', `<clipPath id="c"/><g transform="translate(1 1)" clip-path="url(#c)">${FILLED}</g>`],
+        ['a group whose skew is baked', `<clipPath id="c"/><g transform="skewX(10)" clip-path="url(#c)">${FILLED}</g>`],
+        ['a leaf', `<clipPath id="c"/><rect width="10" height="10" fill="url(#g)" clip-path="url(#c)"/>`],
+        ['an empty mask', `<mask id="m"/><g mask="url(#m)">${FILLED}</g>`],
+    ] as const;
+
+    for (const optimize of MODES) {
+        describe(`optimize: ${optimize}`, () => {
+            for (const [name, content] of cases) {
+                it(`declares no aapt namespace for a gradient in ${name} clipped away`, () => {
+                    const { xml, warnings } = convert(svg(`${GRADIENT}${content}${DOT}`), { optimize });
+                    // The content is still rendered, then dropped: its own warnings remain (gradient-under-skew).
+                    expect(warnings.filter((w) => w.code !== 'gradient-under-skew')).toEqual([]);
+                    expect(xml).not.toContain('xmlns:aapt');
+                    expect(xml).not.toContain('<gradient');
+                    expect(xml).toContain('M12');
+                });
+            }
+
+            it('keeps the aapt namespace for a gradient drawn next to the clipped-away one', () => {
+                const doc = svg(`${GRADIENT}<clipPath id="c"/><g clip-path="url(#c)">${FILLED}</g>${FILLED}`);
+                expect(convert(doc, { optimize }).xml).toContain('xmlns:aapt');
+            });
+
+            it('frees the names of content clipped away (preserveIds)', () => {
+                const doc = svg(
+                    '<clipPath id="vide"/><g clip-path="url(#vide)"><path id="p" d="M0 0h5v5z"/></g><path id="p" d="M6 0h5v5z"/>',
+                );
+                const { xml } = convert(doc, { optimize, preserveIds: true });
+                expect(xml).toContain('android:name="p"');
+                expect(xml).not.toContain('M0 0');
+            });
+
+            it('frees the names of a named group clipped away and of its content (preserveIds)', () => {
+                const doc = svg(
+                    '<clipPath id="vide"/><g id="a" transform="translate(1 1)" clip-path="url(#vide)"><path id="p" d="M0 0h5v5z"/></g>' +
+                        '<g id="a"><path id="p" d="M6 0h5v5z"/></g>',
+                );
+                const { xml } = convert(doc, { optimize, preserveIds: true });
+                expect(xml).toContain('android:name="a"');
+                expect(xml).toContain('android:name="p"');
+            });
+        });
+    }
+});
+
+describe('<g> and <a> directly in a <clipPath> (T-149)', () => {
+    // Not permitted children (CSS Masking 1 §6.1): Chrome and Firefox clip everything away with only
+    // such a child; next to permitted content, Chrome ignores the group (followed here).
+    const DOT = '<circle cx="3" cy="3" r="2" fill="#1E88E5"/>';
+    const RED = '<rect width="24" height="24" fill="#E53935"';
+    const SQUARE = '<rect width="12" height="12"/>';
+
+    for (const optimize of MODES) {
+        describe(`optimize: ${optimize}`, () => {
+            for (const name of ['g', 'a']) {
+                it(`draws nothing of an element clipped by a <clipPath> holding only a <${name}>, without warning`, () => {
+                    const doc = svg(
+                        `<clipPath id="c"><${name}>${SQUARE}</${name}></clipPath>${RED} clip-path="url(#c)"/>${DOT}`,
+                    );
+                    const { xml, warnings } = convert(doc, { optimize, strict: true });
+                    expect(warnings).toEqual([]);
+                    expect(xml).not.toContain('E53935');
+                    expectRendersLike(doc, optimize, svg(DOT));
+                });
+            }
+
+            it('ignores a <g> next to other <clipPath> content, without warning', () => {
+                const doc = svg(
+                    `<clipPath id="c">${SQUARE}<g><rect x="12" width="12" height="24"/></g></clipPath>${RED} clip-path="url(#c)"/>`,
+                );
+                const { xml, warnings } = convert(doc, { optimize, strict: true });
+                expect(warnings).toEqual([]);
+                expect(clipCount(xml)).toBe(1);
+                expectRendersLike(doc, optimize, svg('<rect width="12" height="12" fill="#E53935"/>'));
+            });
+
+            it('keeps the content of a <use> in a <clipPath>, positioned and transformed', () => {
+                for (const use of ['<use href="#r"/>', '<use href="#r" x="6" transform="rotate(10)"/>']) {
+                    const doc = svg(
+                        `<defs><rect id="r" width="12" height="12"/></defs><clipPath id="c">${use}</clipPath>${RED} clip-path="url(#c)"/>`,
+                    );
+                    const { xml, warnings } = convert(doc, { optimize, strict: true });
+                    expect(warnings).toEqual([]);
+                    expect(clipCount(xml)).toBe(1);
+                    expectRendersLike(doc, optimize);
+                }
+            });
+        });
+    }
+});
+
+describe('<use> of a container in a <clipPath> (T-155)', () => {
+    // A <use> in a <clipPath> must reference a shape or a text (CSS Masking 1 §6.1): Chrome and
+    // Firefox clip everything away with a <use> of a <g>, <symbol>, <svg> or another <use>.
+    const DOT = '<circle cx="3" cy="3" r="2" fill="#1E88E5"/>';
+    const RED = '<rect width="24" height="24" fill="#E53935"';
+    const PAIR = '<rect width="12" height="12"/><rect x="12" width="6" height="6"/>';
+    const clipped = (defs: string, clip: string): string =>
+        svg(`<defs>${defs}</defs><clipPath id="c">${clip}</clipPath>${RED} clip-path="url(#c)"/>${DOT}`);
+    // Two children: svgo's collapseGroups would otherwise move the id of a one-child <g> onto its child.
+    const CONTAINERS: Record<string, string> = {
+        '<g>': `<g id="t">${PAIR}</g>`,
+        '<a>': `<a id="t">${PAIR}</a>`,
+        '<symbol>': `<symbol id="t" width="24" height="24">${PAIR}</symbol>`,
+        '<symbol viewBox>': `<symbol id="t" viewBox="0 0 24 24" width="24" height="24">${PAIR}</symbol>`,
+        '<svg>': `<svg id="t" width="24" height="24">${PAIR}</svg>`,
+        '<use> of a <rect>': '<rect id="r" width="12" height="12"/><use id="t" href="#r"/>',
+        '<use> of a <g>': `<g id="g">${PAIR}</g><use id="t" href="#g"/>`,
+        '<use> of a <use> of a <path>':
+            '<path id="p" d="M0 0H12V12H0Z"/><use id="u" href="#p"/><use id="t" href="#u"/>',
+    };
+
+    for (const optimize of MODES) {
+        describe(`optimize: ${optimize}`, () => {
+            for (const [name, defs] of Object.entries(CONTAINERS)) {
+                it(`draws nothing of an element clipped by a <use> of a ${name}, without warning`, () => {
+                    const doc = clipped(defs, '<use href="#t" x="2"/>');
+                    const { xml, warnings } = convert(doc, { optimize, strict: true });
+                    expect(warnings).toEqual([]);
+                    expect(xml).not.toContain('E53935');
+                    expectRendersLike(doc, optimize, svg(DOT));
+                });
+            }
+
+            it('ignores a <use> of a <g> next to other <clipPath> content, without warning', () => {
+                const doc = clipped(CONTAINERS['<g>']!, '<use href="#t"/><rect y="12" width="24" height="12"/>');
+                const { xml, warnings } = convert(doc, { optimize, strict: true });
+                expect(warnings).toEqual([]);
+                expect(clipCount(xml)).toBe(1);
+                expectRendersLike(doc, optimize, svg(`<rect y="12" width="24" height="12" fill="#E53935"/>${DOT}`));
+            });
+
+            it('keeps a <use> of a <path> or a <rect>, positioned', () => {
+                for (const target of ['<path id="t" d="M0 0H12V12H0Z"/>', '<rect id="t" width="12" height="12"/>']) {
+                    const doc = clipped(target, '<use href="#t" x="6" y="6"/>');
+                    const { xml, warnings } = convert(doc, { optimize, strict: true });
+                    expect(warnings).toEqual([]);
+                    expect(clipCount(xml)).toBe(1);
+                    expectRendersLike(
+                        doc,
+                        optimize,
+                        svg(`<rect x="6" y="6" width="12" height="12" fill="#E53935"/>${DOT}`),
+                    );
+                }
+            });
+        });
+    }
+
+    // svgo's collapseGroups would move the id of a one-child <g> onto its child (T-162).
+    const ONE_CHILD: Record<string, string> = {
+        '<g>': '<g id="t"><rect width="12" height="12"/></g>',
+        '<g transform>': '<g id="t" transform="translate(2)"><rect width="12" height="12"/></g>',
+        'nested <g>': '<g id="t"><g fill="blue"><rect width="12" height="12"/></g></g>',
+        '<g> in an <a>': '<a><g id="t"><rect width="12" height="12"/></g></a>',
+    };
+    for (const optimize of MODES)
+        for (const [name, defs] of Object.entries(ONE_CHILD))
+            it(`draws nothing through a <use> of a one-child ${name} (optimize: ${optimize})`, () => {
+                const doc = clipped(defs, '<use href="#t"/>');
+                const { xml, warnings } = convert(doc, { optimize, strict: true });
+                expect(warnings).toEqual([]);
+                expect(xml).not.toContain('E53935');
+                expectRendersLike(doc, optimize, svg(DOT));
+            });
 });

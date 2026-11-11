@@ -10,6 +10,7 @@ import {
     writeFileSync,
     type FSWatcher,
 } from 'node:fs';
+import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -242,6 +243,95 @@ describe('svgvd CLI', () => {
         expect(existsSync(out)).toBe(false);
     });
 
+    describe('output collisions without --android-names', () => {
+        it('fails before writing anything when a.svg and a.SVG share a directory', () => {
+            const src = join(dir, 'src');
+            mkdirSync(src);
+            writeFileSync(join(src, 'a.svg'), ICON);
+            writeFileSync(join(src, 'a.SVG'), ICON);
+            const out = join(dir, 'out');
+            const res = svgvd(src, '-o', out);
+            expect(res.status).toBe(1);
+            expect(res.stderr).toContain(
+                `✗ Output collision (nothing written):\n  ${join(out, 'a.xml')}: ${join(src, 'a.SVG')}, ${join(src, 'a.svg')}\n`,
+            );
+            expect(existsSync(out)).toBe(false);
+        });
+
+        it('fails when two inputs of the same name go to one directory, with every file failed in --json', () => {
+            for (const sub of ['x', 'y']) {
+                mkdirSync(join(dir, sub));
+                writeFileSync(join(dir, sub, 'a.svg'), ICON);
+            }
+            writeFileSync(join(dir, 'b.svg'), ICON);
+            const out = join(dir, 'out');
+            const inputs = [join(dir, 'x', 'a.svg'), join(dir, 'y', 'a.svg'), join(dir, 'b.svg')];
+            const res = svgvd(...inputs, '-o', out, '--json', '--fallback-png', 'mdpi');
+            expect(res.status).toBe(1);
+            const report = JSON.parse(res.stdout) as ReportEntry[];
+            expect(report.map((e) => [e.input, e.output, e.error?.message])).toEqual([
+                [
+                    inputs[0],
+                    null,
+                    `Output collision (nothing written): ${join(out, 'a.xml')} ← ${inputs[0]}, ${inputs[1]}`,
+                ],
+                [
+                    inputs[1],
+                    null,
+                    `Output collision (nothing written): ${join(out, 'a.xml')} ← ${inputs[0]}, ${inputs[1]}`,
+                ],
+                [inputs[2], null, 'Not converted: Output collision in this batch (nothing written)'],
+            ]);
+            expect(existsSync(out)).toBe(false);
+        });
+
+        it('accepts the same file name in distinct output directories', () => {
+            for (const sub of ['x', 'y']) {
+                mkdirSync(join(dir, sub));
+                writeFileSync(join(dir, sub, 'a.svg'), ICON);
+            }
+            expect(svgvd(join(dir, 'x', 'a.svg'), join(dir, 'y', 'a.svg')).status).toBe(0);
+            expect(existsSync(join(dir, 'x', 'a.xml')) && existsSync(join(dir, 'y', 'a.xml'))).toBe(true);
+        });
+    });
+
+    describe('--font', () => {
+        const FONT = new URL('./fixtures-fonts/Quicksand-Regular.ttf', import.meta.url).pathname;
+        const TEXT =
+            '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 40 40"><text x="5" y="28" font-family="Quicksand" font-size="20">Hi</text></svg>';
+
+        it('draws a <text> in the given family as glyph outlines', () => {
+            const res = svgvd('-s', TEXT, '--font', `quicksand=${FONT}`, '--json', '--dry-run');
+            expect(res.status).toBe(0);
+            const [entry] = JSON.parse(res.stdout) as ReportEntry[];
+            expect(entry!.warnings.map((w) => w.code)).not.toContain('unsupported-element');
+            expect(svgvd('-s', TEXT, '--font', `Quicksand=${FONT}`).stdout).toBe(
+                convert(TEXT, { fonts: { Quicksand: FONT } }).xml,
+            );
+        });
+
+        it('keeps <text> unconverted without a font for its family', () => {
+            const res = svgvd('-s', TEXT, '--font', `Inter=${FONT}`, '--json', '--dry-run');
+            const [entry] = JSON.parse(res.stdout) as ReportEntry[];
+            expect(entry!.warnings.map((w) => w.code)).toContain('unsupported-element');
+        });
+
+        it.each(['Quicksand', '=font.ttf', 'Quicksand='])('rejects --font %j', (value) => {
+            const res = svgvd('-s', TEXT, '--font', value);
+            expect(res.status).toBe(1);
+            expect(res.stderr).toBe(`Invalid --font (expected <family>=<file>): ${value}\n`);
+        });
+
+        it('documents the option in the help', () => {
+            expect(svgvd('--help').stdout).toContain('--font <f=file>');
+        });
+    });
+
+    it('exports package.json', () => {
+        const pkg = createRequire(import.meta.url)('svg-vectordrawable/package.json') as { name: string };
+        expect(pkg.name).toBe('svg-vectordrawable');
+    });
+
     it('documents --android-names in the help', () => {
         expect(svgvd('--help').stdout).toContain('--android-names');
     });
@@ -300,9 +390,10 @@ describe('svgvd CLI', () => {
         const APPROX =
             '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><g opacity="0.5">' +
             '<rect width="12" height="12"/><rect x="6" y="6" width="12" height="12"/></g></svg>';
+        // Crossing contours: below API 24, only those keep android:fillType (nested ones become nonzero).
         const EVEN_ODD =
             '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">' +
-            '<path d="M0 0h24v24H0zM6 6h12v12H6z" fill-rule="evenodd"/></svg>';
+            '<path d="M2 2h12v12H2zM8 8h12v12H8z" fill-rule="evenodd"/></svg>';
 
         it('fails on a lossy construct with --strict=lossy', () => {
             const input = join(dir, 'dashed.svg');
@@ -358,6 +449,22 @@ describe('svgvd CLI', () => {
             const help = svgvd('--help').stdout;
             expect(help).toContain('--strict=lossy');
             expect(help).toContain('--min-sdk <n>');
+        });
+    });
+
+    describe('--preserve-ids', () => {
+        const named =
+            '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><g id="arm"><path id="hand" d="M0 0h4v4z"/></g></svg>';
+
+        it('emits ids as android:name only with --preserve-ids', () => {
+            const out = svgvd('-s', named, '--preserve-ids').stdout;
+            expect(out).toContain('<group\n        android:name="arm">');
+            expect(out).toContain('android:name="hand"');
+            expect(svgvd('-s', named).stdout).not.toContain('android:name');
+        });
+
+        it('is listed in --help', () => {
+            expect(svgvd('--help').stdout).toContain('--preserve-ids');
         });
     });
 
@@ -907,6 +1014,24 @@ describe('svgvd CLI', () => {
                 expect(res.stderr).toContain(`✓ ${input} → ${png('mdpi')} deleted (dry run) (stale PNG fallback)\n`);
             });
 
+            it('`all` then `mdpi` → only drawable-mdpi/ remains', () => {
+                expect(svgvd(input, '--strict', '--fallback-png', 'all').status).toBe(0);
+                const res = svgvd(input, '--strict', '--fallback-png', 'mdpi');
+                expect(res.status).toBe(0);
+                expect(DENSITY_DIRS.filter((d) => existsSync(join(dir, d, 'blur.png')))).toEqual(['drawable-mdpi']);
+                for (const density of ['hdpi', 'xhdpi', 'xxhdpi', 'xxxhdpi'])
+                    expect(res.stderr).toContain(`✓ ${input} → ${png(density)} deleted (stale PNG fallback)\n`);
+                expect(res.stderr.match(/deleted/g)).toHaveLength(4);
+            });
+
+            it('keeps the PNGs of densities no longer requested with --dry-run', () => {
+                expect(svgvd(input, '--strict', '--fallback-png', 'mdpi,hdpi').status).toBe(0);
+                const res = svgvd(input, '--strict', '--fallback-png', 'mdpi', '--dry-run');
+                expect(res.status).toBe(0);
+                expect(existsSync(png('hdpi'))).toBe(true);
+                expect(res.stderr).toContain(`✓ ${input} → ${png('hdpi')} deleted (dry run) (stale PNG fallback)\n`);
+            });
+
             it('says nothing when there is no earlier output', () => {
                 const res = svgvd(input);
                 expect(res.status).toBe(0);
@@ -971,6 +1096,116 @@ describe('svgvd CLI', () => {
         });
     });
 
+    describe('--format compose', () => {
+        it('writes <KotlinName>.kt with the package, named from the file name', () => {
+            const input = join(dir, 'arrow-left.svg');
+            writeFileSync(input, ICON);
+            const res = svgvd(input, '--format', 'compose', '--package', 'com.example.icons');
+            expect(res.status).toBe(0);
+            const kotlin = readFileSync(join(dir, 'ArrowLeft.kt'), 'utf8');
+            expect(kotlin).toMatch(/^package com\.example\.icons\n/);
+            expect(kotlin).toContain('val ArrowLeft: ImageVector by lazy {');
+            expect(kotlin).toContain('fill = SolidColor(Color(0xFFFF0000))');
+            expect(existsSync(join(dir, 'arrow-left.xml'))).toBe(false);
+        });
+
+        it('writes a directory flat into -o, failing on two inputs with one Kotlin name', () => {
+            const src = join(dir, 'src');
+            mkdirSync(join(src, 'sub'), { recursive: true });
+            writeFileSync(join(src, 'a-b.svg'), ICON);
+            writeFileSync(join(src, 'sub', 'c.svg'), ICON);
+            const out = join(dir, 'out');
+            expect(svgvd(src, '-r', '-o', out, '--format', 'compose').status).toBe(0);
+            expect(readdirSync(out).sort()).toEqual(['AB.kt', 'C.kt']);
+            writeFileSync(join(src, 'a_b.svg'), ICON);
+            const res = svgvd(src, '-o', join(dir, 'out2'), '--format', 'compose');
+            expect(res.status).toBe(1);
+            expect(res.stderr).toContain('AB.kt');
+            expect(existsSync(join(dir, 'out2'))).toBe(false);
+        });
+
+        it('fails on Kotlin names differing only by case, with every file failed in --json', () => {
+            const inputs = [join(dir, 'ab.svg'), join(dir, 'a-b.svg')]; // Ab.kt, AB.kt
+            for (const input of inputs) writeFileSync(input, ICON);
+            const out = join(dir, 'out');
+            const message = `Kotlin name collision (nothing written): ${join(out, 'Ab.kt')}, ${join(out, 'AB.kt')} ← ${inputs[0]}, ${inputs[1]}`;
+            const res = svgvd(...inputs, '-o', out, '--format', 'compose', '--json');
+            expect(res.status).toBe(1);
+            expect(parseReport(res.stdout).map((e) => [e.input, e.output, e.error?.message])).toEqual([
+                [inputs[0], null, message],
+                [inputs[1], null, message],
+            ]);
+            expect(existsSync(out)).toBe(false);
+            const text = svgvd(...inputs, '-o', out, '--format', 'compose');
+            expect(text.status).toBe(1);
+            expect(text.stderr).toContain(
+                `✗ Kotlin name collision (nothing written):\n  ${join(out, 'Ab.kt')}, ${join(out, 'AB.kt')}:`,
+            );
+            expect(existsSync(out)).toBe(false);
+        });
+
+        it('prints -s / stdin as val Icon, or names it after -o Name.kt', () => {
+            const res = svgvd('-s', ICON, '--format', 'compose');
+            expect(res.status).toBe(0);
+            expect(res.stdout).toContain('val Icon: ImageVector');
+            expect(res.stdout).not.toContain('package ');
+            const target = join(dir, 'Brand.kt');
+            expect(svgvdStdin(ICON, ['-', '-o', target, '--format', 'compose']).status).toBe(0);
+            expect(readFileSync(target, 'utf8')).toContain('val Brand: ImageVector');
+        });
+
+        it('reports warnings and fails under --strict like the XML output', () => {
+            const input = join(dir, 'dashed.svg');
+            writeFileSync(input, DASHED);
+            const ok = svgvd(input, '--format', 'compose');
+            expect(ok.status).toBe(0);
+            expect(ok.stderr).toContain('[unsupported-stroke-dasharray]');
+            rmSync(join(dir, 'Dashed.kt'));
+            const res = svgvd(input, '--format', 'compose', '--strict');
+            expect(res.status).toBe(1);
+            expect(existsSync(join(dir, 'Dashed.kt'))).toBe(false);
+        });
+
+        it('reports a color reference it cannot express (unsupported-color-reference)', () => {
+            const res = svgvd('-s', ICON, '--format', 'compose', '--color-map', '#f00=@color/brand');
+            expect(res.status).toBe(0);
+            expect(res.stderr).toContain('[unsupported-color-reference] The color reference @color/brand');
+            expect(res.stdout).toContain('Color(0xFF808080)');
+        });
+
+        it('has a null minSdk in the --json report', () => {
+            const input = join(dir, 'icon.svg');
+            writeFileSync(input, ICON);
+            const res = svgvd(input, '--format', 'compose', '--json');
+            expect(res.status).toBe(0);
+            expect(parseReport(res.stdout)).toMatchObject([
+                { input, output: join(dir, 'Icon.kt'), minSdk: null, error: null },
+            ]);
+        });
+
+        it.each([
+            [['--format', 'svg'], 'Invalid --format (expected vector or compose): svg'],
+            [['--package', 'com.example'], '--package needs --format compose'],
+            [['--format', 'compose', '--package', 'com..x'], 'Invalid --package'],
+            [['--format', 'compose', '--min-sdk', '21'], '--min-sdk cannot be combined with --format compose'],
+            [['--format', 'compose', '--xml-tag'], '--xml-tag cannot be combined with --format compose'],
+            [
+                ['--format', 'compose', '--fallback-png', 'all'],
+                '--fallback-png cannot be combined with --format compose',
+            ],
+        ])('rejects %j', (args, message) => {
+            const res = svgvd('-s', ICON, ...args);
+            expect(res.status).toBe(1);
+            expect(res.stderr).toContain(message);
+        });
+
+        it('documents the options in the help', () => {
+            const help = svgvd('--help').stdout;
+            expect(help).toContain('--format <f>');
+            expect(help).toContain('--package <name>');
+        });
+    });
+
     describe('--watch', () => {
         const BLUE = ICON.replace('#f00', '#00f');
         let src: string;
@@ -986,6 +1221,8 @@ describe('svgvd CLI', () => {
             if (typeof status === 'number') throw new Error(`--watch did not start (${status}): ${io.stderr}`);
             return {
                 io,
+                /** The exit code, when the session ends on its own. */
+                done: status,
                 stop: (): Promise<number> => {
                     process.emit('SIGINT');
                     return status;
@@ -1035,8 +1272,24 @@ describe('svgvd CLI', () => {
             const session = watchSvgvd(src, '-o', out);
             rmSync(join(src, 'a.svg'));
             await eventually(() => expect(existsSync(join(out, 'a.xml'))).toBe(false));
-            expect(session.io.stderr).toContain(`✓ ${join(src, 'a.svg')} removed → ${join(out, 'a.xml')} deleted`);
+            expect(session.io.stderr).toContain(`✓ ${join(src, 'a.svg')} removed → ${join(out, 'a.xml')} deleted\n`);
             await session.stop();
+        });
+
+        it('skips a directory at the output of a removed file, and keeps watching', async () => {
+            const session = watchSvgvd(src, '-o', out);
+            rmSync(join(out, 'a.xml'));
+            mkdirSync(join(out, 'a.xml'));
+            rmSync(join(src, 'a.svg'));
+            await eventually(() =>
+                expect(session.io.stderr).toContain(
+                    `  ⚠ ${join(src, 'a.svg')} removed did not delete ${join(out, 'a.xml')}: it is a directory\n`,
+                ),
+            );
+            expect(existsSync(join(out, 'a.xml'))).toBe(true);
+            writeFileSync(join(src, 'b.svg'), BLUE);
+            await eventually(() => expect(read(join(out, 'b.xml'))).toBe(convert(BLUE).xml));
+            expect(await session.stop()).toBe(0);
         });
 
         it('replaces the XML by the PNG fallback and back, deleting the stale form', async () => {
@@ -1051,6 +1304,17 @@ describe('svgvd CLI', () => {
             writeFileSync(join(src, 'a.svg'), BLUE);
             await eventually(() => expect(existsSync(png)).toBe(false));
             expect(read(xml)).toBe(convert(BLUE, { strict: true }).xml);
+            await session.stop();
+        });
+
+        it('--watch: deleting the SVG → no PNG left, whatever the densities of earlier runs', async () => {
+            writeFileSync(join(src, 'a.svg'), BLUR);
+            expect(svgvd(src, '-o', out, '--strict', '--fallback-png', 'all').status).toBe(0);
+            const session = watchSvgvd(src, '-o', out, '--strict', '--fallback-png', 'mdpi');
+            rmSync(join(src, 'a.svg'));
+            await eventually(() => expect(existsSync(join(out, 'drawable-mdpi', 'a.png'))).toBe(false));
+            expect(DENSITY_DIRS.filter((d) => existsSync(join(out, d, 'a.png')))).toEqual([]);
+            expect(existsSync(join(out, 'a.xml'))).toBe(false);
             await session.stop();
         });
 
@@ -1124,6 +1388,171 @@ describe('svgvd CLI', () => {
             rmSync(join(src, 'arrow_left.svg'));
             await eventually(() => expect(read(join(out, 'arrow_left.xml'))).toBe(convert(ICON).xml));
             await session.stop();
+        });
+
+        it('refuses a file whose output is taken by a file of the same name, without --android-names', async () => {
+            const other = join(dir, 'other');
+            mkdirSync(other);
+            const session = watchSvgvd(src, other, '-o', out);
+            writeFileSync(join(other, 'a.svg'), BLUE);
+            await eventually(() =>
+                expect(session.io.stderr).toContain(
+                    `✗ ${join(other, 'a.svg')}: Output collision (not written): ${join(out, 'a.xml')} ← ${join(src, 'a.svg')}, ${join(other, 'a.svg')}`,
+                ),
+            );
+            expect(read(join(out, 'a.xml'))).toBe(convert(ICON).xml);
+            await session.stop();
+        });
+
+        it('deletes the output of an owner removed from a collision of three files or more', async () => {
+            const others = ['d1', 'd2', 'd3'].map((name) => join(dir, name));
+            for (const other of others) mkdirSync(other);
+            const session = watchSvgvd(src, ...others, '-o', out);
+            const target = join(out, 'a.xml');
+            for (const other of others) {
+                writeFileSync(join(other, 'a.svg'), BLUE);
+                await eventually(() =>
+                    expect(session.io.stderr).toContain(`✗ ${join(other, 'a.svg')}: Output collision (not written)`),
+                );
+            }
+            expect(read(target)).toBe(convert(ICON).xml);
+            // A refused file removed: the others still collide, the output of the owner stays.
+            rmSync(join(others[2]!, 'a.svg'));
+            // The owner removed: the two left still collide, so its output goes rather than stays stale.
+            rmSync(join(src, 'a.svg'));
+            await eventually(() => expect(existsSync(target)).toBe(false));
+            expect(session.io.stderr).toContain(`✓ ${join(src, 'a.svg')} removed → ${target} deleted\n`);
+            // One left: it owns the output.
+            rmSync(join(others[0]!, 'a.svg'));
+            await eventually(() => expect(read(target)).toBe(convert(BLUE).xml));
+            expect(session.io.stderr.split(' deleted\n').length - 1).toBe(1);
+            await session.stop();
+        });
+
+        it('calls a collision of Kotlin names a Kotlin name collision with --format compose', async () => {
+            writeFileSync(join(src, 'ab.svg'), ICON); // Ab.kt
+            const session = watchSvgvd(src, '-o', out, '--format', 'compose');
+            expect(read(join(out, 'Ab.kt'))).toContain('val Ab: ImageVector');
+            writeFileSync(join(src, 'a-b.svg'), BLUE); // AB.kt
+            await eventually(() =>
+                expect(session.io.stderr).toContain(
+                    `✗ ${join(src, 'a-b.svg')}: Kotlin name collision (not written): ${join(out, 'Ab.kt')}, ${join(out, 'AB.kt')} ← ${join(src, 'ab.svg')}, ${join(src, 'a-b.svg')}`,
+                ),
+            );
+            await session.stop();
+        });
+
+        it('starts with a Kotlin name collision without writing it, with --format compose', async () => {
+            writeFileSync(join(src, 'ab.svg'), ICON);
+            writeFileSync(join(src, 'a-b.svg'), BLUE);
+            const session = watchSvgvd(src, '-o', out, '--format', 'compose');
+            expect(session.io.stderr).toContain('✗ Kotlin name collision (nothing written)');
+            expect(existsSync(out)).toBe(false);
+            await session.stop();
+        });
+
+        describe('outputs differing only by case (one file on macOS and Windows)', () => {
+            const owner = (): string => join(src, 'a.svg');
+            const refused = (): string => join(src, 'A.svg');
+            const conversions = (io: { stderr: string }): number => io.stderr.split(`✓ ${owner()} → `).length - 1;
+
+            /** a.svg owns a.xml, A.svg (A.xml) is refused while both exist. */
+            async function collide(...args: string[]) {
+                const session = watchSvgvd(src, '-o', out, ...args);
+                writeFileSync(refused(), BLUE);
+                await eventually(() =>
+                    expect(session.io.stderr).toContain(
+                        `✗ ${refused()}: Output collision (not written): ${join(out, 'a.xml')}, ${join(out, 'A.xml')} ← ${owner()}, ${refused()}\n`,
+                    ),
+                );
+                return session;
+            }
+
+            it('removing the refused file keeps the output of the other one', async () => {
+                const session = await collide();
+                expect(readdirSync(out)).toEqual(['a.xml']);
+                rmSync(refused());
+                // The owner is converted again rather than its output deleted (A.xml is a.xml there).
+                await eventually(() => expect(conversions(session.io)).toBe(2));
+                expect(session.io.stderr).not.toContain('deleted');
+                expect(read(join(out, 'a.xml'))).toBe(convert(ICON).xml);
+                await session.stop();
+            });
+
+            it('removing the owner deletes its output, then converts the refused file', async () => {
+                const session = await collide();
+                expect(readdirSync(out)).toEqual(['a.xml']);
+                rmSync(owner());
+                await eventually(() => expect(read(join(out, 'A.xml'))).toBe(convert(BLUE).xml));
+                // Not a.xml left stale (Linux), nor A.svg's content under the name a.xml (macOS, Windows).
+                expect(readdirSync(out)).toEqual(['A.xml']);
+                const deleted = `✓ ${owner()} removed → ${join(out, 'a.xml')} deleted\n`;
+                expect(session.io.stderr).toContain(deleted);
+                // Deleted before A.xml is written: on a case-insensitive disk, the reverse deletes A.xml.
+                expect(session.io.stderr.indexOf(deleted)).toBeLessThan(
+                    session.io.stderr.lastIndexOf(`✓ ${refused()} → ${join(out, 'A.xml')}`),
+                );
+                await session.stop();
+            });
+
+            it('removing an owner rendered to PNG deletes its PNG fallback', async () => {
+                writeFileSync(owner(), BLUR);
+                const session = await collide('--strict', '--fallback-png', 'mdpi');
+                expect(readdirSync(join(out, 'drawable-mdpi'))).toEqual(['a.png']);
+                rmSync(owner());
+                await eventually(() => expect(read(join(out, 'A.xml'))).toBe(convert(BLUE, { strict: true }).xml));
+                expect(readdirSync(join(out, 'drawable-mdpi'))).toEqual([]);
+                expect(session.io.stderr).toContain(
+                    `✓ ${owner()} removed → ${join(out, 'drawable-mdpi', 'a.png')} deleted\n`,
+                );
+                await session.stop();
+            });
+        });
+
+        it('converts a burst of writes once, after the last one', async () => {
+            const session = watchSvgvd(src, '-o', out);
+            const conversions = (): number => session.io.stderr.split(`✓ ${join(src, 'a.svg')} → `).length - 1;
+            expect(conversions()).toBe(1);
+            for (let i = 0; i < 5; i++) writeFileSync(join(src, 'a.svg'), i === 4 ? BLUE : ICON);
+            await eventually(() => expect(read(join(out, 'a.xml'))).toBe(convert(BLUE).xml));
+            await new Promise((resolve) => setTimeout(resolve, 300));
+            expect(conversions()).toBe(2);
+            await session.stop();
+        });
+
+        it.each([[[]], [['-r']]])(
+            'reports a removed input directory (%j) and stops with exit code 1 once nothing is left',
+            async (flags) => {
+                const session = watchSvgvd(src, ...flags, '-o', out);
+                rmSync(src, { recursive: true });
+                await expect(session.done).resolves.toBe(1);
+                expect(existsSync(join(out, 'a.xml'))).toBe(false);
+                expect(session.io.stderr).toContain(`✗ ${src}: removed, no longer watched\n`);
+                expect(session.io.stderr).toContain('Stopped watching: no input left to watch\n');
+                expect(watched.watchers.every((w) => w.closed)).toBe(true);
+            },
+        );
+
+        it('keeps watching the other inputs when one directory is removed', async () => {
+            const other = join(dir, 'other');
+            mkdirSync(other);
+            const session = watchSvgvd(src, other, '-o', out);
+            rmSync(src, { recursive: true });
+            await eventually(() => expect(session.io.stderr).toContain(`✗ ${src}: removed, no longer watched\n`));
+            // Created again, it is not watched any more: only the remaining input is.
+            mkdirSync(src);
+            writeFileSync(join(src, 'c.svg'), BLUE);
+            writeFileSync(join(other, 'b.svg'), BLUE);
+            await eventually(() => expect(read(join(out, 'b.xml'))).toBe(convert(BLUE).xml));
+            expect(existsSync(join(out, 'c.xml'))).toBe(false);
+            expect(await session.stop()).toBe(0);
+        });
+
+        it('reports a file input whose directory is removed', async () => {
+            const session = watchSvgvd(join(src, 'a.svg'), '-o', out);
+            rmSync(src, { recursive: true });
+            await expect(session.done).resolves.toBe(1);
+            expect(session.io.stderr).toContain(`✗ ${join(src, 'a.svg')}: removed, no longer watched\n`);
         });
 
         it('stops on SIGINT with exit code 0, closing its watchers', async () => {

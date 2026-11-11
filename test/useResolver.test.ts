@@ -695,15 +695,26 @@ describe('resolveUses — context-fill / context-stroke', () => {
             expectRendersLike(svg, doc(user, shapes(`fill="url(#lu)" stroke="url(#lu)" ${paint}`, '')));
         });
 
-        it('keeps the warning for userSpaceOnUse on a transformed use (its x / y offset is not told apart)', () => {
-            for (const use of [
-                '<use href="#t" x="1" fill="url(#lu)"/>',
-                '<use href="#t" transform="scale(0.5)" fill="url(#lu)"/>',
-            ]) {
-                const { xml, codes } = run(doc(`${user}${shapes('fill="context-fill"')}`, use));
-                expect(codes).toEqual(['unsupported-paint', 'unsupported-paint']);
-                expect(xml).not.toContain('<gradient');
-            }
+        // SVG 2 §5.6.2: the use's user space includes its `transform` and its x / y offset (Chromium agrees).
+        for (const [label, use, space] of [
+            ['x / y offset', 'x="6" y="2"', 'translate(6 2)'],
+            ['transform', 'transform="scale(0.5)"', 'scale(0.5)'],
+            ['transform and x / y offset', 'transform="rotate(10 12 12)" x="5"', 'rotate(10 12 12) translate(5 0)'],
+        ] as const)
+            it(`userSpaceOnUse fill, in the use space with its ${label}`, () => {
+                const svg = doc(`${user}${shapes('fill="context-fill"')}`, `<use href="#t" ${use} fill="url(#lu)"/>`);
+                expectRendersLike(svg, doc(user, `<g transform="${space}">${shapes('fill="url(#lu)"', '')}</g>`));
+            });
+
+        it('userSpaceOnUse fill on a symbol with a viewBox: in the use space, outside the viewBox scale', () => {
+            const symbol = `<symbol id="s" viewBox="0 0 12 12">${shapes('fill="context-fill"', '')}</symbol>`;
+            const svg = doc(`${user}${symbol}`, '<use href="#s" x="6" width="24" height="24" fill="url(#lu)"/>');
+            // In the symbol's space (scaled by 2), the use-space gradient spans half the coordinates.
+            const half = `<linearGradient id="h" gradientUnits="userSpaceOnUse" x1="1" y1="0" x2="11" y2="3">${stops}</linearGradient>`;
+            expectRendersLike(
+                svg,
+                doc(half, `<g transform="translate(6 0) scale(2)">${shapes('fill="url(#h)"', '')}</g>`),
+            );
         });
 
         it('keeps the warning for a pattern (wpt paint-context-008), a nested context server, an unmeasurable box', () => {
@@ -717,6 +728,10 @@ describe('resolveUses — context-fill / context-stroke', () => {
                 // The inner use passes on the outer use's gradient: whose box lays it out is ambiguous.
                 const nested = `${obb}${rect('fill="context-fill"')}<g id="mid"><use href="#r" fill="context-fill"/></g>`;
                 expect(codes(doc(nested, '<use href="#mid" fill="url(#lg)"/>'))).toEqual(['unsupported-paint']);
+                const nestedUser = `${user}${rect('fill="context-fill"')}<g id="mid"><use href="#r" fill="context-fill"/></g>`;
+                expect(codes(doc(nestedUser, '<use href="#mid" x="1" fill="url(#lu)"/>'))).toEqual([
+                    'unsupported-paint',
+                ]);
                 // A nested <svg> in the content: its box is not measured.
                 const inner = '<svg x="12" width="10" height="10"><rect width="5" height="5"/></svg>';
                 expect(
@@ -776,4 +791,252 @@ describe('resolveUses — expansion budget', () => {
         const { xml } = convert(bomb(3, 10), { optimize: false });
         expect(xml.match(/<path/g)).toHaveLength(1000);
     });
+});
+
+describe('resolveUses — <symbol> and <use> x / y (SVG 2 §5.6)', () => {
+    const doc = (viewBox: string, body: string): string =>
+        `<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100" viewBox="${viewBox}">${body}</svg>`;
+    const green = '<rect width="200" height="200" fill="green"/>';
+    const rect = (x: number, y: number, w: number, h: number): string =>
+        `<rect x="${x}" y="${y}" width="${w}" height="${h}" fill="green"/>`;
+
+    // Expected renderings checked in Chromium (headless shell) against the source.
+    for (const [label, source, expected] of [
+        [
+            'symbol x / y without viewBox: clip moved with the content',
+            doc(
+                '0 0 100 100',
+                `<defs><symbol id="s" x="50" y="40" width="30" height="20">${green}</symbol></defs><use href="#s"/>`,
+            ),
+            doc('0 0 100 100', rect(50, 40, 30, 20)),
+        ],
+        [
+            'symbol x / y with viewBox: translate around the scale',
+            doc(
+                '0 0 100 100',
+                '<defs><symbol id="s" x="50" y="40" width="40" height="40" viewBox="0 0 10 10"><rect width="5" height="20" fill="green"/></symbol></defs><use href="#s"/>',
+            ),
+            doc('0 0 100 100', rect(50, 40, 20, 40)),
+        ],
+        [
+            'symbol x / y with overflow="visible"',
+            doc(
+                '0 0 100 100',
+                '<defs><symbol id="s" x="50" y="40" width="10" height="10" overflow="visible"><rect width="30" height="30" fill="green"/></symbol></defs><use href="#s"/>',
+            ),
+            doc('0 0 100 100', rect(50, 40, 30, 30)),
+        ],
+        [
+            'use x / y add to the symbol x / y',
+            doc(
+                '0 0 100 100',
+                `<defs><symbol id="s" x="20" y="5" width="30" height="30">${green}</symbol></defs><use href="#s" x="10" y="15"/>`,
+            ),
+            doc('0 0 100 100', rect(30, 20, 30, 30)),
+        ],
+        [
+            'symbol x / y in % of the root viewport',
+            doc(
+                '0 0 200 100',
+                `<defs><symbol id="s" x="50%" y="25%" width="20" height="20">${green}</symbol></defs><use href="#s"/>`,
+            ),
+            doc('0 0 200 100', rect(100, 25, 20, 20)),
+        ],
+        [
+            'symbol x in % of the nested <svg> viewport of the use',
+            doc(
+                '0 0 100 100',
+                `<defs><symbol id="s" x="50%" width="10" height="10">${green}</symbol></defs><svg width="40" height="40"><use href="#s"/></svg>`,
+            ),
+            doc('0 0 100 100', rect(20, 0, 10, 10)),
+        ],
+        [
+            'use x / y with units and percentages',
+            doc(
+                '0 0 100 100',
+                '<defs><rect id="r" width="10" height="10" fill="green"/></defs>' +
+                    '<use href="#r" x="10px"/><use href="#r" x="1cm" y="30"/><use href="#r" x="50%" y="5"/>',
+            ),
+            doc('0 0 100 100', rect(10, 0, 10, 10) + rect(96 / 2.54, 30, 10, 10) + rect(50, 5, 10, 10)),
+        ],
+        [
+            'a <use> inside <defs> resolves its % against the viewport it is instanced in',
+            doc(
+                '0 0 100 100',
+                '<defs><symbol id="s" viewBox="0 0 1 1"><rect width="1" height="1" fill="green"/></symbol>' +
+                    '<g id="g"><use href="#s" width="50%" height="50%"/></g></defs>' +
+                    '<svg width="50" height="50" viewBox="0 0 200 200"><use href="#g"/></svg>',
+            ),
+            doc('0 0 100 100', rect(0, 0, 25, 25)),
+        ],
+    ] as const)
+        for (const optimize of [false, true])
+            it(`${label} (optimize: ${optimize})`, () => {
+                const { xml, warnings } = convert(source, { optimize, strict: true });
+                expect(warnings).toEqual([]);
+                const result = compareSvgs(expected, vdToSvg(xml));
+                expect(result.sizeMismatch).toBeNull();
+                expect(result.inked).toBeGreaterThan(0);
+                expect(result.mismatch).toBeLessThan(DEFAULT_MAX_MISMATCH);
+            });
+
+    /** Resolves `<use href="#r" …>` in a 100×100 viewport and returns the replacement's transform. */
+    const useTransform = (useAttrs: Record<string, string>): string | undefined => {
+        const tree = root([
+            el('svg', { viewBox: '0 0 100 100' }, [
+                el('defs', {}, [el('rect', { id: 'r' })]),
+                el('use', { href: '#r', ...useAttrs }),
+            ]),
+        ]);
+        resolveUses(tree);
+        return onlyChild(tree).children?.[1]?.attributes?.transform;
+    };
+
+    it.each([
+        [{ x: '10px' }, 'translate(10 0)'],
+        [{ x: '1cm' }, `translate(${96 / 2.54} 0)`],
+        [{ x: '50%' }, 'translate(50 0)'],
+        [{ x: '50%', y: '5' }, 'translate(50 5)'],
+        [{ y: '1em' }, 'translate(0 16)'],
+    ])('writes the use %o as numbers: %s', (attrs, expected) => {
+        expect(useTransform(attrs)).toBe(expected);
+    });
+
+    /** Resolves `<use href="#s" …>` of a symbol in a 100×100 viewport and returns the wrapper. */
+    const symbolWrapper = (
+        symbolAttrs: Record<string, string>,
+        useAttrs: Record<string, string>,
+        report?: (w: { code: string; message: string }) => void,
+    ): XastElement => {
+        const tree = root([
+            el('svg', { viewBox: '0 0 100 100' }, [
+                el('defs', {}, [el('symbol', { id: 's', ...symbolAttrs }, [el('path', { d: 'M0 0h1v1h-1z' })])]),
+                el('use', { href: '#s', ...useAttrs }),
+            ]),
+        ]);
+        resolveUses(tree, report);
+        return onlyChild(tree).children?.[1] as XastElement;
+    };
+
+    it('translates the symbol viewport by its x / y inside the use wrapper, and drops them', () => {
+        const wrapper = symbolWrapper(
+            { x: '20%', y: '3', width: '10', height: '10' },
+            { x: '1', transform: 'rotate(90)', 'clip-path': 'url(#c)' },
+        );
+        // The use's clip-path stays in the use's space: the symbol offset is on an inner group.
+        expect(wrapper.attributes?.transform).toBe('rotate(90) translate(1 0)');
+        expect(wrapper.attributes?.['clip-path']).toBe('url(#c)');
+        const offset = onlyChild(wrapper);
+        expect(offset.attributes).toEqual({ transform: 'translate(20 3)' });
+        const clipGroup = onlyChild(offset);
+        expect(clipGroup.attributes?.['clip-path']).toMatch(/^url\(#svgvd-symbol-viewport-/);
+        const symbolAsGroup = clipGroup.children?.find((c) => c.name === 'g') as XastElement;
+        expect(symbolAsGroup.attributes?.x).toBeUndefined();
+        expect(symbolAsGroup.attributes?.y).toBeUndefined();
+    });
+
+    it('also offsets a symbol whose viewport size is unresolved', () => {
+        const wrapper = symbolWrapper({ x: '5', y: '6', viewBox: '0 0 1 1' }, { width: '2ex' }, () => undefined);
+        expect(onlyChild(wrapper).attributes).toEqual({ transform: 'translate(5 6)' });
+    });
+
+    it('adds no group for a symbol without x / y, nor for an empty viewport', () => {
+        expect(onlyChild(symbolWrapper({ width: '10', height: '10' }, {})).attributes?.transform).toBeUndefined();
+        expect(symbolWrapper({ x: '5', width: '0', height: '10' }, {}).children).toEqual([]);
+    });
+
+    for (const [label, useAttrs] of [
+        ['use x="2ex"', { x: '2ex' }],
+        ['use y="calc(1px)"', { y: 'calc(1px)' }],
+    ] as const)
+        it(`reports an unresolved ${label} (unsupported-attribute) and takes 0`, () => {
+            const tree = root([
+                el('svg', { viewBox: '0 0 100 100' }, [
+                    el('defs', {}, [el('rect', { id: 'r' })]),
+                    el('use', { href: '#r', ...useAttrs }),
+                ]),
+            ]);
+            const warnings: { code: string; message: string }[] = [];
+            resolveUses(tree, (w) => warnings.push(w));
+            expect(warnings.map((w) => w.code)).toEqual(['unsupported-attribute']);
+            expect(warnings[0]?.message).toContain('taken as 0');
+            expect(onlyChild(tree).children?.[1]?.attributes?.transform).toBe('translate(0 0)');
+        });
+
+    it('reports an unresolved symbol x="1ch" (unsupported-attribute) and takes 0', () => {
+        const warnings: { code: string; message: string }[] = [];
+        const wrapper = symbolWrapper({ x: '1ch', width: '10', height: '10' }, {}, (w) => warnings.push(w));
+        expect(warnings.map((w) => w.code)).toEqual(['unsupported-attribute']);
+        expect(warnings[0]?.message).toContain('x="1ch" on <symbol>');
+        expect(onlyChild(wrapper).attributes).toEqual({ transform: 'translate(0 0)' });
+    });
+
+    for (const optimize of [false, true])
+        it(`rejects an unresolved use / symbol x in strict mode (optimize: ${optimize})`, () => {
+            for (const body of [
+                '<defs><rect id="r" width="10" height="10"/></defs><use href="#r" x="2ex"/>',
+                '<defs><symbol id="r" x="2ex" width="10" height="10"><rect width="10" height="10"/></symbol></defs><use href="#r"/>',
+            ])
+                expect(() => convert(doc('0 0 100 100', body), { optimize, strict: true })).toThrow(/x="2ex"/);
+        });
+
+    it('reports a % use x against an unknown viewport', () => {
+        const tree = root([
+            el('svg', {}, [el('defs', {}, [el('rect', { id: 'r' })]), el('use', { href: '#r', x: '50%' })]),
+        ]);
+        const codes: string[] = [];
+        resolveUses(tree, (w) => codes.push(w.code));
+        expect(codes).toEqual(['unsupported-attribute']);
+    });
+
+    // Chrome draws these at (0, 0): an invalid x / y is the initial value, 0.
+    for (const [label, body] of [
+        ['use x=""', `<defs><rect id="r" width="10" height="10" fill="green"/></defs><use href="#r" x=""/>`],
+        ['use x="foo"', `<defs><rect id="r" width="10" height="10" fill="green"/></defs><use href="#r" x="foo"/>`],
+        ['use y=""', `<defs><rect id="r" width="10" height="10" fill="green"/></defs><use href="#r" y=""/>`],
+        ['symbol x=""', `<defs><symbol id="s" x="" width="10" height="10">${green}</symbol></defs><use href="#s"/>`],
+        [
+            'symbol x="foo"',
+            `<defs><symbol id="s" x="foo" width="10" height="10">${green}</symbol></defs><use href="#s"/>`,
+        ],
+        ['symbol y=""', `<defs><symbol id="s" y="" width="10" height="10">${green}</symbol></defs><use href="#s"/>`],
+    ] as const)
+        for (const optimize of [false, true])
+            it(`takes an invalid ${label} as 0 without warning, strict (optimize: ${optimize})`, () => {
+                const { xml, warnings } = convert(doc('0 0 100 100', body), { optimize, strict: true });
+                expect(warnings).toEqual([]);
+                const result = compareSvgs(doc('0 0 100 100', rect(0, 0, 10, 10)), vdToSvg(xml));
+                expect(result.sizeMismatch).toBeNull();
+                expect(result.inked).toBeGreaterThan(0);
+                expect(result.mismatch).toBeLessThan(DEFAULT_MAX_MISMATCH);
+            });
+
+    for (const optimize of [false, true])
+        it(`reports an unresolved x once per symbol, whatever its number of <use> (optimize: ${optimize})`, () => {
+            const symbol = (id: string): string =>
+                `<symbol id="${id}" x="1ex" width="10" height="10"><rect width="10" height="10"/></symbol>`;
+            const warningsOf = (body: string): string[] =>
+                convert(doc('0 0 100 100', body), { optimize }).warnings.map((w) => w.message);
+            const one = warningsOf(
+                `<defs>${symbol('s')}</defs><use href="#s"/><use href="#s" y="20"/><use href="#s" y="40"/>`,
+            );
+            expect(one).toHaveLength(1);
+            expect(one[0]).toContain('x="1ex" on <symbol>');
+            const two = warningsOf(
+                `<defs>${symbol('s')}${symbol('t')}</defs><use href="#s"/><use href="#t"/><use href="#s"/>`,
+            );
+            expect(two).toHaveLength(2);
+        });
+
+    for (const optimize of [false, true])
+        it(`writes the same offsets in both modes, strict (optimize: ${optimize})`, () => {
+            const source = doc(
+                '0 0 100 100',
+                '<defs><rect id="r" width="10" height="10" fill="green"/></defs><use href="#r" x="50%" y="5"/>',
+            );
+            const { xml, warnings } = convert(source, { optimize, strict: true });
+            expect(warnings).toEqual([]);
+            expect(xml).toMatch(/android:translateX="50"/);
+            expect(xml).toMatch(/android:translateY="5"/);
+        });
 });

@@ -19,6 +19,12 @@ nothing changed it is `UP-TO-DATE`, and restored `FROM-CACHE` with the build cac
 
 ## Usage
 
+> The plugin (0.1.0) is submitted to the Gradle Plugin Portal and pending review: until it is accepted,
+> `id(…) version "0.1.0"` does not resolve. Use it from a clone of this repository instead, with
+> `includeBuild("<clone>/integrations/gradle-plugin")` in the `pluginManagement {}` block of
+> `settings.gradle.kts` and no `version` in `plugins {}`, as in
+> [`example/settings.gradle.kts`](example/settings.gradle.kts).
+
 ```kotlin
 // app/build.gradle.kts
 plugins {

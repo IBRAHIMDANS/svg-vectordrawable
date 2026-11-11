@@ -20,6 +20,14 @@ const UNIT_PX: Record<string, number> = {
 const LENGTH_RE = /^([+-]?(?:\d+\.?\d*|\.\d+)(?:e[+-]?\d+)?)([a-z]*|%)$/i;
 
 /**
+ * A CSS length the converter cannot resolve but a browser can: a unit that depends on fonts, the
+ * viewport or a container, `Q`, a percentage, or a function (`calc()`, `var()`…). Anything else
+ * (`abc`, `10abc`) is not a length at all.
+ */
+export const VALID_UNRESOLVED_LENGTH =
+    /^(?:[+-]?(?:\d+\.?\d*|\.\d+)(?:e[+-]?\d+)?(?:%|r?(?:ex|ch|ic|cap|lh)|[sld]?v(?:w|h|i|b|min|max)|cq(?:w|h|i|b|min|max)|q)|[a-z-]+\(.*\))$/i;
+
+/**
  * Parses an SVG length into user units. `%` resolves against `ref` (NaN when no reference is
  * given). `em` and `rem` count 16 px, the initial font-size a browser uses for an SVG document:
  * a `font-size` set on the element or an ancestor is not read, so `em` under a changed font-size is

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { convert, ConversionError } from '../src/index.js';
-import { systemLanguageIgnored } from '../src/render.js';
+import { systemLanguageIgnored } from '../src/elements.js';
 
 const MODES = [true, false] as const;
 const SVG_NS = 'http://www.w3.org/2000/svg';

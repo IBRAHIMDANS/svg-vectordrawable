@@ -21,8 +21,9 @@ an ESM browser build under `svg-vectordrawable/browser` (`convert` only, no file
 ## Plugins and MCP server
 
 Ready-made integrations live in [`integrations/`](../integrations), each with its own README. They are
-merged in this repository but **not published yet** (npm / Gradle Plugin Portal): until they are, build
-them from source as their READMEs describe.
+merged in this repository. The Gradle plugin (0.1.0) is submitted to the Gradle Plugin Portal, pending review; the Vite plugin,
+the MCP server and the Figma plugin are **not published yet**: until they are, build them from source as their
+READMEs describe.
 
 | Integration                                              | Package / plugin id                        | What it does                                                                                |
 | -------------------------------------------------------- | ------------------------------------------ | ------------------------------------------------------------------------------------------- |
@@ -130,14 +131,18 @@ icons:
 | `group-skew`            | The skew is baked into the path geometry; stroke widths get one uniform scale factor (√\|det\|), so strokes under a strong skew keep a constant width instead of being sheared           |
 | `empty-path`            | None visible: a shape without geometry is skipped                                                                                                                                        |
 
-Keep `unsupported-element`, `unsupported-attribute`, `unsupported-paint`, `unsupported-clip-path` and
-`unsupported-style` as errors: they mean something is missing from the drawable.
+Keep `unsupported-element`, `unsupported-attribute`, `unsupported-paint`, `unsupported-color-reference`,
+`unsupported-clip-path` and `unsupported-style` as errors: they mean something is missing from the drawable.
 
 Gradients in VectorDrawable require API 24+, which adaptive icons (API 26+) always satisfy.
 
 ## Gradle (Android project)
 
-**Plugin (not published yet):** the [Gradle plugin](../integrations/gradle-plugin/README.md)
+**Plugin (0.1.0, submitted to the Gradle Plugin Portal, pending review):** until it is accepted,
+`id(…) version "0.1.0"` does not resolve; use it from a clone with
+`includeBuild("<clone>/integrations/gradle-plugin")` in the `pluginManagement` block of
+`settings.gradle.kts` (as [its example](../integrations/gradle-plugin/example/settings.gradle.kts) does)
+and no version in `plugins`. The [Gradle plugin](../integrations/gradle-plugin/README.md)
 (`id("io.github.ibrahimdans.svg-vectordrawable")`) registers a cacheable
 `convert<Variant>SvgToVectorDrawable` task per Android variant, wired before the resource merge, and
 passes the variant's `minSdk`. It runs the `svgvd` CLI, so it needs **Node.js 18+** on the `PATH` and
@@ -301,12 +306,17 @@ npx svgvd design/icons -r --strict=lossy --dry-run --json > svgvd-report.json
 jq -r '.[] | select(.error) | "\(.input): \(.error.code // "-") \(.error.message)"' svgvd-report.json
 # Warning counts by code:
 jq -r '[.[].warnings[].code] | group_by(.) | map("\(.[0]): \(length)") | .[]' svgvd-report.json
+# With --fallback-png: files rendered to PNG, the rejecting warning and the PNGs written:
+jq -r '.[] | select(.fallback) | "\(.input): \(.fallback.reason.code) → \(.fallback.outputs | join(", "))"' svgvd-report.json
 ```
 
-Each entry is `{ input, output, warnings, minSdk, error }`: `warnings` hold `code`, `category`
-(`lossy`, `approximation`, `info`), `message` and `node`; `error` is `null` or
+Each entry is `{ input, output, warnings, minSdk, error, fallback }`: `warnings` hold `code`,
+`category` (`lossy`, `approximation`, `info`), `message` and `node`; `error` is `null` or
 `{ message, code?, category? }`; `output` is the file written (or that `--dry-run` would write),
-`null` on error. With `--android-names`, a resource name collision reports every file as failed and
+`null` on error. `fallback` is `null`, or `{ outputs, reason }` for a file that `--fallback-png`
+rendered to PNG instead of failing: `outputs` lists the PNGs, `reason` is the warning that rejected
+the conversion, and `output`, `error` and `minSdk` are then all `null` (the file does not count as
+failed). With `--android-names`, a resource name collision reports every file as failed and
 writes nothing.
 
 The CLI also reads stdin (`svgvd -`, or no input when stdin is not a terminal) and writes to stdout,
@@ -346,3 +356,43 @@ Until then, build it from `integrations/mcp-server` (`pnpm install && pnpm run b
 converts the selected layers with the `browser-lite` build, inside Figma and without network access:
 it shows the XML, the warnings and a preview, and copies or downloads the drawables (a `.zip` for
 several layers). Its README explains how to build it and import it as a development plugin.
+
+## Publishing the integrations
+
+For maintainers. [`release-integrations.yml`](../.github/workflows/release-integrations.yml) publishes
+one integration per run, independently of the library (`release.yml`, tags `vX.Y.Z`). Each integration
+has its own version and tag prefix:
+
+| Integration   | Version read from                             | Tag             | Published to                                                     |
+| ------------- | --------------------------------------------- | --------------- | ---------------------------------------------------------------- |
+| MCP server    | `integrations/mcp-server/package.json`        | `mcp-vX.Y.Z`    | npm, `svg-vectordrawable-mcp`                                    |
+| Vite plugin   | `integrations/vite-plugin/package.json`       | `vite-vX.Y.Z`   | npm, `vite-plugin-svg-vectordrawable`                            |
+| Gradle plugin | `integrations/gradle-plugin/build.gradle.kts` | `gradle-vX.Y.Z` | Gradle Plugin Portal, `io.github.ibrahimdans.svg-vectordrawable` |
+
+The job fails before publishing when the tag does not match the version in the file, then installs the
+integration in its own folder (`pnpm install --frozen-lockfile`), runs its typecheck and tests (Gradle:
+`./gradlew build`, with JDK 21 and the Android SDK) and publishes.
+
+To release, bump the version in the file above, merge, then tag that commit and push the tag:
+
+```sh
+git tag mcp-v0.1.0 && git push origin mcp-v0.1.0        # MCP server
+git tag vite-v0.1.0 && git push origin vite-v0.1.0      # Vite plugin
+git tag gradle-v0.2.0 && git push origin gradle-v0.2.0  # Gradle plugin
+```
+
+**Dry run first.** Actions → "Release integrations" → "Run workflow", pick the integration; `dry-run` is
+checked by default and runs `npm publish --dry-run` or `./gradlew publishPlugins --validate-only`
+after the build and tests. A dry run can start from any branch; a real run (`dry-run` unchecked) must
+start from the integration's tag ("Use workflow from: `mcp-vX.Y.Z`"), otherwise it fails.
+
+**Secrets.** `NPM_TOKEN` (npm automation or granular token allowed to publish both packages),
+`GRADLE_PUBLISH_KEY` and `GRADLE_PUBLISH_SECRET` (Plugin Portal API key, passed as
+`gradle.publish.key` / `gradle.publish.secret`).
+
+**Switching npm to Trusted Publishing.** The library publishes through OIDC without a token, but npm
+only lets you add a Trusted Publisher to a package that already exists, so the first release of each
+npm package uses `NPM_TOKEN`. After it, on npmjs.com → package → Settings → Trusted Publisher, add
+GitHub Actions with this repository and the workflow file `release-integrations.yml`; then remove the
+`NODE_AUTH_TOKEN` line from the job (keep `id-token: write`), and once both packages are switched,
+delete the `NPM_TOKEN` secret.
