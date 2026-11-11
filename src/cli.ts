@@ -1,6 +1,6 @@
 #!/usr/bin/env node
-import { readFileSync, statSync, realpathSync } from 'node:fs';
-import { extname, basename } from 'node:path';
+import { lstatSync, readFileSync, realpathSync, rmSync, statSync, watch, type FSWatcher } from 'node:fs';
+import { basename, dirname, extname, join, sep } from 'node:path';
 import { isatty } from 'node:tty';
 import { fileURLToPath } from 'node:url';
 import { colorRefs } from './colorRef.js';
@@ -43,6 +43,10 @@ Options:
   --json               Print a JSON report on stdout (input, output, warnings,
                        minSdk, error per file); XML must go to files (-o)
   --dry-run            Convert and report, but write nothing
+  -w, --watch          Convert, then keep watching the inputs: reconvert an
+                       added or changed SVG, delete the output of a removed
+                       one (Ctrl+C to stop). Not with stdin, -s, --stdout,
+                       --json or --dry-run; with -r, needs Node.js 20+ on Linux
   --fallback-png <d>   When a file is rejected (--strict, --rule <code>=error),
                        render it to PNG instead of failing: <name>.png in
                        drawable-<density>/ inside the XML's directory (beside it
@@ -126,8 +130,8 @@ interface Job {
     output?: string;
 }
 
-/** A job reading a file into a file. */
-type FileJob = Job & { input: string; output: string };
+/** A job reading a file into a file; `root` is the input directory it was found in, if any. */
+type FileJob = Job & { input: string; output: string; root?: string };
 
 /** Thrown during argument parsing to stop early with an exit code. */
 class CliExit {
@@ -145,6 +149,7 @@ function parseArgs(
     recursive: boolean;
     json: boolean;
     dryRun: boolean;
+    watch: boolean;
     fallback?: Density[];
     opts: ConvertOptions;
     naming: FileNamingOptions;
@@ -158,6 +163,7 @@ function parseArgs(
     let recursive = false;
     let json = false;
     let dryRun = false;
+    let watch = false;
     let fallback: Density[] | undefined;
     const fail = (message: string): never => {
         io.stderr(`${message}\n`);
@@ -176,6 +182,7 @@ function parseArgs(
         else if (arg === '-r' || arg === '--recursive') recursive = true;
         else if (arg === '--json') json = true;
         else if (arg === '--dry-run') dryRun = true;
+        else if (arg === '-w' || arg === '--watch') watch = true;
         else if (arg === '--fallback-png') {
             const list = value();
             const names = list === 'all' ? Object.keys(DENSITIES) : list.split(',').map((d) => d.trim());
@@ -228,7 +235,7 @@ function parseArgs(
     } catch (err) {
         fail((err as Error).message);
     }
-    return { inputs, inline, out, stdout, recursive, json, dryRun, fallback, opts, naming };
+    return { inputs, inline, out, stdout, recursive, json, dryRun, watch, fallback, opts, naming };
 }
 
 /** The error of a failed job, for the report. */
@@ -410,18 +417,198 @@ function fileJobs(
         }
     });
     const explicitTarget = out && found.length === 1 && extname(out) === '.xml' ? out : undefined;
-    const jobs = found.map(({ file, root }) => ({
+    const jobs = found.map(({ file, root }) => fileJob(file, root, out, explicitTarget, naming));
+    return { jobs, unreadable };
+}
+
+/** The job converting `file`, found in the input directory `root` (if any); see {@link fileJobs}. */
+function fileJob(
+    file: string,
+    root: string | undefined,
+    out: string | undefined,
+    explicitTarget: string | undefined,
+    naming: FileNamingOptions,
+): FileJob {
+    return {
         input: file,
+        root,
         read: () => readFileSync(file, 'utf8'),
         output:
             explicitTarget ??
             (root === undefined ? defaultOutputPath(file, out, naming) : batchOutputPath(file, root, out, naming)),
-    }));
-    return { jobs, unreadable };
+    };
 }
 
-/** Runs the CLI against `argv` (without the node/script prefix) and returns the exit code. */
-export function run(argv: string[], io: CliIo = processIo): number {
+/** How long a path stays quiet before it is handled: editors save in several events. */
+const WATCH_DEBOUNCE_MS = 100;
+
+/** What `--watch` needs to turn a path back into a job. */
+interface WatchContext {
+    inputs: readonly string[];
+    out?: string;
+    recursive: boolean;
+    naming: FileNamingOptions;
+    settings: RunSettings;
+}
+
+/** A started `--watch`: `track` registers the jobs of the initial conversion, `done` settles on SIGINT / SIGTERM. */
+interface WatchSession {
+    track: (jobs: readonly FileJob[]) => void;
+    done: () => Promise<number>;
+}
+
+/** Why a watcher could not start, made readable (`-r` on Node.js < 20 on Linux in particular). */
+function watchFailure(err: unknown, input: string, recursive: boolean): string {
+    const code = (err as NodeJS.ErrnoException).code;
+    if (recursive && code === 'ERR_FEATURE_UNAVAILABLE_ON_PLATFORM')
+        return `--watch with -r needs Node.js 20 or later on this platform (recursive fs.watch), got ${process.version}`;
+    return `Cannot watch ${input}: ${code === 'ENOENT' ? 'no such file or directory' : (err as Error).message}`;
+}
+
+/**
+ * Starts watching the inputs: a directory (recursively with `-r`) for its `*.svg`, a file through its
+ * parent directory (editors often replace a file rather than write it in place). An added or changed
+ * SVG is converted again, the output of a removed one is deleted, and a failure is reported without
+ * stopping. With `--android-names`, a file whose output name is taken by another one is not written
+ * while the collision lasts. Returns the exit code when a watcher cannot be started.
+ */
+function startWatch(ctx: WatchContext, io: CliIo): WatchSession | number {
+    const { inputs, out, recursive, naming, settings } = ctx;
+    // Checked by watchUsageError: -o file.xml only goes with a single file input.
+    const explicitTarget = out !== undefined && extname(out) === '.xml' ? out : undefined;
+    /** Input file → its job, for the outputs to delete and the name collisions. */
+    const known = new Map<string, FileJob>();
+    const timers = new Map<string, NodeJS.Timeout>();
+    const watchers: FSWatcher[] = [];
+    let stopped = false;
+
+    const convertOne = (file: string, root: string | undefined): void => {
+        const job = fileJob(file, root, out, explicitTarget, naming);
+        known.set(file, job);
+        const collision = findOutputCollisions([...known.values()], naming).find((c) => c.inputs.includes(file));
+        if (collision) {
+            io.stderr(
+                `✗ ${file}: Android resource name collision (not written): ${collision.name} ← ${collision.inputs.join(', ')}\n`,
+            );
+            return;
+        }
+        runJob(job, settings, io);
+    };
+
+    const forget = (job: FileJob): void => {
+        known.delete(job.input);
+        const sharing = [...known.values()].filter((other) => other.output === job.output);
+        // The collision is over: the remaining file owns the output again.
+        if (sharing.length === 1) return convertOne(sharing[0]!.input, sharing[0]!.root);
+        if (sharing.length > 1) return;
+        const pngs = (settings.fallback ?? []).map((density) => fallbackPngPath(job.output, density));
+        for (const path of [job.output, ...pngs]) {
+            if (lstatOrUndefined(path) === undefined) continue;
+            rmSync(path, { force: true });
+            io.stderr(`✓ ${job.input} removed → ${path} deleted\n`);
+        }
+    };
+
+    /** Brings the outputs of `path` (a file, a directory, or something removed) up to date. */
+    const handle = (path: string, root: string | undefined): void => {
+        const link = lstatOrUndefined(path);
+        if (link === undefined) {
+            for (const job of known.values()) if (isUnder(job.input, path)) forget(job);
+        } else if (link.isDirectory()) {
+            // A directory input to rescan, or a subdirectory added or moved in under -r.
+            if (root === undefined || (path !== root && !recursive)) return;
+            for (const job of known.values())
+                if (isUnder(job.input, path) && lstatOrUndefined(job.input) === undefined) forget(job);
+            for (const file of listSvgFiles(path, path === root ? recursive : true)) convertOne(file, root);
+        } else if (statOrUndefined(path)?.isFile() && (root === undefined || extname(path).toLowerCase() === '.svg')) {
+            convertOne(path, root);
+        }
+    };
+
+    const schedule = (path: string, root: string | undefined): void => {
+        if (stopped) return;
+        clearTimeout(timers.get(path));
+        timers.set(
+            path,
+            setTimeout(() => {
+                timers.delete(path);
+                handle(path, root);
+            }, WATCH_DEBOUNCE_MS),
+        );
+    };
+
+    const close = (): void => {
+        stopped = true;
+        for (const watcher of watchers) watcher.close();
+        for (const timer of timers.values()) clearTimeout(timer);
+        timers.clear();
+    };
+
+    for (const input of inputs) {
+        try {
+            const watcher =
+                statOrUndefined(input)?.isDirectory() === true
+                    ? watch(input, { recursive }, (_event, name) =>
+                          schedule(name === null ? input : join(input, name.toString()), input),
+                      )
+                    : watch(dirname(input), (_event, name) => {
+                          if (name === null || name.toString() === basename(input)) schedule(input, undefined);
+                      });
+            watcher.on('error', (err) => io.stderr(`✗ ${input}: ${err.message}\n`));
+            watchers.push(watcher);
+        } catch (err) {
+            close();
+            io.stderr(`${watchFailure(err, input, recursive)}\n`);
+            return 1;
+        }
+    }
+
+    return {
+        track: (jobs) => {
+            for (const job of jobs) known.set(job.input, job);
+        },
+        done: () =>
+            new Promise((resolve) => {
+                const stop = (): void => {
+                    process.off('SIGINT', stop);
+                    process.off('SIGTERM', stop);
+                    close();
+                    io.stderr('Stopped watching\n');
+                    resolve(0);
+                };
+                process.on('SIGINT', stop);
+                process.on('SIGTERM', stop);
+                io.stderr(`Watching ${inputs.join(', ')} for changes (Ctrl+C to stop)\n`);
+            }),
+    };
+}
+
+/** True when `path` is `dir` or inside it. */
+function isUnder(path: string, dir: string): boolean {
+    return path === dir || path.startsWith(dir.endsWith(sep) ? dir : dir + sep);
+}
+
+function lstatOrUndefined(path: string): ReturnType<typeof lstatSync> | undefined {
+    try {
+        return lstatSync(path);
+    } catch {
+        return undefined;
+    }
+}
+
+function statOrUndefined(path: string): ReturnType<typeof statSync> | undefined {
+    try {
+        return statSync(path);
+    } catch {
+        return undefined;
+    }
+}
+
+/**
+ * Runs the CLI against `argv` (without the node/script prefix) and returns the exit code; with
+ * `--watch`, a promise of it, settled when SIGINT / SIGTERM stops the watch.
+ */
+export function run(argv: string[], io: CliIo = processIo): number | Promise<number> {
     let args: ReturnType<typeof parseArgs>;
     try {
         args = parseArgs(argv, io);
@@ -429,7 +616,7 @@ export function run(argv: string[], io: CliIo = processIo): number {
         if (err instanceof CliExit) return err.code;
         throw err;
     }
-    const { inputs, inline, out, stdout, recursive, json, dryRun, fallback, opts, naming } = args;
+    const { inputs, inline, out, stdout, recursive, json, dryRun, watch: watching, fallback, opts, naming } = args;
 
     const explicitStdin = inline === undefined && inputs[0] === '-';
     const implicitStdin = inline === undefined && inputs.length === 0 && io.stdin !== undefined && !io.stdin.isTTY;
@@ -443,6 +630,13 @@ export function run(argv: string[], io: CliIo = processIo): number {
     if (json && !dryRun && (single ? singleTarget === undefined : stdout)) {
         io.stderr('--json prints the report on stdout: write the XML with -o <file.xml>, or add --dry-run\n');
         return 1;
+    }
+    if (watching) {
+        const usage = watchUsageError({ single, stdout, json, dryRun, inputs, out });
+        if (usage !== undefined) {
+            io.stderr(`${usage}\n`);
+            return 1;
+        }
     }
     if (fallback && (single ? singleTarget === undefined : stdout)) {
         io.stderr(
@@ -458,6 +652,11 @@ export function run(argv: string[], io: CliIo = processIo): number {
         if (typeof job === 'number') return job;
         jobs = [job];
     } else {
+        // Watchers first, so that nothing saved during the initial conversion is missed.
+        const session = watching
+            ? startWatch({ inputs, out, recursive, naming, settings: { opts, dryRun, fallback } }, io)
+            : undefined;
+        if (typeof session === 'number') return session;
         const listed = fileJobs(inputs, out, recursive, naming, io);
         entries.push(...listed.unreadable);
         jobs = stdout ? listed.jobs.map((job) => ({ ...job, output: undefined })) : listed.jobs;
@@ -465,13 +664,43 @@ export function run(argv: string[], io: CliIo = processIo): number {
             if (!stdout) assertDistinctOutputs(listed.jobs, naming);
         } catch (err) {
             io.stderr(`✗ ${(err as Error).message}\n`);
-            if (json) io.stdout(report([...entries, ...collisionEntries(listed.jobs, naming)]));
-            return 1;
+            if (session === undefined) {
+                if (json) io.stdout(report([...entries, ...collisionEntries(listed.jobs, naming)]));
+                return 1;
+            }
+            // Watching goes on, writing nothing yet: a file is converted once its collision is resolved.
+            jobs = [];
+        }
+        if (session !== undefined) {
+            session.track(listed.jobs);
+            for (const job of jobs) runJob(job, { opts, dryRun, fallback }, io);
+            return session.done();
         }
     }
     for (const job of jobs) entries.push(runJob(job, { opts, dryRun, fallback }, io));
     if (json) io.stdout(report(entries));
     return entries.some((entry) => entry.error !== null) ? 1 : 0;
+}
+
+/** Why `--watch` cannot go with the other arguments, if it cannot. */
+function watchUsageError(args: {
+    single: boolean;
+    stdout: boolean;
+    json: boolean;
+    dryRun: boolean;
+    inputs: readonly string[];
+    out?: string;
+}): string | undefined {
+    const { single, stdout, json, dryRun, inputs, out } = args;
+    if (single) return '--watch needs files or directories to watch: it cannot read stdin or -s';
+    const conflict = stdout ? '--stdout' : json ? '--json' : dryRun ? '--dry-run' : undefined;
+    if (conflict) return `--watch cannot be combined with ${conflict}: it writes the outputs to files`;
+    if (out !== undefined && extname(out) === '.xml') {
+        const input = inputs.length === 1 ? statOrUndefined(inputs[0]!) : undefined;
+        if (input === undefined || input.isDirectory())
+            return '--watch with -o <file.xml> needs a single existing input file; use -o <dir> otherwise';
+    }
+    return undefined;
 }
 
 /** True when this module is the process entry point (also through an npm bin symlink). */
@@ -483,4 +712,8 @@ function isMain(): boolean {
     }
 }
 
-if (isMain()) process.exitCode = run(process.argv.slice(2));
+if (isMain()) {
+    const code = run(process.argv.slice(2));
+    if (typeof code === 'number') process.exitCode = code;
+    else void code.then((settled) => (process.exitCode = settled));
+}

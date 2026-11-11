@@ -4,14 +4,37 @@ import {
     mkdtempSync,
     readdirSync,
     readFileSync,
+    renameSync,
     rmSync,
     symlinkSync,
     writeFileSync,
+    type FSWatcher,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { run, type CliIo, type ReportEntry } from '../src/cli.js';
+import { convert } from '../src/convert.js';
+
+/** The watchers `--watch` opened (closed or not), and an error to make `fs.watch` throw. */
+const watched = vi.hoisted(() => ({
+    watchers: [] as { closed: boolean }[],
+    failure: undefined as Error | undefined,
+}));
+
+// fs.watch, recorded: --watch must close every watcher it opens.
+vi.mock('node:fs', async (importOriginal) => {
+    const fs = await importOriginal<typeof import('node:fs')>();
+    const watch = ((...args: unknown[]): FSWatcher => {
+        if (watched.failure) throw watched.failure;
+        const watcher = (fs.watch as (...a: unknown[]) => FSWatcher)(...args);
+        const entry = { closed: false };
+        watcher.on('close', () => (entry.closed = true));
+        watched.watchers.push(entry);
+        return watcher;
+    }) as typeof fs.watch;
+    return { ...fs, watch, default: { ...fs, watch } };
+});
 
 const ICON = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M0 0h24v24H0z" fill="#f00"/></svg>';
 const BLUR =
@@ -35,6 +58,7 @@ function runWith(stdin: CliIo['stdin'], args: string[]): CliResult {
         stderr: (text) => (stderr += text),
         stdin,
     });
+    if (typeof status !== 'number') throw new Error('unexpected --watch session');
     return { status, stdout, stderr };
 }
 
@@ -890,6 +914,189 @@ describe('svgvd CLI', () => {
                 );
                 expect(readdirSync(out)).toEqual(['icon.xml']);
             });
+        });
+    });
+
+    describe('--watch', () => {
+        const BLUE = ICON.replace('#f00', '#00f');
+        let src: string;
+        let out: string;
+
+        /** Starts `svgvd --watch …args` in-process; `stop` sends SIGINT and returns the exit code. */
+        function watchSvgvd(...args: string[]) {
+            const io = { stdout: '', stderr: '' };
+            const status = run(['--watch', ...args], {
+                stdout: (text) => (io.stdout += text),
+                stderr: (text) => (io.stderr += text),
+            });
+            if (typeof status === 'number') throw new Error(`--watch did not start (${status}): ${io.stderr}`);
+            return {
+                io,
+                stop: (): Promise<number> => {
+                    process.emit('SIGINT');
+                    return status;
+                },
+            };
+        }
+
+        /** Retries `assertion` until it passes, for at most 5 s (file events are asynchronous). */
+        const eventually = (assertion: () => void): Promise<void> =>
+            vi.waitFor(assertion, { timeout: 5000, interval: 20 });
+
+        const read = (path: string): string => readFileSync(path, 'utf8');
+
+        beforeEach(() => {
+            src = join(dir, 'src');
+            out = join(dir, 'out');
+            mkdirSync(src);
+            writeFileSync(join(src, 'a.svg'), ICON);
+            watched.watchers.length = 0;
+            watched.failure = undefined;
+        });
+
+        afterEach(() => {
+            process.emit('SIGINT'); // stops a session a failed test left running
+            watched.failure = undefined;
+        });
+
+        it('converts everything at start, then a changed file again', async () => {
+            const session = watchSvgvd(src, '-o', out);
+            expect(read(join(out, 'a.xml'))).toBe(convert(ICON).xml);
+            expect(session.io.stderr).toContain(`Watching ${src} for changes`);
+            writeFileSync(join(src, 'a.svg'), BLUE);
+            await eventually(() => expect(read(join(out, 'a.xml'))).toBe(convert(BLUE).xml));
+            expect(await session.stop()).toBe(0);
+        });
+
+        it('converts an added file, and ignores files that are not SVG', async () => {
+            const session = watchSvgvd(src, '-o', out);
+            writeFileSync(join(src, 'notes.txt'), 'not an icon');
+            writeFileSync(join(src, 'b.svg'), BLUE);
+            await eventually(() => expect(read(join(out, 'b.xml'))).toBe(convert(BLUE).xml));
+            expect(readdirSync(out).sort()).toEqual(['a.xml', 'b.xml']);
+            await session.stop();
+        });
+
+        it('deletes the output of a removed file', async () => {
+            const session = watchSvgvd(src, '-o', out);
+            rmSync(join(src, 'a.svg'));
+            await eventually(() => expect(existsSync(join(out, 'a.xml'))).toBe(false));
+            expect(session.io.stderr).toContain(`✓ ${join(src, 'a.svg')} removed → ${join(out, 'a.xml')} deleted`);
+            await session.stop();
+        });
+
+        it('reports a conversion error and keeps watching', async () => {
+            const session = watchSvgvd(src, '-o', out);
+            writeFileSync(join(src, 'a.svg'), 'not svg');
+            await eventually(() => expect(session.io.stderr).toContain(`✗ ${join(src, 'a.svg')}: Invalid SVG`));
+            expect(read(join(out, 'a.xml'))).toBe(convert(ICON).xml); // the last good output stays
+            writeFileSync(join(src, 'a.svg'), BLUE);
+            await eventually(() => expect(read(join(out, 'a.xml'))).toBe(convert(BLUE).xml));
+            expect(await session.stop()).toBe(0);
+        });
+
+        it('watches a single file to -o file.xml, also when an editor replaces it', async () => {
+            const input = join(src, 'a.svg');
+            const target = join(dir, 'icon.xml');
+            const session = watchSvgvd(input, '-o', target);
+            expect(read(target)).toBe(convert(ICON).xml);
+            // Save through a temporary file renamed over the input, as many editors do.
+            writeFileSync(join(src, 'a.svg.tmp'), BLUE);
+            renameSync(join(src, 'a.svg.tmp'), input);
+            await eventually(() => expect(read(target)).toBe(convert(BLUE).xml));
+            writeFileSync(join(src, 'other.svg'), ICON);
+            expect(existsSync(join(src, 'other.xml'))).toBe(false); // only the input file is watched
+            await session.stop();
+        });
+
+        it('converts a file added in a new subdirectory with -r', async () => {
+            const session = watchSvgvd(src, '-r', '-o', out);
+            mkdirSync(join(src, 'sub'));
+            writeFileSync(join(src, 'sub', 'c.svg'), BLUE);
+            await eventually(() => expect(read(join(out, 'sub', 'c.xml'))).toBe(convert(BLUE).xml));
+            await session.stop();
+        });
+
+        it('does not convert subdirectories without -r', async () => {
+            const session = watchSvgvd(src, '-o', out);
+            mkdirSync(join(src, 'sub'));
+            writeFileSync(join(src, 'sub', 'c.svg'), BLUE);
+            writeFileSync(join(src, 'b.svg'), BLUE); // a marker: once it is converted, sub/ was handled
+            await eventually(() => expect(existsSync(join(out, 'b.xml'))).toBe(true));
+            expect(readdirSync(out).sort()).toEqual(['a.xml', 'b.xml']);
+            await session.stop();
+        });
+
+        it('refuses a resource name collision with --android-names until it is resolved', async () => {
+            writeFileSync(join(src, 'Arrow-Left.svg'), ICON);
+            rmSync(join(src, 'a.svg'));
+            const session = watchSvgvd(src, '-o', out, '--android-names');
+            const target = join(out, 'arrow_left.xml');
+            expect(read(target)).toBe(convert(ICON).xml);
+            writeFileSync(join(src, 'arrow_left.svg'), BLUE);
+            await eventually(() =>
+                expect(session.io.stderr).toContain(
+                    `✗ ${join(src, 'arrow_left.svg')}: Android resource name collision (not written): ${target} ← ${join(src, 'Arrow-Left.svg')}, ${join(src, 'arrow_left.svg')}`,
+                ),
+            );
+            expect(read(target)).toBe(convert(ICON).xml);
+            // The other file removed, the remaining one owns the name again.
+            rmSync(join(src, 'Arrow-Left.svg'));
+            await eventually(() => expect(read(target)).toBe(convert(BLUE).xml));
+            await session.stop();
+        });
+
+        it('starts with a collision without writing it, as without --watch', async () => {
+            writeFileSync(join(src, 'Arrow-Left.svg'), ICON);
+            writeFileSync(join(src, 'arrow_left.svg'), BLUE);
+            const session = watchSvgvd(src, '-o', out, '--android-names');
+            expect(session.io.stderr).toContain('Android resource name collision (nothing written)');
+            expect(existsSync(out)).toBe(false);
+            rmSync(join(src, 'arrow_left.svg'));
+            await eventually(() => expect(read(join(out, 'arrow_left.xml'))).toBe(convert(ICON).xml));
+            await session.stop();
+        });
+
+        it('stops on SIGINT with exit code 0, closing its watchers', async () => {
+            const listeners = process.listenerCount('SIGINT');
+            const session = watchSvgvd(src, join(src, 'a.svg'), '-o', out);
+            expect(watched.watchers).toHaveLength(2);
+            expect(process.listenerCount('SIGINT')).toBe(listeners + 1);
+            expect(await session.stop()).toBe(0);
+            expect(session.io.stderr).toContain('Stopped watching');
+            expect(process.listenerCount('SIGINT')).toBe(listeners);
+            await eventually(() => expect(watched.watchers.every((w) => w.closed)).toBe(true));
+        });
+
+        it.each([
+            [['-'], 'it cannot read stdin or -s'],
+            [['-s', ICON], 'it cannot read stdin or -s'],
+            [['SRC', '--stdout'], '--watch cannot be combined with --stdout'],
+            [['SRC', '-o', 'OUT', '--json'], '--watch cannot be combined with --json'],
+            [['SRC', '--dry-run'], '--watch cannot be combined with --dry-run'],
+            [['SRC', '-o', 'OUT/icon.xml'], '--watch with -o <file.xml> needs a single existing input file'],
+        ])('rejects %j with a usage error', (args, message) => {
+            const argv = args.map((arg) => arg.replace('SRC', src).replace('OUT', out));
+            const res = svgvdStdin(ICON, ['--watch', ...argv]);
+            expect(res.status).toBe(1);
+            expect(res.stderr).toContain(message);
+            expect(res.reads).toBe(0);
+            expect(existsSync(out)).toBe(false);
+            expect(watched.watchers).toHaveLength(0);
+        });
+
+        it('explains that -r needs a recursive fs.watch (Node.js 20+ on Linux), before converting', () => {
+            watched.failure = Object.assign(new Error('The feature watch recursively is unavailable'), {
+                code: 'ERR_FEATURE_UNAVAILABLE_ON_PLATFORM',
+            });
+            const res = svgvd('--watch', src, '-r', '-o', out);
+            expect(res.status).toBe(1);
+            expect(res.stderr).toContain('--watch with -r needs Node.js 20 or later');
+            expect(existsSync(out)).toBe(false);
+        });
+
+        it('documents the option in the help', () => {
+            expect(svgvd('--help').stdout).toContain('-w, --watch');
         });
     });
 });
