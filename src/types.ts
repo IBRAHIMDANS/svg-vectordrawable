@@ -53,6 +53,11 @@ export const WARNING_CODES = [
      * memory (Android recommends at most 200×200dp; use a bitmap for big artwork).
      */
     'large-vector',
+    /**
+     * A `<mask>` converted to a clip-path by ignoring the stroke of its content (a clip-path has no
+     * stroke outline): the masked area differs along the stroked outlines. Reported once per mask.
+     */
+    'mask-approximated',
 ] as const;
 
 /** Stable machine-readable warning codes. */
@@ -83,6 +88,7 @@ export const WARNING_CATEGORIES: Readonly<Record<WarningCode, WarningCategory>> 
     'group-skew': 'approximation',
     'opacity-approximated': 'approximation',
     'gradient-approximated': 'approximation',
+    'mask-approximated': 'approximation',
     'min-sdk-exceeded': 'info',
     'long-path-data': 'info',
     'large-vector': 'info',

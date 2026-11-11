@@ -1264,7 +1264,7 @@ describe('clip-equivalent masks', () => {
         ['a semi-transparent white', '<rect width="10" height="10" fill="#fff" fill-opacity="0.5"/>', /translucent/],
         ['an rgba white', '<rect width="10" height="10" fill="rgba(255,255,255,0.5)"/>', /translucent/],
         ['a group opacity', '<g opacity="0.5"><rect width="10" height="10" fill="#fff"/></g>', /translucent/],
-        ['a stroke', '<rect width="10" height="10" fill="#fff" stroke="#fff"/>', /stroke/],
+        ['only a stroke', '<rect width="10" height="10" fill="none" stroke="#fff"/>', /only paints strokes/],
         [
             'a gradient fill',
             '<linearGradient id="g"><stop stop-color="#fff"/><stop offset="1" stop-color="#000"/></linearGradient><rect width="10" height="10" fill="url(#g)"/>',
@@ -1280,6 +1280,23 @@ describe('clip-equivalent masks', () => {
         ['currentColor (unknown root color)', '<rect width="10" height="10" fill="currentColor"/>', /solid color/],
     ])('keeps the warning for a mask with %s', (_, content, reason) => {
         expectRejected(svg(`<mask id="m">${content}</mask>${square}`), reason);
+    });
+
+    it("rejects mask-approximated under strict: true, accepts it under strict: 'lossy'", () => {
+        const doc = svg(`<mask id="m"><rect width="10" height="10" fill="#fff" stroke="#fff"/></mask>${square}`);
+        for (const optimize of [false, true]) {
+            const lossy = convert(doc, { optimize, strict: 'lossy' });
+            expect(lossy.warnings.map((w) => w.code)).toEqual(['mask-approximated']);
+            expect(clipCount(lossy.xml)).toBe(1);
+            let error: unknown;
+            try {
+                convert(doc, { optimize, strict: true });
+            } catch (err) {
+                error = err;
+            }
+            expect(error).toBeInstanceOf(ConversionError);
+            expect((error as ConversionError).warning.code).toBe('mask-approximated');
+        }
     });
 
     it('keeps the warning for an alpha mask with translucent content', () => {
