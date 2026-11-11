@@ -345,6 +345,110 @@ describe('resolveUses — <symbol viewBox> viewport', () => {
     });
 });
 
+describe('resolveUses — <symbol> with a percentage or absent size', () => {
+    const doc = (viewBox: string, body: string): string =>
+        `<svg xmlns="http://www.w3.org/2000/svg" viewBox="${viewBox}">${body}</svg>`;
+    /** A 10×10 viewBox whose green content overflows it (the clip is visible). */
+    const symbol =
+        '<defs><symbol id="s" viewBox="0 0 10 10"><rect width="20" height="20" fill="green"/></symbol></defs>';
+
+    // What a browser draws (SVG 2 §5.6.2: use size, else symbol size, else 100% of the use's viewport).
+    for (const [label, source, expected] of [
+        [
+            'use width / height in % of the root viewBox',
+            doc('0 0 100 50', `${symbol}<use href="#s" x="10" width="50%" height="100%"/>`),
+            doc('0 0 100 50', '<rect x="10" width="50" height="50" fill="green"/>'),
+        ],
+        [
+            'absent sizes: 100% of the root viewBox, centred by xMidYMid meet',
+            doc('0 0 100 50', `${symbol}<use href="#s" x="10"/>`),
+            doc('0 0 100 50', '<rect x="35" width="65" height="50" fill="green"/>'),
+        ],
+        [
+            'symbol width / height in %, without viewBox: clipped, not scaled',
+            doc(
+                '0 0 200 100',
+                '<defs><symbol id="s" width="25%" height="50%"><rect width="100" height="100" fill="green"/></symbol></defs><use href="#s"/>',
+            ),
+            doc('0 0 200 100', '<rect width="50" height="50" fill="green"/>'),
+        ],
+        [
+            'use in a nested <svg>: % of the nested viewport',
+            doc(
+                '0 0 100 100',
+                `${symbol}<svg x="10" y="10" width="40" height="40"><use href="#s" x="10" y="10" width="50%" height="50%"/></svg>`,
+            ),
+            doc('0 0 100 100', '<rect x="20" y="20" width="20" height="20" fill="green"/>'),
+        ],
+        [
+            'use nested in an instanced symbol: % of that symbol viewport',
+            doc(
+                '0 0 100 100',
+                `${symbol}<defs><symbol id="outer" viewBox="0 0 40 40"><use href="#s" width="50%" height="50%"/></symbol></defs>` +
+                    '<use href="#outer" width="80" height="80"/>',
+            ),
+            doc('0 0 100 100', '<rect width="40" height="40" fill="green"/>'),
+        ],
+    ] as const)
+        for (const optimize of [false, true])
+            it(`${label} (optimize: ${optimize})`, () => {
+                const { xml, warnings } = convert(source, { optimize, strict: true });
+                expect(warnings).toEqual([]);
+                const result = compareSvgs(expected, vdToSvg(xml));
+                expect(result.sizeMismatch).toBeNull();
+                expect(result.inked).toBeGreaterThan(0);
+                expect(result.mismatch).toBeLessThan(DEFAULT_MAX_MISMATCH);
+            });
+
+    for (const optimize of [false, true])
+        it(`warns (unsupported-attribute) when the size cannot be resolved (optimize: ${optimize})`, () => {
+            const source = doc('0 0 100 50', `${symbol}<use href="#s" width="2ex" height="10"/>`);
+            const { warnings } = convert(source, { optimize });
+            expect(warnings.map((w) => w.code)).toEqual(['unsupported-attribute']);
+            expect(warnings[0]?.message).toContain('the <symbol> viewport size');
+            expect(() => convert(source, { optimize, strict: true })).toThrow();
+        });
+
+    it('does not warn when an unresolved viewport changes nothing (no viewBox, overflow visible)', () => {
+        const source = doc(
+            '0 0 100 50',
+            '<defs><symbol id="s" overflow="visible"><rect width="20" height="20"/></symbol></defs><use href="#s" width="2ex"/>',
+        );
+        for (const optimize of [false, true]) expect(convert(source, { optimize }).warnings).toEqual([]);
+    });
+
+    it('reports to warn against an unknown root viewport, and keeps the unscaled content', () => {
+        const tree = root([
+            el('svg', {}, [
+                el('defs', {}, [el('symbol', { id: 's', viewBox: '0 0 1 1' }, [el('path', { d: 'M0 0h1v1h-1z' })])]),
+                el('use', { href: '#s' }),
+            ]),
+        ]);
+        const codes: string[] = [];
+        resolveUses(tree, (w) => codes.push(w.code));
+        expect(codes).toEqual(['unsupported-attribute']);
+        expect(onlyChild(onlyChild(tree).children?.[1] as XastElement).name).toBe('g');
+    });
+
+    it('expands a bare <symbol> content after its instances, without reporting it', () => {
+        const inner = el('use', { href: '#p' });
+        const tree = root([
+            el('svg', { viewBox: '0 0 10 10' }, [
+                el('defs', {}, [
+                    el('path', { id: 'p', d: 'M0 0h1v1h-1z' }),
+                    el('symbol', { id: 's' }, [inner, el('use', { href: '#t' })]),
+                    el('symbol', { id: 't', viewBox: '0 0 1 1', width: '2ex' }),
+                ]),
+            ]),
+        ]);
+        const reported: string[] = [];
+        resolveUses(tree, (w) => reported.push(w.code));
+        expect(reported).toEqual([]);
+        const bare = onlyChild(onlyChild(tree)).children?.[1] as XastElement;
+        expect(bare.children?.map((c) => c.name)).toEqual(['g', 'g']);
+    });
+});
+
 describe('resolveUses — <svg> target', () => {
     /** Resolves a single `<use>` of a single `<svg>` and returns the cloned `<svg>`. */
     const resolveSvg = (svgAttrs: Record<string, string>, useAttrs: Record<string, string>): XastElement => {
