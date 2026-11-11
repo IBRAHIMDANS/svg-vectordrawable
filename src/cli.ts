@@ -2,6 +2,7 @@
 import { readFileSync, statSync, realpathSync } from 'node:fs';
 import { extname, basename } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { colorRefs } from './colorRef.js';
 import { convert } from './convert.js';
 import { assertDistinctOutputs, defaultOutputPath, listSvgFiles, writeOutput, type FileNamingOptions } from './file.js';
 import { WARNING_CODES, type ConvertOptions, type Severity, type WarningCode } from './types.js';
@@ -24,6 +25,10 @@ Options:
                        (gradients and fillType need API 24)
   --xml-tag            Prepend an XML declaration
   --tint <color>       Add android:tint to the <vector>
+  --current-color <c>  What currentColor stands for: a CSS color or an Android
+                       reference (?attr/colorPrimary, @color/icon…), emitted as is
+  --color-map <c=ref>  Map an SVG color to an Android reference (repeatable),
+                       e.g. --color-map '#1A73E8=@color/brand'
   --auto-mirrored      Add android:autoMirrored="true" (flipped in RTL layouts)
   --width <dp>         Set android:width, keeping the viewport; alone, the
                        height follows the aspect ratio
@@ -102,7 +107,13 @@ function parseArgs(
         } else if (arg === '--xml-tag') opts.xmlTag = true;
         else if (arg === '--android-names') naming.androidNames = true;
         else if (arg === '--tint') opts.tint = value();
-        else if (arg === '--auto-mirrored') opts.autoMirrored = true;
+        else if (arg === '--current-color') opts.currentColor = value();
+        else if (arg === '--color-map') {
+            const entry = value();
+            const eq = entry.indexOf('=');
+            if (eq <= 0) fail(`Invalid --color-map (expected <color>=<reference>): ${entry}`);
+            opts.colorMap = { ...opts.colorMap, [entry.slice(0, eq).trim()]: entry.slice(eq + 1) };
+        } else if (arg === '--auto-mirrored') opts.autoMirrored = true;
         else if (arg === '--width' || arg === '--height') {
             const dp = value();
             if (!/^(\d+\.?\d*|\.\d+)$/.test(dp) || !(Number(dp) > 0))
@@ -115,6 +126,12 @@ function parseArgs(
         } else if (arg === '-') fail('Reading from stdin is not supported; pass a file or use -s <svg>');
         else if (arg.startsWith('-')) fail(`Unknown option: ${arg}`);
         else inputs.push(arg);
+    }
+    // Reported once here rather than as a conversion failure of every input.
+    try {
+        colorRefs(opts.currentColor ?? '#000000', opts.colorMap);
+    } catch (err) {
+        fail((err as Error).message);
     }
     return { inputs, inline, out, stdout, opts, naming };
 }

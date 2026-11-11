@@ -1,3 +1,5 @@
+import { parseLength } from './units.js';
+
 /** A 2D affine transform: x' = a·x + c·y + e, y' = b·x + d·y + f. */
 export interface Matrix {
     a: number;
@@ -38,6 +40,21 @@ export function scaleFactor(m: Matrix): number {
     return Math.sqrt(Math.abs(m.a * m.d - m.b * m.c));
 }
 
+const translation = (tx: number, ty: number): Matrix => ({ ...IDENTITY, e: tx, f: ty });
+const scaling = (sx: number, sy: number): Matrix => ({ ...IDENTITY, a: sx, d: sy });
+const rad = (deg: number): number => (deg * Math.PI) / 180;
+function rotation(deg: number): Matrix {
+    const cos = Math.cos(rad(deg));
+    const sin = Math.sin(rad(deg));
+    return { a: cos, b: sin, c: -sin, d: cos, e: 0, f: 0 };
+}
+/** CSS `skew(ax, ay)`; `skewX(a)` is `skew(a, 0)` and `skewY(a)` is `skew(0, a)`. */
+const skewing = (ax: number, ay: number): Matrix => ({ ...IDENTITY, b: Math.tan(rad(ay)), c: Math.tan(rad(ax)) });
+
+/** `m` applied around the point (ox, oy) instead of the origin: translate(o) · m · translate(−o). */
+export const aroundOrigin = (m: Matrix, ox: number, oy: number): Matrix =>
+    multiply(translation(ox, oy), multiply(m, translation(-ox, -oy)));
+
 /**
  * Parses an SVG transform list (translate/scale/rotate/skewX/skewY/matrix) into one matrix.
  * Returns null when there is nothing parseable, so callers keep untransformed coordinates.
@@ -61,28 +78,20 @@ export function parseTransform(transform: string | undefined): Matrix | null {
                     next = { a: args[0]!, b: args[1]!, c: args[2]!, d: args[3]!, e: args[4]!, f: args[5]! };
                 break;
             case 'translate':
-                next = { ...IDENTITY, e: args[0] ?? 0, f: args[1] ?? 0 };
+                next = translation(args[0] ?? 0, args[1] ?? 0);
                 break;
             case 'scale':
-                next = { ...IDENTITY, a: args[0] ?? 1, d: args[1] ?? args[0] ?? 1 };
+                next = scaling(args[0] ?? 1, args[1] ?? args[0] ?? 1);
                 break;
-            case 'rotate': {
-                const r = ((args[0] ?? 0) * Math.PI) / 180;
-                const cos = Math.cos(r);
-                const sin = Math.sin(r);
-                const rot: Matrix = { a: cos, b: sin, c: -sin, d: cos, e: 0, f: 0 };
-                if (args.length >= 3) {
-                    const cx = args[1]!;
-                    const cy = args[2]!;
-                    next = multiply({ ...IDENTITY, e: cx, f: cy }, multiply(rot, { ...IDENTITY, e: -cx, f: -cy }));
-                } else next = rot;
+            case 'rotate':
+                next = rotation(args[0] ?? 0);
+                if (args.length >= 3) next = aroundOrigin(next, args[1]!, args[2]!);
                 break;
-            }
             case 'skewx':
-                next = { ...IDENTITY, c: Math.tan(((args[0] ?? 0) * Math.PI) / 180) };
+                next = skewing(args[0] ?? 0, 0);
                 break;
             case 'skewy':
-                next = { ...IDENTITY, b: Math.tan(((args[0] ?? 0) * Math.PI) / 180) };
+                next = skewing(0, args[0] ?? 0);
                 break;
         }
         if (next) {
@@ -91,6 +100,124 @@ export function parseTransform(transform: string | undefined): Matrix | null {
         }
     }
     return matched ? m : null;
+}
+
+/** Degrees per CSS angle unit (a unitless angle is read as degrees, as SVG does). */
+const ANGLE_DEG: Record<string, number> = { '': 1, deg: 1, rad: 180 / Math.PI, grad: 0.9, turn: 360 };
+const CSS_NUMBER_RE = /^([+-]?(?:\d+\.?\d*|\.\d+)(?:e[+-]?\d+)?)([a-z]*|%)$/i;
+
+/** A CSS angle in degrees (NaN when unparseable). */
+function cssAngle(v: string): number {
+    const m = CSS_NUMBER_RE.exec(v);
+    const factor = m ? ANGLE_DEG[m[2]!.toLowerCase()] : undefined;
+    return factor === undefined ? NaN : parseFloat(m![1]!) * factor;
+}
+
+/** A CSS `<number>` (NaN when unparseable or followed by a unit). */
+function cssNumber(v: string): number {
+    const m = CSS_NUMBER_RE.exec(v);
+    return m && m[2] === '' ? parseFloat(m[1]!) : NaN;
+}
+
+/** A CSS `<number>` or `<percentage>` (`scale(50%)` = `scale(0.5)`; NaN when unparseable). */
+const cssFactor = (v: string): number => (v.endsWith('%') ? cssNumber(v.slice(0, -1)) / 100 : cssNumber(v));
+
+/** Matrix of one CSS transform function (lengths in user units, angles in degrees), or null. */
+function cssFunctionMatrix(name: string, args: readonly string[]): Matrix | null {
+    const lengths = args.map((a) => parseLength(a));
+    const numbers = args.map(cssNumber);
+    const factors = args.map(cssFactor);
+    const angles = args.map(cssAngle);
+    const n = args.length;
+    let m: Matrix | null = null;
+    switch (name) {
+        case 'matrix':
+            if (n === 6) {
+                const [a, b, c, d, e, f] = numbers as [number, number, number, number, number, number];
+                m = { a, b, c, d, e, f };
+            }
+            break;
+        case 'translate':
+            if (n === 1 || n === 2) m = translation(lengths[0]!, lengths[1] ?? 0);
+            break;
+        case 'translatex':
+            if (n === 1) m = translation(lengths[0]!, 0);
+            break;
+        case 'translatey':
+            if (n === 1) m = translation(0, lengths[0]!);
+            break;
+        case 'scale':
+            if (n === 1 || n === 2) m = scaling(factors[0]!, factors[1] ?? factors[0]!);
+            break;
+        case 'scalex':
+            if (n === 1) m = scaling(factors[0]!, 1);
+            break;
+        case 'scaley':
+            if (n === 1) m = scaling(1, factors[0]!);
+            break;
+        case 'rotate':
+            if (n === 1) m = rotation(angles[0]!);
+            break;
+        case 'skew':
+            if (n === 1 || n === 2) m = skewing(angles[0]!, angles[1] ?? 0);
+            break;
+        case 'skewx':
+            if (n === 1) m = skewing(angles[0]!, 0);
+            break;
+        case 'skewy':
+            if (n === 1) m = skewing(0, angles[0]!);
+            break;
+    }
+    return m && Object.values(m).every(Number.isFinite) ? m : null;
+}
+
+/**
+ * Parses a CSS `transform` property value into one matrix (`none` is the identity). Returns null
+ * when some part is not a 2D transform with absolute units: percentages of the reference box,
+ * font-relative lengths, 3D functions, `calc()` / `var()`, or a syntax error.
+ */
+export function parseCssTransform(value: string): Matrix | null {
+    const s = value.trim();
+    if (s.toLowerCase() === 'none') return IDENTITY;
+    const re = /\s*([a-z][a-z0-9]*)\(([^()]*)\)\s*/iy;
+    let m = IDENTITY;
+    let matched = false;
+    let fn: RegExpExecArray | null;
+    while (re.lastIndex < s.length && (fn = re.exec(s)) !== null) {
+        const args = fn[2]!.trim().split(/\s*,\s*|\s+/);
+        const next = cssFunctionMatrix(fn[1]!.toLowerCase(), args);
+        if (!next) return null;
+        m = multiply(m, next);
+        matched = true;
+    }
+    return matched && re.lastIndex === s.length ? m : null;
+}
+
+/** One `transform-origin` component in user units: NaN when it depends on the reference box. */
+function originOffset(v: string): number {
+    if (v === 'left' || v === 'top' || /^[+-]?(?:0+\.?0*|\.0+)%$/.test(v)) return 0;
+    return parseLength(v); // `center` / `right` / `bottom`, other percentages and `em` give NaN
+}
+
+/**
+ * Parses a CSS `transform-origin` (`<x> [<y> [<z>]]`, keywords in either order) into user units.
+ * Returns null when a component depends on the reference box (`center`, `right`, `bottom`, a
+ * non-zero percentage) or is not an absolute length. `z` only moves 3D transforms: ignored.
+ */
+export function parseTransformOrigin(value: string): { x: number; y: number } | null {
+    const parts = value.trim().toLowerCase().split(/\s+/);
+    if (parts.length > 3 || (parts[2] !== undefined && !Number.isFinite(parseLength(parts[2])))) return null;
+    let x = parts[0]!;
+    let y = parts[1] ?? 'center';
+    const vertical = (v: string): boolean => v === 'top' || v === 'bottom';
+    const horizontal = (v: string): boolean => v === 'left' || v === 'right';
+    // A lone vertical keyword sets y; a vertical keyword first (or a horizontal one second) swaps.
+    if (parts.length === 1 && vertical(x)) [x, y] = ['center', x];
+    else if (vertical(x) || horizontal(y)) [x, y] = [y, x];
+    if (vertical(x) || horizontal(y)) return null;
+    const ox = originOffset(x);
+    const oy = originOffset(y);
+    return Number.isFinite(ox) && Number.isFinite(oy) ? { x: ox, y: oy } : null;
 }
 
 export interface Decomposed {

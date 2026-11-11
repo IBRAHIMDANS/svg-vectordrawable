@@ -260,7 +260,11 @@ const lerpLine = ([p, q]: Point[], ta: number, tb: number): Point[] => [
 export interface DashOptions {
     /** Decimal places of the emitted coordinates. @default 3 */
     precision?: number;
-    /** The element's `pathLength`: dash lengths and offset are scaled by (actual length / pathLength). */
+    /**
+     * The element's `pathLength`: dash lengths and offset are scaled by (actual length / pathLength).
+     * Zero means a scaling factor of infinity (SVG 2, the `pathLength` attribute): the stroke is drawn
+     * solid, as Chrome and Firefox do. A negative value is an error and is ignored, like an absent one.
+     */
     pathLength?: number;
 }
 
@@ -278,6 +282,8 @@ export function dashPathData(
     options: DashOptions = {},
 ): string | null {
     const { precision = 3, pathLength } = options;
+    // pathLength="0": every non-zero dash and gap becomes infinite, which browsers draw solid.
+    if (pathLength === 0) return transformPathData(d, IDENTITY);
     const subpaths = parseSubpaths(d, tolerance > 0 ? tolerance : 1e-3);
     let pattern = dasharray;
     let offset = dashoffset;
@@ -321,7 +327,7 @@ export function dashPathData(
  * Resolves a `stroke-dasharray` value into an even-length list of user-unit lengths (an odd list
  * is repeated, per SVG). `%` is relative to `diagonal` (the normalized viewport diagonal).
  * Returns `[]` when the stroke is solid (`none`, all zeros, no gap, or a negative value — invalid
- * per SVG, hence no dashing) and null when a value cannot be resolved here (e.g. `em`), so the caller warns.
+ * per SVG, hence no dashing) and null when a value cannot be resolved here (e.g. `ex`), so the caller warns.
  */
 export function parseDasharray(raw: string | undefined, diagonal: number): number[] | null {
     const value = raw?.trim() ?? 'none';

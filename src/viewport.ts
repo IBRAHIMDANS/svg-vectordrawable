@@ -84,9 +84,12 @@ function positiveLength(raw: string | undefined): number {
 }
 
 /**
- * Lays out the root `<svg>`. A percentage, a font-relative unit, a zero or negative length (or a
- * missing value) does not define a size, so width/height fall back to the viewBox (then 24).
- * Throws on a viewBox whose width or height is not positive.
+ * Lays out the root `<svg>`. `em` / `rem` count 16 px (`parseLength`); a percentage, `ex` / `ch`,
+ * a zero or negative length (or a missing value) does not define a size. With a viewBox, a single
+ * defined dimension sets the other through the viewBox aspect ratio, whatever preserveAspectRatio
+ * (SVG 2 §8.12 intrinsic sizing, CSS replaced-element sizing); with neither defined, the size is the
+ * viewBox's. Without a viewBox, each undefined dimension is 24 (reported through `assumed`). Throws
+ * on a viewBox whose width or height is not positive.
  */
 export function rootLayout(attrs: Record<string, string>): RootLayout {
     const parsed = viewBoxNumbers(attrs.viewBox?.trim() || undefined);
@@ -98,8 +101,11 @@ export function rootLayout(attrs: Record<string, string>): RootLayout {
     const attrWidth = positiveLength(attrs.width);
     const attrHeight = positiveLength(attrs.height);
     const [minX, minY, vpW, vpH] = parsed ?? [0, 0, attrWidth || 24, attrHeight || 24];
-    const width = attrWidth || vpW;
-    const height = attrHeight || vpH;
+    // Each dimension: its own length, else the other one through the viewBox ratio, else the
+    // viewBox's (or 24). An undefined length or ratio is NaN, so its product is NaN: falsy.
+    const ratio = hasViewBox ? vpW / vpH : NaN;
+    const width = attrWidth || attrHeight * ratio || vpW;
+    const height = attrHeight || attrWidth / ratio || vpH;
 
     // VectorDrawable stretches its viewport onto width×height; SVG keeps the aspect ratio
     // (preserveAspectRatio, default xMidYMid meet). Grow/shrink the viewport and align the content.

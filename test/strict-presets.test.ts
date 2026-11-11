@@ -11,8 +11,8 @@ import {
 const svg = (body: string, attrs = 'viewBox="0 0 24 24"'): string =>
     `<svg xmlns="http://www.w3.org/2000/svg" ${attrs}>${body}</svg>`;
 
-/** `lossy`: a dash pattern in `em` cannot be resolved; the stroke is drawn solid. */
-const LOSSY = svg('<path d="M0 0L24 24" stroke="#000" stroke-dasharray="1em"/>');
+/** `lossy`: a dash pattern in `ex` cannot be resolved; the stroke is drawn solid. */
+const LOSSY = svg('<path d="M0 0L24 24" stroke="#000" stroke-dasharray="1ex"/>');
 /** `approximation`: group opacity folded onto overlapping children. */
 const APPROX = svg('<g opacity="0.5"><rect width="12" height="12"/><rect x="6" y="6" width="12" height="12"/></g>');
 /** `info`: a 512dp vector. */

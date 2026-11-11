@@ -1,0 +1,63 @@
+{
+    "name": "vite-plugin-svg-vectordrawable",
+    "version": "0.1.0",
+    "description": "Vite / Rollup plugin: convert a folder of SVGs into Android VectorDrawable XML (res/drawable) at build time and in watch mode, with svg-vectordrawable.",
+    "type": "module",
+    "exports": {
+        ".": {
+            "types": "./dist/index.d.ts",
+            "import": "./dist/index.js"
+        }
+    },
+    "files": [
+        "dist"
+    ],
+    "sideEffects": false,
+    "scripts": {
+        "build": "tsc -p tsconfig.build.json",
+        "typecheck": "pnpm run build && tsc --noEmit",
+        "test": "pnpm run build && node --test test/plugin-test.mjs",
+        "example": "pnpm run build && vite build example",
+        "prepublishOnly": "pnpm run build"
+    },
+    "keywords": [
+        "vite-plugin",
+        "rollup-plugin",
+        "svg",
+        "android",
+        "vectordrawable",
+        "vector-drawable",
+        "drawable",
+        "svg-vectordrawable"
+    ],
+    "license": "MIT",
+    "author": "Ibrahima Dansoko <ibrahimdansoko@gmail.com>",
+    "repository": {
+        "type": "git",
+        "url": "git+https://github.com/IBRAHIMDANS/svg-vectordrawable.git",
+        "directory": "integrations/vite-plugin"
+    },
+    "homepage": "https://github.com/IBRAHIMDANS/svg-vectordrawable/tree/main/integrations/vite-plugin#readme",
+    "bugs": {
+        "url": "https://github.com/IBRAHIMDANS/svg-vectordrawable/issues"
+    },
+    "engines": {
+        "node": ">=18"
+    },
+    "dependencies": {
+        "svg-vectordrawable": "^0.3.0"
+    },
+    "peerDependencies": {
+        "vite": ">=5"
+    },
+    "peerDependenciesMeta": {
+        "vite": {
+            "optional": true
+        }
+    },
+    "devDependencies": {
+        "@types/node": "^26.6.6",
+        "typescript": "^5.9.3",
+        "vite": "^8.3.8"
+    }
+}

@@ -1,0 +1,20 @@
+<svg width="48" height="48" viewBox="0 0 48 48" fill="none" xmlns="http://www.w3.org/2000/svg">
+<g clip-path="url(#clip0_1203_88)">
+<rect width="48" height="48" rx="12" fill="url(#paint0_radial_1203_88)"/>
+<mask id="mask0_1203_88" style="mask-type:alpha" maskUnits="userSpaceOnUse" x="12" y="12" width="24" height="24">
+<circle cx="24" cy="24" r="12" fill="#D9D9D9"/>
+</mask>
+<g mask="url(#mask0_1203_88)">
+<rect x="12" y="12" width="24" height="24" fill="#7B61FF"/>
+</g>
+</g>
+<defs>
+<radialGradient id="paint0_radial_1203_88" cx="0" cy="0" r="1" gradientUnits="userSpaceOnUse" gradientTransform="translate(24 24) rotate(45) scale(24 12)">
+<stop stop-color="#FF7262"/>
+<stop offset="1" stop-color="#1ABCFE" stop-opacity="0"/>
+</radialGradient>
+<clipPath id="clip0_1203_88">
+<rect width="48" height="48" fill="white"/>
+</clipPath>
+</defs>
+</svg>
