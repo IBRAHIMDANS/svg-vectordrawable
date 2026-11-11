@@ -1,4 +1,4 @@
-import type { Viewport, XastElement } from './gradient.js';
+import type { Viewport, XastElement } from './ast.js';
 import { presentation } from './style.js';
 import { IDENTITY, multiply, type Matrix } from './transform.js';
 import { parseLength } from './units.js';

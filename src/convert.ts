@@ -1,9 +1,10 @@
+import type { XastElement } from './ast.js';
 import { ClipPaths } from './clip.js';
 import type { ConvertContext } from './context.js';
 import { collectByName } from './elements.js';
 import { ConversionError } from './errors.js';
 import { escapeXml, formatNumber } from './format.js';
-import { collectGradients, type XastElement } from './gradient.js';
+import { collectGradients } from './gradient.js';
 import { checkGroupOpacity } from './groupOpacity.js';
 import { initialStyle, resolveStyle } from './inherited.js';
 import { parseSvg } from './normalize.js';

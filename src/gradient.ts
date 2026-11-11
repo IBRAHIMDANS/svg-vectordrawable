@@ -1,26 +1,8 @@
+import type { BBox, Viewport, XastElement } from './ast.js';
 import { toAndroidColor } from './color.js';
 import { presentation } from './style.js';
 import { applyPoint, IDENTITY, multiply, parseTransform, scaleFactor, type Matrix } from './transform.js';
 import type { Warning } from './types.js';
-
-export interface XastElement {
-    type: string;
-    name?: string;
-    attributes?: Record<string, string>;
-    children?: XastElement[];
-}
-
-export interface Viewport {
-    width: number;
-    height: number;
-}
-
-export interface BBox {
-    x: number;
-    y: number;
-    width: number;
-    height: number;
-}
 
 /** A gradient color stop, with its offset normalized to [0, 1]. */
 interface GradientStop {

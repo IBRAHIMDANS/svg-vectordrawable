@@ -2,7 +2,7 @@ import { clipPathElement, wrapClip } from './clip.js';
 import type { ConvertContext } from './context.js';
 import { GROUPS, isDisplayNone, pathDataOf, SKIP, UNSUPPORTED, UNSUPPORTED_ATTRS } from './elements.js';
 import { formatNumber } from './format.js';
-import type { XastElement } from './gradient.js';
+import type { XastElement } from './ast.js';
 import { checkGroupOpacity } from './groupOpacity.js';
 import { isHidden, resolveStyle, type Inherited } from './inherited.js';
 import { renderPath } from './paint.js';

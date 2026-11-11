@@ -5,10 +5,9 @@ import {
     renderGradient,
     resolveEllipticalRadial,
     resolveGradient,
-    type BBox,
     type RawGradient,
-    type XastElement,
 } from '../src/gradient.js';
+import type { BBox, XastElement } from '../src/ast.js';
 import { applyPoint, IDENTITY, multiply, parseTransform, type Matrix } from '../src/transform.js';
 import type { Warning } from '../src/types.js';
 

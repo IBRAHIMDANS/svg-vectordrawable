@@ -1,4 +1,4 @@
-import type { XastElement } from './gradient.js';
+import type { XastElement } from './ast.js';
 import { presentation } from './style.js';
 import { formatMatrix } from './transform.js';
 import { parseLength } from './units.js';

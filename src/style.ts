@@ -1,4 +1,4 @@
-import type { XastElement } from './gradient.js';
+import type { XastElement } from './ast.js';
 
 /** Parses an inline `style` attribute into a lowercase-keyed declaration map. */
 export function parseStyle(style: string | undefined): Record<string, string> {

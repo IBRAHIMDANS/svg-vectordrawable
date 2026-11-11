@@ -1,11 +1,6 @@
 import { optimize } from './svgo.js';
 import type { Config } from 'svgo';
-import type { XastElement } from './gradient.js';
-
-export interface XastRoot {
-    type: 'root';
-    children: XastElement[];
-}
+import type { XastRoot } from './ast.js';
 
 /**
  * Default normalization: flatten inline `<style>`, turn shapes into paths, bake transforms and

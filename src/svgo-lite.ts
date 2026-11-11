@@ -6,12 +6,7 @@
 //   - `_collections.colorsNames`, the CSS named-color table (kept identical to svgo's, see tests).
 // svgo exports neither its parser nor its collections separately (package `exports` only expose
 // `.` and `./browser`), hence this small XML parser mirroring svgo's sax-based one.
-import type { XastElement } from './gradient.js';
-
-interface XastRoot {
-    type: 'root';
-    children: XastElement[];
-}
+import type { XastElement, XastRoot } from './ast.js';
 
 interface XastNode extends XastElement {
     value?: string;

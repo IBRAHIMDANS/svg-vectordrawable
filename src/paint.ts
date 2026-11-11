@@ -1,3 +1,4 @@
+import type { XastElement } from './ast.js';
 import { toAndroidColor } from './color.js';
 import type { ConvertContext } from './context.js';
 import { dashPathData, ellipseDashPath, parseDasharray } from './dash.js';
@@ -10,7 +11,6 @@ import {
     type EllipticalRadial,
     type RawGradient,
     type ResolvedGradient,
-    type XastElement,
 } from './gradient.js';
 import { fillOf, strokeWidthOf, type Inherited } from './inherited.js';
 import { normalizeArcFlags, pathBBox, transformPathData } from './pathData.js';

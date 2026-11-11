@@ -1,4 +1,4 @@
-import type { Viewport, XastElement } from './gradient.js';
+import type { Viewport, XastElement } from './ast.js';
 import { shapeToPathData, SHAPE_NAMES } from './shapes.js';
 import { presentation } from './style.js';
 

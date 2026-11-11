@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { convert } from '../src/index.js';
 import { resolveUses } from '../src/useResolver.js';
-import type { XastElement } from '../src/gradient.js';
+import type { XastElement } from '../src/ast.js';
 
 const el = (name: string, attributes: Record<string, string> = {}, children: XastElement[] = []): XastElement => ({
     type: 'element',
