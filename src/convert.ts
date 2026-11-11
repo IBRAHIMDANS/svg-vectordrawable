@@ -66,7 +66,7 @@ interface Size {
  * option alone scales the other dimension by the SVG size's aspect ratio (not the viewport's: under
  * `preserveAspectRatio="none"` they differ, and the size is what the drawing is stretched to).
  */
-function vectorSize(svgSize: Size, width: number | undefined, height: number | undefined): Size {
+export function vectorSize(svgSize: Size, width: number | undefined, height: number | undefined): Size {
     const ratio = svgSize.width / svgSize.height;
     return {
         width: width ?? (height === undefined ? svgSize.width : height * ratio),
