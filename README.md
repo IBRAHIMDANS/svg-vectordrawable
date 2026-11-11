@@ -85,7 +85,7 @@ convert(svg, {
 - Only `currentColor` and `colorMap` produce references: a `fill="@color/x"` written in the SVG is not
   copied. A malformed reference (`?colorPrimary`, `@color/1x`, `@drawable/x`…) throws a `TypeError`.
 - The resources must exist in the app (`aapt2 link` fails on an unknown `@color/…` or `?attr/…`).
-  `vectorDrawableToSvg` cannot resolve them: it throws `Unsupported Android color` for such a drawable.
+  `vectorDrawableToSvg` draws them in gray unless `colors` maps them (e.g. `{ '?attr/colorPrimary': '#6750A4' }`, Android `#AARRGGBB` literals); `onUnresolvedColor` reports the missing ones.
 
 ### Preview
 
