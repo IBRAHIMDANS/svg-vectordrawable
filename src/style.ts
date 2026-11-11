@@ -10,15 +10,20 @@ import {
 } from './transform.js';
 import type { Warning } from './types.js';
 
-/** Parses an inline `style` attribute into a lowercase-keyed declaration map. */
-export function parseStyle(style: string | undefined): Record<string, string> {
-    if (!style) return {};
-    const out: Record<string, string> = {};
+/** Declarations of an inline `style` attribute, in source order, as `[lowercase name, value]` pairs. */
+export function styleDeclarations(style: string | undefined): [string, string][] {
+    if (!style) return [];
+    const out: [string, string][] = [];
     for (const decl of style.split(';')) {
         const i = decl.indexOf(':');
-        if (i > 0) out[decl.slice(0, i).trim().toLowerCase()] = decl.slice(i + 1).trim();
+        if (i > 0) out.push([decl.slice(0, i).trim().toLowerCase(), decl.slice(i + 1).trim()]);
     }
     return out;
+}
+
+/** Parses an inline `style` attribute into a lowercase-keyed declaration map (the last one wins). */
+export function parseStyle(style: string | undefined): Record<string, string> {
+    return Object.fromEntries(styleDeclarations(style));
 }
 
 /** Reads a property from the inline `style` first, then from the attribute of the same name. */

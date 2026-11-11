@@ -58,6 +58,8 @@ const RESVG_TRANSFORM_ORIGIN_ATTR =
     'resvg ignores the transform-origin attribute; the converter applies it like the reference';
 const RESVG_SYMBOL_SIZE =
     'resvg does not clip a <symbol> without viewBox to its width / height; the converter clips it like the reference';
+const RESVG_CSS_GEOMETRY =
+    'resvg ignores the SVG 2 geometry properties (cx, cy, r, rx, ry, x, y, width, height) set in CSS; the converter applies them like the reference';
 const RESVG_CONTEXT_PAINT =
     'resvg does not resolve context-fill / context-stroke inside <use> content and falls back to the initial paint (black fill, no stroke); the converter resolves them from the <use> like the reference';
 /** `paint-fill-<color>.svg` (CSS) and `paint-fill-attr-<color>.svg` (attribute) for each color. */
@@ -98,6 +100,11 @@ const KNOWN_ARTEFACTS = new Map([
     ['painting/reftests/paint-context-003.svg', RESVG_CONTEXT_PAINT],
     // context-fill is a gradient from the <use>: the reference bakes it into each shape's bounding box.
     ['painting/reftests/paint-context-007.svg', RESVG_CONTEXT_PAINT],
+    ...['circle-001', 'circle-002', 'circle-003', 'rect-001', 'rect-002', 'rect-003'].map((n) => [
+        `geometry/reftests/${n}.svg`,
+        RESVG_CSS_GEOMETRY,
+    ]),
+    ['shapes/rect-rx-set-by-css.svg', RESVG_CSS_GEOMETRY],
 ]);
 
 /**
