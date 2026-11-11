@@ -54,6 +54,7 @@ describe('WARNING_CATEGORIES', () => {
             'gradient-bbox-unavailable',
             'gradient-under-skew',
             'group-skew',
+            'mask-approximated',
             'opacity-approximated',
         ]);
         expect(by('info')).toEqual(['large-vector', 'long-path-data', 'min-sdk-exceeded']);
