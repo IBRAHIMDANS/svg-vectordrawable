@@ -1,0 +1,248 @@
+<!doctype html>
+<!-- Template of dist/ui.html: scripts/build.ts replaces the two inline:* comments with the
+     browser-lite bundle and the UI build. Everything is inline: the plugin loads nothing. -->
+<html lang="en">
+    <head>
+        <meta charset="utf-8" />
+        <style>
+            :root {
+                --bg: var(--figma-color-bg, #ffffff);
+                --bg-alt: var(--figma-color-bg-secondary, #f5f5f5);
+                --text: var(--figma-color-text, #1e1e1e);
+                --text-muted: var(--figma-color-text-secondary, #666666);
+                --border: var(--figma-color-border, #e6e6e6);
+                --accent: var(--figma-color-bg-brand, #0d99ff);
+                --on-accent: var(--figma-color-text-onbrand, #ffffff);
+                --ok: var(--figma-color-text-success, #14ae5c);
+                --warn: var(--figma-color-text-warning, #b86200);
+                --error: var(--figma-color-text-danger, #e03e1a);
+                color-scheme: light dark;
+            }
+            * {
+                box-sizing: border-box;
+            }
+            body {
+                margin: 0;
+                font:
+                    12px/1.4 Inter,
+                    system-ui,
+                    sans-serif;
+                color: var(--text);
+                background: var(--bg);
+                display: flex;
+                flex-direction: column;
+                height: 100vh;
+            }
+            header {
+                display: flex;
+                gap: 8px;
+                align-items: center;
+                padding: 8px 12px;
+                border-bottom: 1px solid var(--border);
+            }
+            #status {
+                flex: 1;
+                margin: 0;
+            }
+            [data-kind='ok'] {
+                --kind: var(--ok);
+            }
+            [data-kind='warn'] {
+                --kind: var(--warn);
+            }
+            [data-kind='error'] {
+                --kind: var(--error);
+            }
+            #status[data-kind],
+            #layer-summary[data-kind] {
+                color: var(--kind, var(--text));
+            }
+            button {
+                font: inherit;
+                color: var(--text);
+                background: var(--bg-alt);
+                border: 1px solid var(--border);
+                border-radius: 4px;
+                padding: 4px 10px;
+                cursor: pointer;
+            }
+            button.primary {
+                background: var(--accent);
+                color: var(--on-accent);
+                border-color: transparent;
+            }
+            button:disabled {
+                opacity: 0.5;
+                cursor: default;
+            }
+            main {
+                flex: 1;
+                display: flex;
+                min-height: 0;
+            }
+            #layers {
+                list-style: none;
+                margin: 0;
+                padding: 4px;
+                width: 220px;
+                overflow: auto;
+                border-right: 1px solid var(--border);
+            }
+            #layers button.layer {
+                display: flex;
+                flex-direction: column;
+                align-items: flex-start;
+                width: 100%;
+                text-align: left;
+                margin-bottom: 4px;
+                border-left: 3px solid var(--kind, var(--border));
+            }
+            #layers button.layer[aria-current='true'] {
+                outline: 2px solid var(--accent);
+            }
+            .layer-name {
+                font-weight: 600;
+                overflow-wrap: anywhere;
+            }
+            .layer-summary {
+                color: var(--text-muted);
+            }
+            #detail {
+                flex: 1;
+                min-width: 0;
+                overflow: auto;
+                padding: 8px 12px;
+                display: flex;
+                flex-direction: column;
+                gap: 8px;
+            }
+            #detail[hidden] {
+                display: none;
+            }
+            h2 {
+                font-size: 13px;
+                margin: 0;
+                overflow-wrap: anywhere;
+            }
+            #layer-summary {
+                margin: 0;
+            }
+            .previews {
+                display: grid;
+                grid-template-columns: 1fr 1fr;
+                gap: 8px;
+            }
+            figure {
+                margin: 0;
+            }
+            figcaption {
+                color: var(--text-muted);
+                margin-bottom: 4px;
+            }
+            .preview {
+                height: 140px;
+                display: flex;
+                align-items: center;
+                justify-content: center;
+                border: 1px solid var(--border);
+                border-radius: 4px;
+                /* checkerboard: shows transparency */
+                background: repeating-conic-gradient(var(--bg-alt) 0% 25%, var(--bg) 0% 50%) 50% / 16px 16px;
+            }
+            .preview img {
+                max-width: 100%;
+                max-height: 100%;
+            }
+            .preview-note {
+                color: var(--text-muted);
+                padding: 8px;
+                text-align: center;
+            }
+            .actions {
+                display: flex;
+                gap: 8px;
+            }
+            #xml {
+                width: 100%;
+                min-height: 140px;
+                resize: vertical;
+                font:
+                    11px/1.4 ui-monospace,
+                    SFMono-Regular,
+                    Menlo,
+                    monospace;
+                color: var(--text);
+                background: var(--bg-alt);
+                border: 1px solid var(--border);
+                border-radius: 4px;
+                padding: 6px;
+            }
+            #warnings {
+                margin: 0;
+                padding-left: 16px;
+            }
+            #warnings li {
+                margin-bottom: 4px;
+            }
+            #warnings li.empty {
+                list-style: none;
+                margin-left: -16px;
+                color: var(--text-muted);
+            }
+            .badge {
+                border-radius: 8px;
+                padding: 0 6px;
+                background: var(--bg-alt);
+                border: 1px solid var(--border);
+            }
+            .badge[data-category='lossy'] {
+                color: var(--error);
+            }
+            .badge[data-category='approximation'] {
+                color: var(--warn);
+            }
+            h3 {
+                font-size: 12px;
+                margin: 0;
+            }
+        </style>
+    </head>
+    <body>
+        <header>
+            <p id="status" role="status">Loading…</p>
+            <button id="refresh" type="button" title="Export the current selection again">Refresh</button>
+            <button id="download-all" class="primary" type="button" disabled>Download</button>
+        </header>
+        <main>
+            <ul id="layers" aria-label="Selected layers"></ul>
+            <section id="detail" hidden>
+                <h2 id="layer-title"></h2>
+                <p id="layer-summary"></p>
+                <div class="previews">
+                    <figure>
+                        <figcaption>Figma export (SVG)</figcaption>
+                        <div id="source-preview" class="preview"></div>
+                    </figure>
+                    <figure>
+                        <figcaption>VectorDrawable (rendered back)</figcaption>
+                        <div id="vd-preview" class="preview"></div>
+                    </figure>
+                </div>
+                <h3>Warnings</h3>
+                <ul id="warnings"></ul>
+                <h3>XML</h3>
+                <textarea id="xml" readonly spellcheck="false" aria-label="VectorDrawable XML"></textarea>
+                <div class="actions">
+                    <button id="copy" type="button" disabled>Copy XML</button>
+                    <button id="download-layer" type="button" disabled>Download .xml</button>
+                </div>
+            </section>
+        </main>
+        <script id="svgvd-bundle">
+            /* inline:svgvd */
+        </script>
+        <script id="ui-script">
+            /* inline:ui */
+        </script>
+    </body>
+</html>
