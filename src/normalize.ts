@@ -93,6 +93,11 @@ const MAY_HAVE_NEGATIVE_SIZE = /\s(?:width|height|r|rx|ry)\s*=\s*["']\s*-/;
  */
 const MAY_HAVE_ZERO_SIZE =
     /<(?:rect\b[^>]*?\s(?:width|height)|circle\b[^>]*?\sr|ellipse\b[^>]*?\sr[xy])\s*=\s*["']\s*[-+]?(?:0+\.?0*|\.0+)(?:e[-+]?\d+)?(?:px)?\s*["']/i;
+/**
+ * A missing `r` (circle) or `rx` / `ry` (ellipse) is a zero size too, but `convertShapeToPath`
+ * reads it as 0 and emits a bare `M cx cy` path, drawn without any warning.
+ */
+const MAY_LACK_RADIUS = /<(?:circle\b(?![^>]*\sr\s*=)|ellipse\b(?![^>]*\srx\s*=)|ellipse\b(?![^>]*\sry\s*=))/i;
 const ZERO_SIZE_HIDDEN_ELEMS = {
     rectWidth0: false,
     rectHeight0: false,
@@ -100,6 +105,23 @@ const ZERO_SIZE_HIDDEN_ELEMS = {
     ellipseRX0: false,
     ellipseRY0: false,
 };
+
+/**
+ * A `<path>` without (or with an empty) `d`, a `<polyline>` / `<polygon>` without `points` or with
+ * fewer than two points draws nothing either: `optimize: false` reports it with `empty-path`, while
+ * svgo deletes it silently (`removeHiddenElems` for a missing `d` / `points` or an empty `d`,
+ * `convertShapeToPath` for fewer than four coordinates). Keep them so both modes warn alike.
+ */
+const MAY_HAVE_EMPTY_GEOMETRY =
+    /<(?:path\b(?![^>]*\sd\s*=)|path\b[^>]*?\sd\s*=\s*(["'])\1|poly(?:line|gon)\b(?![^>]*\spoints\s*=)|poly(?:line|gon)\b[^>]*?\spoints\s*=\s*(["'])\s*(?:[^\s,"']+[\s,]*){0,3}\2)/i;
+const EMPTY_GEOMETRY_HIDDEN_ELEMS = { pathEmptyD: false, polylineEmptyPoints: false, polygonEmptyPoints: false };
+
+/**
+ * svgo's `convertColors` rounds each `rgb()` percentage to an integer channel before the converter
+ * sees it (`rgb(20% 50% 50%)` → `#337f7f` instead of `#338080`), whereas the converter keeps the
+ * fractional channel until the final rounding. Keep such colors as authored.
+ */
+const MAY_HAVE_RGB_PERCENT = /rgb\([^)]*%/i;
 
 /**
  * svgo follows SVG 1.1, where `<symbol>` has no `x` / `y` / `width` / `height`:
@@ -152,6 +174,15 @@ function defaultConfigFor(svg: string, floatPrecision: number, fillBlackForUnfil
         overrides.convertShapeToPath = false;
         overrides.removeHiddenElems = ZERO_SIZE_HIDDEN_ELEMS;
     }
+    if (MAY_LACK_RADIUS.test(svg)) overrides.convertShapeToPath = false;
+    if (MAY_HAVE_EMPTY_GEOMETRY.test(svg)) {
+        overrides.convertShapeToPath = false;
+        overrides.removeHiddenElems = {
+            ...(overrides.removeHiddenElems as object | undefined),
+            ...EMPTY_GEOMETRY_HIDDEN_ELEMS,
+        };
+    }
+    if (MAY_HAVE_RGB_PERCENT.test(svg)) overrides.convertColors = { rgb2hex: false };
     if (MAY_HAVE_SYMBOL_GEOMETRY.test(svg)) {
         overrides.removeUnknownsAndDefaults = {
             ...(overrides.removeUnknownsAndDefaults as object | undefined),
