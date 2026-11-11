@@ -11,8 +11,11 @@ export const WARNING_CODES = [
     /** No longer emitted (gradient strokes are converted); kept for compatibility. */
     'unsupported-stroke-gradient',
     /**
-     * A paint VectorDrawable cannot express: a `<pattern>`, or a translucent gradient stop mapped to
-     * an Android reference by `currentColor` / `colorMap` (an `<item>` has no alpha; literal kept).
+     * A paint VectorDrawable cannot express or the converter cannot read: a `<pattern>`; a `fill` /
+     * `stroke` value that is not a parseable color (initial black fill, or dropped); a `stop-color`
+     * that is not one (black used); `context-fill` / `context-stroke` outside a `<use>`, or taken
+     * from a gradient context paint (dropped); a translucent gradient stop mapped to an Android
+     * reference by `currentColor` / `colorMap` (an `<item>` has no alpha; literal kept).
      */
     'unsupported-paint',
     /** A clipPath that cannot be (fully) converted. */
@@ -30,8 +33,11 @@ export const WARNING_CODES = [
     /** `opacity` folded onto overlapping children or fill+stroke; overlaps render darker. */
     'opacity-approximated',
     /**
-     * A gradient VectorDrawable can only approximate: radial focal point, or an elliptical radial on a
-     * path that also has a solid stroke (otherwise elliptical radials are emitted exactly).
+     * A gradient VectorDrawable can only approximate: radial focal point; an elliptical radial on a
+     * path that also has a solid stroke (otherwise elliptical radials are emitted exactly); a
+     * `color-interpolation="linearRGB"` gradient whose intermediate stops would exceed 64 items or
+     * that has a stop mapped to an Android reference (otherwise linearRGB is rendered with
+     * intermediate stops); a linear gradient with a degenerate `gradientTransform`.
      */
     'gradient-approximated',
     /** CSS left in a `<style>` element that could not be applied to elements; ignored. */
@@ -129,7 +135,9 @@ export interface ConvertOptions {
      * `android:fillColor` / `android:strokeColor` so the icon follows the theme: `?attr/name`,
      * `?android:attr/name`, `@color/name`, `@android:color/name` (any `package:` prefix; the
      * `?name` shorthand is not accepted). A reference carries no alpha: `fill-opacity` / `opacity`
-     * go to `fillAlpha` / `strokeAlpha` as usual. A malformed value throws a `TypeError`.
+     * go to `fillAlpha` / `strokeAlpha` as usual. A malformed value throws a `TypeError`, and so
+     * does a fully transparent color: 8 hex digits are CSS `#RRGGBBAA`, so the Android black
+     * `#FF000000` reads as red at alpha 0 (write `#000000`); a non-zero alpha stays CSS.
      * @default '#000000'
      */
     currentColor?: string;
@@ -139,8 +147,9 @@ export interface ConvertOptions {
      * `#AARRGGBB` (`#f00`, `red` and `rgb(255,0,0)` are one key). An exact key wins; otherwise an
      * opaque key also matches its color at any alpha, that alpha going to `fillAlpha` / `strokeAlpha`.
      * Gradient stops get the reference only when opaque (an `<item>` has no alpha): a translucent
-     * one keeps its literal color, with an `unsupported-paint` warning. A malformed key or value, or
-     * two keys for one color with different references, throw a `TypeError`.
+     * one keeps its literal color, with an `unsupported-paint` warning. A malformed key or value, a
+     * fully transparent key (e.g. the Android `#FF000000`, read as CSS `#RRGGBBAA`: red at alpha 0),
+     * or two keys for one color with different references, throw a `TypeError`.
      */
     colorMap?: Record<string, string>;
     /**

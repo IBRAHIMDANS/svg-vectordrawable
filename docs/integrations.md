@@ -122,12 +122,13 @@ export async function* generateVectorDrawable(imageInput, fileName, context) {
 Choosing the rules: `strict: true` alone rejects every approximation. Codes worth reviewing for app
 icons:
 
-| Code                    | Effect if downgraded to `'warn'`                                                                                                                                               |
-| ----------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `opacity-approximated`  | Group `opacity` over overlapping children: the overlaps render darker than in the SVG                                                                                          |
-| `gradient-approximated` | Radial focal point (`fx`/`fy`) ignored, or elliptical radial on a path that is also stroked                                                                                    |
-| `group-skew`            | The skew is baked into the path geometry; stroke widths get one uniform scale factor (√\|det\|), so strokes under a strong skew keep a constant width instead of being sheared |
-| `empty-path`            | None visible: a shape without geometry is skipped                                                                                                                              |
+| Code                    | Effect if downgraded to `'warn'`                                                                                                                                                         |
+| ----------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `opacity-approximated`  | Group `opacity` over overlapping children: the overlaps render darker than in the SVG                                                                                                    |
+| `gradient-approximated` | Radial focal point (`fx`/`fy`) ignored, elliptical radial on a path that is also stroked, or `linearRGB` mid-tones interpolated in sRGB (over 64 stops, or a stop mapped to a reference) |
+| `mask-approximated`     | A `<mask>` with stroked content clips without its strokes: the masked area differs along the stroked outlines                                                                            |
+| `group-skew`            | The skew is baked into the path geometry; stroke widths get one uniform scale factor (√\|det\|), so strokes under a strong skew keep a constant width instead of being sheared           |
+| `empty-path`            | None visible: a shape without geometry is skipped                                                                                                                                        |
 
 Keep `unsupported-element`, `unsupported-attribute`, `unsupported-paint`, `unsupported-clip-path` and
 `unsupported-style` as errors: they mean something is missing from the drawable.

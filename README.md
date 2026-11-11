@@ -84,6 +84,9 @@ convert(svg, {
   reference) and is reported as `unsupported-paint`.
 - Only `currentColor` and `colorMap` produce references: a `fill="@color/x"` written in the SVG is not
   copied. A malformed reference (`?colorPrimary`, `@color/1x`, `@drawable/x`…) throws a `TypeError`.
+- A fully transparent `currentColor` or `colorMap` key (`transparent`, `#0000`, alpha rounding to 0)
+  throws a `TypeError` too. Eight hex digits are CSS `#RRGGBBAA`, so the Android black `#FF000000` is
+  red at alpha 0 here: write `#000000`. A non-zero alpha stays CSS (`#FF1A73E8` is pink at alpha 0.91).
 - The resources must exist in the app (`aapt2 link` fails on an unknown `@color/…` or `?attr/…`).
   `vectorDrawableToSvg` draws them in gray unless `colors` maps them (e.g. `{ '?attr/colorPrimary': '#6750A4' }`, Android `#AARRGGBB` literals); `onUnresolvedColor` reports the missing ones.
 
@@ -119,26 +122,27 @@ try {
 }
 ```
 
-| Code                           | Meaning                                                                                                 |
-| ------------------------------ | ------------------------------------------------------------------------------------------------------- |
-| `unsupported-element`          | `<text>`, `<image>`, `<foreignObject>`, `<switch>` — skipped                                            |
-| `unsupported-attribute`        | non-clip `mask`, `filter`, `marker*`, `vector-effect`, `paint-order`, `arcs` joins — ignored            |
-| `unsupported-stroke-dasharray` | dash pattern that cannot be resolved (`em`/`ex` units) — drawn solid                                    |
-| `unsupported-stroke-gradient`  | no longer emitted (gradient strokes are supported); kept for compatibility                              |
-| `unsupported-paint`            | `<pattern>` paint (fallback color or black); translucent stop mapped to a reference                     |
-| `unsupported-style`            | CSS left in a `<style>` that could not be applied to elements — ignored                                 |
-| `unsupported-clip-path`        | `objectBoundingBox` clip, evenodd clip with crossing contours, unconvertible content                    |
-| `gradient-approximated`        | radial focal point; elliptical radial on a path that also has a solid stroke                            |
-| `opacity-approximated`         | opacity folded onto overlapping children / fill+stroke — overlaps look darker                           |
-| `missing-gradient`             | `url(#id)` paint, no fallback: pointing at nothing (black fill) or at an invalid gradient (not painted) |
-| `missing-clip-path`            | `clip-path` pointing at nothing — ignored                                                               |
-| `group-skew`                   | skewed `<g>` baked into path geometry                                                                   |
-| `gradient-under-skew`          | gradient placement under a baked skew is approximate                                                    |
-| `gradient-bbox-unavailable`    | `objectBoundingBox` gradient without a measurable path box                                              |
-| `empty-path`                   | shape without geometry — skipped                                                                        |
-| `min-sdk-exceeded` (info)      | the output needs a higher API level than the `minSdk` option                                            |
-| `large-vector` (info)          | `android:width`/`height` above 200 dp (Android lint `VectorRaster`)                                     |
-| `long-path-data` (info, off)   | a `pathData` longer than 800 characters (lint `VectorPath`); enable it with `rules`                     |
+| Code                           | Meaning                                                                                                                                                                                                     |
+| ------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `unsupported-element`          | `<text>`, `<image>`, `<foreignObject>`, `<switch>` — skipped                                                                                                                                                |
+| `unsupported-attribute`        | non-clip `mask`, `filter`, `marker*`, `vector-effect`, `paint-order`, `arcs` joins — ignored                                                                                                                |
+| `unsupported-stroke-dasharray` | dash pattern that cannot be resolved (`em`/`ex` units) — drawn solid                                                                                                                                        |
+| `unsupported-stroke-gradient`  | no longer emitted (gradient strokes are supported); kept for compatibility                                                                                                                                  |
+| `unsupported-paint`            | `<pattern>` paint (fallback color or black); unreadable `fill` / `stroke` / `stop-color`; context paint outside a `<use>` or from a gradient; translucent stop mapped to a reference                        |
+| `unsupported-style`            | CSS left in a `<style>` that could not be applied to elements — ignored                                                                                                                                     |
+| `unsupported-clip-path`        | `objectBoundingBox` clip, evenodd clip with crossing contours, unconvertible content, CSS shape it cannot lay out (`inset(… round …)`, `path()`, painted stroke-box…)                                       |
+| `gradient-approximated`        | radial focal point; elliptical radial on a path that also has a solid stroke; `linearRGB` needing over 64 stops or with a stop mapped to a reference; linear gradient with a degenerate `gradientTransform` |
+| `opacity-approximated`         | opacity folded onto overlapping children / fill+stroke — overlaps look darker                                                                                                                               |
+| `mask-approximated`            | `<mask>` with stroked content converted to a clip-path without the strokes                                                                                                                                  |
+| `missing-gradient`             | `url(#id)` paint, no fallback: pointing at nothing (black fill) or at an invalid gradient (not painted)                                                                                                     |
+| `missing-clip-path`            | `clip-path` pointing at nothing — ignored                                                                                                                                                                   |
+| `group-skew`                   | skewed `<g>` baked into path geometry                                                                                                                                                                       |
+| `gradient-under-skew`          | gradient placement under a baked skew is approximate                                                                                                                                                        |
+| `gradient-bbox-unavailable`    | `objectBoundingBox` gradient without a measurable path box                                                                                                                                                  |
+| `empty-path`                   | shape without geometry — skipped                                                                                                                                                                            |
+| `min-sdk-exceeded` (info)      | the output needs a higher API level than the `minSdk` option                                                                                                                                                |
+| `large-vector` (info)          | `android:width`/`height` above 200 dp (Android lint `VectorRaster`)                                                                                                                                         |
+| `long-path-data` (info, off)   | a `pathData` longer than 800 characters (lint `VectorPath`); enable it with `rules`                                                                                                                         |
 
 Node file helpers:
 
@@ -269,7 +273,8 @@ A VectorDrawable simply cannot represent some SVG features. These are **warned**
 - `<filter>`, `<pattern>`, `<image>`, `<text>` — not representable (the CLI can render such files to
   PNG: [`--fallback-png`](#png-fallback)). A `<mask>` is converted to a
   `<clip-path>` when it is clip-equivalent (opaque white content, or opaque content with `mask-type: alpha`);
-  any other mask (gray, translucent, stroked, gradient…) is warned with the reason.
+  stroked content is kept without its strokes (`mask-approximated`: a `<clip-path>` has no stroke), and
+  any other mask (gray, translucent, gradient, strokes only…) is warned with the reason.
 - `stroke-dasharray` in font-relative units (`em`, `ex`) — the stroke is drawn solid. Other dash
   patterns are baked into the path geometry (VectorDrawable has no native dashes).
 - Radial gradients are circles in VectorDrawable. Elliptical radials (non-uniform `gradientTransform`,
@@ -282,6 +287,21 @@ A VectorDrawable simply cannot represent some SVG features. These are **warned**
 - `filter`, `marker-*`, non-clip `mask` references and `clipPathUnits="objectBoundingBox"` — warned, not applied.
 - Group `opacity` has no VectorDrawable equivalent: it is folded onto each child, which is exact only
   when the children do not overlap (`opacity-approximated` otherwise).
+
+Limits of the converter itself, some of them **not warned**:
+
+- A `transform` on the root `<svg>` is applied, but the content stays clipped to the untransformed
+  viewport (a browser moves the whole box).
+- A `<use>` of a `<symbol>` whose `width` / `height` are percentages or absent is neither clipped nor
+  scaled to the symbol's `viewBox` (no warning).
+- A custom `svgoConfig` is used as is: the raw `preset-default` moves or bakes transforms without reading
+  a CSS `transform` / `transform-origin`, so such groups can render wrong (no warning). The default config
+  and `optimize: false` handle them.
+- CLI without an input argument: stdin is read whenever it is not a TTY, so a pipe that is never closed
+  (`docker run -i`) waits instead of printing the help.
+- `--fallback-png` writes the PNGs but does not delete an XML of the same name left by a previous run.
+- `clip-path: polygon(evenodd, …)` whose contours touch (a keyhole) stays nonzero, with `unsupported-clip-path`.
+- Unitless lengths are accepted in CSS `clip-path` shapes, where a browser drops the declaration (no warning).
 
 ## Robustness
 
