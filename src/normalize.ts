@@ -97,7 +97,7 @@ const SVGO_MAX_FLOAT_PRECISION = 19;
 /** svgo keeps scale / matrix factors 2 decimals finer than coordinates (5 vs 3 by default). */
 const TRANSFORM_EXTRA_PRECISION = 2;
 
-function defaultConfigFor(svg: string, floatPrecision: number): Config {
+function defaultConfigFor(svg: string, floatPrecision: number, fillBlackForUnfilled: boolean): Config {
     const overrides: Record<string, unknown> = { ...DEFAULT_OVERRIDES };
     if (exceedsDrawableCount(svg, MERGE_PATHS_MAX_ELEMENTS)) overrides.mergePaths = false;
     if (exceedsPathDataLength(svg, CONVERT_PATH_DATA_MAX_LENGTH)) overrides.convertPathData = false;
@@ -114,6 +114,16 @@ function defaultConfigFor(svg: string, floatPrecision: number): Config {
         }
     }
     if (MAY_HAVE_NEGATIVE_SIZE.test(svg)) overrides.convertShapeToPath = false;
+    if (!fillBlackForUnfilled) {
+        // `removeUnknownsAndDefaults` drops `fill="#000"` (black, #000000, rgb(0,0,0) once
+        // `convertColors` has run) as the SVG default; without `fillBlackForUnfilled` the converter
+        // would then paint nothing. svgo cannot keep a single default, so keep them all: the other
+        // ones match the converter's own defaults.
+        overrides.removeUnknownsAndDefaults = {
+            ...(overrides.removeUnknownsAndDefaults as object | undefined),
+            defaultAttrs: false,
+        };
+    }
     if (MAY_HAVE_CSS_TRANSFORM.test(svg)) {
         overrides.moveElemsAttrsToGroup = false;
         overrides.moveGroupAttrsToElems = false;
@@ -140,13 +150,15 @@ function defaultConfigFor(svg: string, floatPrecision: number): Config {
 /**
  * Parses (and optionally normalizes) an SVG string into svgo's AST, reusing svgo as the XML
  * parser — no third-party parser needed. The capture plugin grabs the tree in the same pass.
- * `floatPrecision` only tunes the default svgo config; a caller-supplied `svgoConfig` is used as-is.
+ * `floatPrecision` and `fillBlackForUnfilled` only tune the default svgo config; a caller-supplied
+ * `svgoConfig` is used as-is.
  */
 export function parseSvg(
     svg: string,
     optimizeFlag: boolean,
     svgoConfig?: Config,
     floatPrecision = SVGO_FLOAT_PRECISION,
+    fillBlackForUnfilled = true,
 ): XastRoot {
     let captured: XastRoot | null = null;
     const capture = {
@@ -157,7 +169,9 @@ export function parseSvg(
         },
     };
 
-    const base = optimizeFlag ? (svgoConfig ?? defaultConfigFor(svg, floatPrecision)) : { plugins: [] };
+    const base = optimizeFlag
+        ? (svgoConfig ?? defaultConfigFor(svg, floatPrecision, fillBlackForUnfilled))
+        : { plugins: [] };
     const plugins = [...(base.plugins ?? []), capture] as Config['plugins'];
 
     try {
