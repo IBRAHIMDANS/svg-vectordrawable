@@ -86,7 +86,7 @@ function linearEnd(m: Matrix, vx: number, vy: number, sx: number, sy: number): [
 
 /**
  * Parses a coordinate: a length in user units (absolute units resolved, `1in` → 96, in
- * objectBoundingBox units too, per SVG) or a percentage of `ref`. Font-relative or malformed
+ * objectBoundingBox units too, per SVG) or a percentage of `ref`. `ex` / `ch` or malformed
  * values keep their leading number, as before; nothing parseable yields `fallback`.
  */
 function coord(value: string | undefined, fallback: number, ref: number): number {

@@ -75,7 +75,7 @@ describe('parseDasharray', () => {
     });
 
     it('is null (not resolvable) for font-relative units', () => {
-        expect(parseDasharray('1em 2', 10)).toBeNull();
+        expect(parseDasharray('1ex 2', 10)).toBeNull();
     });
 });
 

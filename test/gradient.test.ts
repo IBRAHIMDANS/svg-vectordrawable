@@ -400,7 +400,7 @@ describe('gradient coordinates with absolute units', () => {
     });
 
     it('keeps percentages, plain numbers and font-relative units as before', () => {
-        const g = raw('linear', { x1: '25%', y1: '0.5', x2: '2em', y2: '' }, undefined, true);
+        const g = raw('linear', { x1: '25%', y1: '0.5', x2: '2ex', y2: '' }, undefined, true);
         const { coords } = resolve(g, { x: 0, y: 0, width: 8, height: 8 });
         expect(coords).toEqual({ startX: 2, startY: 4, endX: 16, endY: 0 });
     });
