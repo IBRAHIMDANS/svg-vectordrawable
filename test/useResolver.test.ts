@@ -2,6 +2,11 @@ import { describe, expect, it } from 'vitest';
 import { convert } from '../src/index.js';
 import { MAX_EXPANDED_NODES, resolveUses } from '../src/useResolver.js';
 import type { XastElement } from '../src/ast.js';
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { vdToSvg } from './visual/vdToSvg.js';
+import { compareSvgs, DEFAULT_MAX_MISMATCH } from './visual/compare.js';
 
 const el = (name: string, attributes: Record<string, string> = {}, children: XastElement[] = []): XastElement => ({
     type: 'element',
@@ -288,8 +293,35 @@ describe('resolveUses — <symbol viewBox> viewport', () => {
         expect(wrapper.children).toEqual([]);
     });
 
-    it('leaves a symbol without viewBox exactly as before, even with a use size', () => {
-        const wrapper = resolveSymbol({}, { x: '2', y: '3', width: '10', height: '10' });
+    it('clips a symbol without viewBox to the use viewport, without scaling it', () => {
+        const wrapper = resolveSymbol({}, { x: '2', y: '3', width: '10', height: '6' });
+        expect(wrapper.attributes).toEqual({ transform: 'translate(2 3)' });
+        const { clipGroup, clipPath, content } = parts(wrapper);
+        expect(clipGroup).toBeDefined();
+        expect(onlyChild(clipPath as XastElement).attributes).toEqual({ x: '0', y: '0', width: '10', height: '6' });
+        // No viewBox: the symbol content keeps its own coordinates (no scale group).
+        expect(content.attributes).toEqual({ id: 's' });
+        expect(onlyChild(content).name).toBe('path');
+    });
+
+    it('clips a symbol without viewBox to its own width/height when the use has none', () => {
+        const { clipPath } = parts(resolveSymbol({ width: '4', height: '5' }, {}));
+        expect(onlyChild(clipPath as XastElement).attributes).toEqual({ x: '0', y: '0', width: '4', height: '5' });
+    });
+
+    it('does not clip a symbol without viewBox whose overflow is visible', () => {
+        const wrapper = resolveSymbol({ overflow: 'visible' }, { width: '10', height: '10' });
+        const symbolAsGroup = onlyChild(wrapper);
+        expect(symbolAsGroup.attributes?.['clip-path']).toBeUndefined();
+        expect(symbolAsGroup.attributes).toEqual({ id: 's' });
+    });
+
+    it('renders nothing for a symbol without viewBox and a zero-sized use', () => {
+        expect(resolveSymbol({}, { width: '10', height: '0' }).children).toEqual([]);
+    });
+
+    it('leaves a symbol without viewBox nor absolute size unclipped', () => {
+        const wrapper = resolveSymbol({}, { x: '2', y: '3', width: '50%' });
         expect(wrapper.attributes).toEqual({ transform: 'translate(2 3)' });
         const symbolAsGroup = onlyChild(wrapper);
         expect(symbolAsGroup.attributes).toEqual({ id: 's' });
@@ -308,6 +340,69 @@ describe('resolveUses — <symbol viewBox> viewport', () => {
             expect(xml).toContain('android:scaleY="10"');
             // The viewport clip (10×10 at the use origin) must reach the output.
             expect(xml).toContain('<clip-path android:pathData="M0,0h10v10h-10z" />');
+        }
+    });
+});
+
+describe('resolveUses — <svg> target', () => {
+    /** Resolves a single `<use>` of a single `<svg>` and returns the cloned `<svg>`. */
+    const resolveSvg = (svgAttrs: Record<string, string>, useAttrs: Record<string, string>): XastElement => {
+        const tree = root([
+            el('svg', {}, [
+                el('defs', {}, [el('svg', { id: 'v', ...svgAttrs }, [el('path', { d: 'M0 0h1v1h-1z' })])]),
+                el('use', { href: '#v', ...useAttrs }),
+            ]),
+        ]);
+        resolveUses(tree);
+        return onlyChild(onlyChild(tree).children?.[1] as XastElement);
+    };
+
+    it('lets the use width/height override the svg ones', () => {
+        const svg = resolveSvg({ width: '200', height: '200', viewBox: '0 0 1 1' }, { width: '100', height: '50' });
+        expect(svg.name).toBe('svg');
+        expect(svg.attributes).toEqual({ id: 'v', width: '100', height: '50', viewBox: '0 0 1 1' });
+    });
+
+    it('overrides each dimension independently', () => {
+        expect(resolveSvg({ width: '200', height: '200' }, { height: '30%' }).attributes).toEqual({
+            id: 'v',
+            width: '200',
+            height: '30%',
+        });
+    });
+
+    it('keeps the svg dimensions when the use has none or says auto', () => {
+        const attrs = { width: '200', height: '150' };
+        expect(resolveSvg(attrs, {}).attributes).toEqual({ id: 'v', ...attrs });
+        expect(resolveSvg(attrs, { width: 'auto', height: ' auto ' }).attributes).toEqual({ id: 'v', ...attrs });
+    });
+
+    it('leaves the original svg in <defs> untouched', () => {
+        const target = el('svg', { id: 'v', width: '200', height: '200' });
+        const tree = root([el('svg', {}, [el('defs', {}, [target]), el('use', { href: '#v', width: '1' })])]);
+        resolveUses(tree);
+        expect(target.attributes).toEqual({ id: 'v', width: '200', height: '200' });
+    });
+});
+
+describe('resolveUses — wpt reproductions render like their source', () => {
+    const reproDir = join(fileURLToPath(new URL('.', import.meta.url)), 'wpt-repro');
+
+    it.each(['wpt-use-symbol-size.svg', 'wpt-use-svg-size.svg'])('%s', (file) => {
+        const svg = readFileSync(join(reproDir, file), 'utf8');
+        // Expected rendering of both reftests: a green 100x100 square.
+        const reference =
+            '<svg xmlns="http://www.w3.org/2000/svg" width="200" height="200">' +
+            '<rect width="100" height="100" fill="green"/></svg>';
+        for (const optimize of [false, true]) {
+            const { xml, warnings } = convert(svg, { optimize, strict: true });
+            expect(warnings).toEqual([]);
+            for (const expected of [svg, reference]) {
+                const result = compareSvgs(expected, vdToSvg(xml));
+                expect(result.sizeMismatch).toBeNull();
+                expect(result.inked).toBeGreaterThan(0);
+                expect(result.mismatch).toBeLessThan(DEFAULT_MAX_MISMATCH);
+            }
         }
     });
 });
