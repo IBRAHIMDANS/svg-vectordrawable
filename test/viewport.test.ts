@@ -4,7 +4,9 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { convert, ConversionError } from '../src/index.js';
 import { applyPoint } from '../src/transform.js';
-import { rootLayout, rootTransform } from '../src/viewport.js';
+import type { XastElement } from '../src/ast.js';
+import { parseSvg } from '../src/normalize.js';
+import { boxOrigin, layoutWarnings, rootLayout, rootTransform } from '../src/viewport.js';
 import { vdToSvg } from './visual/vdToSvg.js';
 import { compareSvgs, DEFAULT_MAX_MISMATCH } from './visual/compare.js';
 
@@ -275,5 +277,177 @@ describe('transform on the root <svg>', () => {
             }),
         );
         expect(error.warning.code).toBe('unsupported-style');
+    });
+});
+
+/** The root `<svg>` element of `source`, as the converter sees it. */
+const rootSvg = (source: string, optimize = true): XastElement =>
+    (parseSvg(source, optimize, undefined, 3).children ?? []).find(
+        (c): c is XastElement => c.type === 'element' && c.name === 'svg',
+    )!;
+
+describe('viewport-relative units on an <svg>', () => {
+    it('wpt nested-svg-sizing-viewport-units: style="width:5vw" on a nested <svg> is reported', () => {
+        const source = svg(
+            'width="100" height="100"',
+            '<svg style="width:5vw;height:5vh;"><circle cx="50" cy="50" r="40" fill="green"/></svg>',
+        );
+        for (const optimize of [true, false]) {
+            const warnings = layoutWarnings(rootSvg(source, optimize));
+            expect(warnings.map((w) => [w.code, w.node])).toEqual([
+                ['unsupported-style', 'svg'],
+                ['unsupported-style', 'svg'],
+            ]);
+            expect(warnings[0]!.message).toContain('width: 5vw');
+            expect(warnings[0]!.message).toContain('browser window');
+        }
+    });
+
+    it('the width="5vw" attribute on a nested <svg> is reported (read as 100%)', () => {
+        const source = svg(
+            'width="100" height="100"',
+            '<svg width="5vw" x="2vmin"><rect width="10" height="10"/></svg>',
+        );
+        for (const optimize of [true, false]) {
+            const warnings = layoutWarnings(rootSvg(source, optimize));
+            expect(warnings.map((w) => w.code)).toEqual(['unsupported-attribute', 'unsupported-attribute']);
+            expect(warnings.map((w) => w.message)).toEqual([
+                expect.stringMatching(/^x="2vmin" on a nested <svg>.*read as 0\.$/),
+                expect.stringMatching(/^width="5vw" on a nested <svg>.*read as 100%\.$/),
+            ]);
+        }
+    });
+
+    it('the root <svg> is checked too (width / height, attribute or style)', () => {
+        const warnings = layoutWarnings(
+            rootSvg(svg('width="5vw" style="height: 10vh" viewBox="0 0 10 10"', '<rect width="10" height="10"/>')),
+        );
+        expect(warnings.map((w) => w.code)).toEqual(['unsupported-attribute', 'unsupported-style']);
+        expect(warnings[0]!.message).toContain('on the root <svg>');
+    });
+
+    it('recognizes every viewport-relative unit, in calc() too, and nothing else', () => {
+        for (const width of [
+            '5vh',
+            '5VW',
+            '1vmin',
+            '1vmax',
+            '2vi',
+            '2vb',
+            '3svh',
+            '3lvw',
+            '3dvmax',
+            '4cqw',
+            'calc(5vw + 1px)',
+        ])
+            expect(
+                layoutWarnings(rootSvg(svg('width="10" height="10"', `<svg width="${width}"/>`), false)),
+            ).toHaveLength(1);
+        for (const width of ['5', '5px', '1em', '2rem', '50%', '1in'])
+            expect(layoutWarnings(rootSvg(svg('width="10" height="10"', `<svg width="${width}"/>`), false))).toEqual(
+                [],
+            );
+    });
+
+    it('reports a repeated case once', () => {
+        const nested = '<svg width="5vw"><rect width="1" height="1"/></svg>';
+        expect(layoutWarnings(rootSvg(svg('width="10" height="10"', nested + nested), false))).toHaveLength(1);
+    });
+});
+
+describe('transform-origin on the root <svg>', () => {
+    const at = (value: string): [number, number] | null => {
+        const o = boxOrigin(value, 200, 100);
+        return o && [o.x, o.y];
+    };
+
+    it('resolves keywords (either order), percentages and lengths against the width×height box', () => {
+        expect(at('left top')).toEqual([0, 0]);
+        expect(at('top left')).toEqual([0, 0]);
+        expect(at('bottom right')).toEqual([200, 100]);
+        expect(at('center')).toEqual([100, 50]);
+        expect(at('top')).toEqual([100, 0]);
+        expect(at('right')).toEqual([200, 50]);
+        expect(at('25% 10%')).toEqual([50, 10]);
+        expect(at('10px')).toEqual([10, 50]);
+        expect(at('10 1em 0')).toEqual([10, 16]);
+        expect(at('right 20px 5px')).toEqual([200, 20]);
+    });
+
+    it('is null for an invalid or unresolvable value', () => {
+        for (const value of ['', 'top 10px', 'left right', 'top bottom', '1ex', '5vw 0', '0 0 5%', '1 2 3 4', 'middle'])
+            expect(at(value)).toBeNull();
+    });
+
+    it('the transform turns around the transform-origin attribute', () => {
+        const attrs = { width: '200', height: '100', transform: 'scale(0.5)', 'transform-origin': 'right bottom' };
+        const m = rootTransform(attrs, rootLayout(attrs))!;
+        expect(applyPoint(m, 200, 100)).toEqual([200, 100]);
+        expectRendersLike(
+            svg(
+                'width="200" height="100" transform="scale(0.5)" transform-origin="right bottom"',
+                '<rect width="200" height="100" fill="green"/><circle cx="50" cy="50" r="30" fill="red"/>',
+            ),
+            svg(
+                'width="200" height="100"',
+                '<g transform="translate(200,100) scale(0.5) translate(-200,-100)">' +
+                    '<rect width="200" height="100" fill="green"/><circle cx="50" cy="50" r="30" fill="red"/></g>',
+            ),
+        );
+    });
+
+    it('in px of the box, through the viewBox mapping', () => {
+        const attrs = {
+            width: '200',
+            height: '100',
+            viewBox: '0 0 20 10',
+            transform: 'rotate(90)',
+            'transform-origin': '50 50',
+        };
+        const m = rootTransform(attrs, rootLayout(attrs))!;
+        // The px origin (50, 50) is (5, 5) in viewport units: a fixed point of the rotation.
+        expect(applyPoint(m, 5, 5).map((v) => Math.round(v * 1e9) / 1e9)).toEqual([5, 5]);
+        expectRendersLike(
+            svg(
+                'width="200" height="100" viewBox="0 0 20 10" transform="rotate(90)" transform-origin="50 50"',
+                '<rect x="8" width="4" height="2" fill="green"/>',
+            ),
+            svg(
+                'width="200" height="100" viewBox="0 0 20 10"',
+                '<rect x="8" width="4" height="2" fill="green" transform="rotate(90 5 5)"/>',
+            ),
+        );
+    });
+
+    it('an unresolvable one falls back to the centre and is reported', () => {
+        const attrs = { width: '200', height: '100', transform: 'rotate(90)', 'transform-origin': '1ex 0' };
+        const m = rootTransform(attrs, rootLayout(attrs))!;
+        expect(applyPoint(m, 100, 50).map((v) => Math.round(v * 1e9) / 1e9)).toEqual([100, 50]);
+        const source = svg(
+            'width="200" height="100" transform="rotate(90)" transform-origin="1ex 0"',
+            '<rect width="4" height="4"/>',
+        );
+        for (const optimize of [true, false]) {
+            const warnings = layoutWarnings(rootSvg(source, optimize));
+            expect(warnings.map((w) => [w.code, w.node])).toEqual([['unsupported-attribute', 'svg']]);
+            expect(warnings[0]!.message).toContain('transform-origin="1ex 0"');
+        }
+    });
+
+    it('is not reported without a transform to apply it to', () => {
+        for (const transform of ['', 'transform="translate(0)"'])
+            expect(
+                layoutWarnings(rootSvg(svg(`width="20" height="20" ${transform} transform-origin="1ex"`, '<rect/>'))),
+            ).toEqual([]);
+    });
+});
+
+describe('convert() reports viewport-relative units on <svg>', () => {
+    it('rejects width="5vw" on the root under strict, in both modes', () => {
+        const doc =
+            '<svg xmlns="http://www.w3.org/2000/svg" width="5vw" viewBox="0 0 24 24"><path d="M0 0h24v24H0z"/></svg>';
+        for (const optimize of [true, false]) {
+            expect(() => convert(doc, { optimize, strict: 'lossy' })).toThrow(/vw/);
+        }
     });
 });

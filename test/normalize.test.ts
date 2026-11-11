@@ -306,3 +306,70 @@ describe('normalize: CSS transform, transform-origin, transform-box', () => {
         ).toEqual(['svg', 'path']);
     });
 });
+
+describe('normalize: explicit black fill with fillBlackForUnfilled: false', () => {
+    /** Effective `fill` attribute of every `<path>` in svgo's output tree (inherited from ancestors). */
+    const pathFills = (input: string, optimize: boolean, fillBlackForUnfilled?: boolean): (string | undefined)[] => {
+        const out: (string | undefined)[] = [];
+        const walk = (node: XastElement, inherited: string | undefined): void => {
+            const fill = node.attributes?.fill ?? inherited;
+            if (node.name === 'path') out.push(fill);
+            for (const child of node.children ?? []) if (child.type === 'element') walk(child, fill);
+        };
+        const root = parseSvg(input, optimize, undefined, undefined, fillBlackForUnfilled);
+        for (const child of root.children ?? []) if (child.type === 'element') walk(child, undefined);
+        return out;
+    };
+    const square = (attrs: string, x = 0): string => `<path${attrs} d="M${x} 0h10v10H${x}z"/>`;
+    const BLACK = /^(?:#000|#000000|black|rgb\(0,\s*0,\s*0\))$/;
+
+    for (const black of ['#000', '#000000', 'black', 'rgb(0,0,0)', 'rgb(0, 0, 0)'])
+        for (const optimize of [true, false]) {
+            it(`keeps fill="${black}" on a path (optimize: ${optimize})`, () => {
+                const fills = pathFills(svg(square(` fill="${black}"`)), optimize, false);
+                expect(fills).toHaveLength(1);
+                expect(fills[0]).toMatch(BLACK);
+            });
+
+            it(`keeps fill="${black}" on a group (optimize: ${optimize})`, () => {
+                const fills = pathFills(svg(`<g fill="${black}">${square('')}${square('', 20)}</g>`), optimize, false);
+                expect(fills.length).toBeGreaterThan(0); // mergePaths may join the two squares
+                for (const fill of fills) expect(fill).toMatch(BLACK);
+            });
+        }
+
+    it('keeps a black child fill overriding a colored parent fill', () => {
+        const input = svg(`<g fill="#f00">${square('')}<g>${square(' fill="black"', 20)}</g></g>`);
+        for (const fillBlackForUnfilled of [true, false])
+            for (const optimize of [true, false]) {
+                const [red, black] = pathFills(input, optimize, fillBlackForUnfilled);
+                expect(red).toMatch(/^(?:#f00|red)$/);
+                expect(black).toMatch(BLACK);
+            }
+    });
+
+    it('leaves the default svgo config unchanged when fillBlackForUnfilled is true', () => {
+        const input = svg(`<g fill="#000">${square(' stroke-width="1" fill-opacity="1" fill-rule="nonzero"')}</g>`);
+        expect(parseSvg(input, true, undefined, undefined, true)).toEqual(parseSvg(input, true));
+    });
+
+    it('keeps the pathLength override (unknownAttrs: false) when both apply', () => {
+        const input = svg('<rect width="10" height="10" fill="#000" stroke-dasharray="1 1" pathLength="4"/>');
+        const json = JSON.stringify(parseSvg(input, true, undefined, undefined, false));
+        expect(json).toContain('"pathLength":"4"');
+        expect(json).toMatch(/"fill":"(?:#000|black)"/);
+    });
+});
+
+describe('convert() keeps an explicit black fill with fillBlackForUnfilled: false', () => {
+    const doc = (fill: string): string =>
+        `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M2 2h20v20H2z" fill="${fill}"/></svg>`;
+
+    for (const fill of ['#000', '#000000', 'black', 'rgb(0,0,0)'])
+        it(`emits fill="${fill}" in both modes`, () => {
+            for (const optimize of [true, false]) {
+                const { xml } = convert(doc(fill), { optimize, fillBlackForUnfilled: false });
+                expect(xml).toContain('android:fillColor="#FF000000"');
+            }
+        });
+});

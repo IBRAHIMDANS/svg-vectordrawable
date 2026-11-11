@@ -14,7 +14,7 @@ import { applyCssProperties, parseStyle, presentation } from './style.js';
 import { parseOpacity } from './units.js';
 import { resolveUses } from './useResolver.js';
 import { formatMatrix } from './transform.js';
-import { rootLayout, rootTransform } from './viewport.js';
+import { layoutWarnings, rootLayout, rootTransform } from './viewport.js';
 import {
     WARNING_CATEGORIES,
     WARNING_CODES,
@@ -137,7 +137,7 @@ export function convert(svg: string, options: ConvertOptions = {}): ConvertResul
         onWarn?.(w);
     };
 
-    const root = parseSvg(svg, optimize, svgoConfig, floatPrecision);
+    const root = parseSvg(svg, optimize, svgoConfig, floatPrecision, fillBlackForUnfilled);
     // Fold CSS transforms into attributes before <use> expansion, so that clones inherit them.
     applyCssProperties(root, warn);
     resolveUses(root); // inline <use> references so the walker sees concrete geometry
@@ -170,6 +170,8 @@ export function convert(svg: string, options: ConvertOptions = {}): ConvertResul
             message: 'CSS transform / transform-origin on the root <svg> is not supported; ignored.',
             node: 'svg',
         });
+    // Viewport-relative units on an <svg>, a root transform-origin that cannot be resolved.
+    for (const w of layoutWarnings(svgEl)) warn(w);
     const step = ' '.repeat(indent);
     const r = (v: number): string => formatNumber(v, floatPrecision);
 

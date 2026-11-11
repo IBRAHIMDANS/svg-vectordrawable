@@ -41,35 +41,42 @@ const WPT_DIR = 'svg';
  * `svg/` → reason): resvg 2.6 renders the SOURCE differently from the wpt reference, while the
  * converter follows the reference. They are still reported, separately. A real bug never goes here:
  * it gets a fixture `test/fixtures/wpt-<name>.svg` and a correction task. Some entries are currently
- * rejected by `strict` for another reason and only show up once that is fixed.
+ * rejected by `strict` for another reason (an `<html:link>` raising `empty-path`) and only show up once
+ * that is fixed. A file whose root has no size is rejected for good (`unsupported-attribute`): it never
+ * belongs here.
  */
 const RESVG_HSL =
     'resvg paints hsl() with fractional or space-separated components black; the converter emits #339377 like the reference';
+const RESVG_CSS_COLOR_4 =
+    'resvg does not parse CSS Color 4 functions (hwb(), lab(), lch(), oklab(), oklch(), color()) and paints black; the converter emits #339377 like the reference';
 const RESVG_PATH_LENGTH =
     'resvg ignores pathLength when laying out dashes; the converter scales the dashes like the reference';
-const SIZELESS = 'Until the 24×24 fallback for a root without size is fixed, it adds to the mismatch';
-const RESVG_EMPTY_GRADIENT_TRANSFORM = `resvg reads gradientTransform="" as identity instead of inheriting the href gradient transform; the converter (optimize: true) inherits it like the reference. ${SIZELESS}`;
+/** `paint-fill-<color>.svg` (CSS) and `paint-fill-attr-<color>.svg` (attribute) for each color. */
+const paintFill = (colors, reason) =>
+    colors
+        .flatMap((c) => [`paint-fill-${c}`, `paint-fill-attr-${c}`])
+        .map((n) => [`painting/reftests/${n}.svg`, reason]);
 const KNOWN_ARTEFACTS = new Map([
-    [
-        'painting/currentColor-override-pserver-fallback.svg',
-        `resvg ignores the fallback color after an unresolved url(#…) and paints black; the converter paints limegreen like the reference. ${SIZELESS}`,
-    ],
-    ['pservers/reftests/linear-gradient-transform-empty-attr.svg', RESVG_EMPTY_GRADIENT_TRANSFORM],
-    ['pservers/reftests/radial-gradient-transform-empty-attr.svg', RESVG_EMPTY_GRADIENT_TRANSFORM],
-    [
-        'struct/reftests/use-symbol-display-none.svg',
-        'resvg draws a display="none" <symbol> through <use>; the converter does not, like the reference',
-    ],
-    [
-        'struct/reftests/use-encoding.svg',
-        'resvg does not percent-decode href="#a%20b"; the converter resolves it like the reference',
-    ],
-    ['painting/reftests/paint-fill-attr-hsl.svg', RESVG_HSL],
-    ['painting/reftests/paint-fill-attr-hsl-legacy.svg', RESVG_HSL],
-    ['painting/reftests/paint-fill-hsl.svg', RESVG_HSL],
-    ['painting/reftests/paint-fill-hsl-legacy.svg', RESVG_HSL],
-    ['path/distance/pathlength-path.svg', RESVG_PATH_LENGTH],
-    ['path/distance/pathlength-rect.svg', RESVG_PATH_LENGTH],
+    ...paintFill(['hsl', 'hsl-legacy'], RESVG_HSL),
+    ...paintFill(
+        [
+            'a98-rgb',
+            'display-p3',
+            'hwb',
+            'lab',
+            'lch',
+            'oklab',
+            'oklch',
+            'prophoto-rgb',
+            'rec2020',
+            'srgb',
+            'srgb-linear',
+            'xyz',
+            'xyz-d50',
+            'xyz-d65',
+        ],
+        RESVG_CSS_COLOR_4,
+    ),
     ['shapes/reftests/pathlength-001.svg', RESVG_PATH_LENGTH],
     ['shapes/reftests/pathlength-002.svg', RESVG_PATH_LENGTH],
     ['shapes/reftests/pathlength-004a.svg', RESVG_PATH_LENGTH],
