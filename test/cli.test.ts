@@ -324,8 +324,48 @@ describe('svgvd CLI', () => {
             expect(svgvd('-s', ICON, flag).status).toBe(1);
         });
 
+        it('emits a --current-color reference and --color-map references (repeatable)', () => {
+            const icon =
+                '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M0 0h9v9z" fill="#1A73E8"/>' +
+                '<path d="M9 9h9v9z" fill="red"/><path d="M0 9h9v9z" fill="none" stroke="currentColor"/></svg>';
+            const res = svgvd(
+                '-s',
+                icon,
+                '--current-color',
+                '?attr/colorOnSurface',
+                '--color-map',
+                '#1a73e8=@color/brand',
+                '--color-map',
+                ' #f00 =?android:attr/colorAccent',
+            );
+            expect(res.status).toBe(0);
+            expect(res.stdout).toContain('android:fillColor="@color/brand"');
+            expect(res.stdout).toContain('android:fillColor="?android:attr/colorAccent"');
+            expect(res.stdout).toContain('android:strokeColor="?attr/colorOnSurface"');
+        });
+
+        it.each([
+            [['--color-map', '#f00'], 'Invalid --color-map'],
+            [['--color-map', '=@color/brand'], 'Invalid --color-map'],
+            [['--color-map', '#f00=@color/'], 'Invalid colorMap value'],
+            [['--color-map', 'wat=@color/brand'], 'Invalid colorMap key'],
+            [['--current-color', '?colorPrimary'], 'malformed reference'],
+            [['--current-color', 'wat'], 'Invalid currentColor'],
+        ])('rejects %j before converting anything', (flags, message) => {
+            const src = join(dir, 'src');
+            mkdirSync(src);
+            writeFileSync(join(src, 'a.svg'), ICON);
+            writeFileSync(join(src, 'b.svg'), ICON);
+            const res = svgvd(src, ...flags);
+            expect(res.status).toBe(1);
+            expect(res.stderr.split(message)).toHaveLength(2); // reported once, not per file
+            expect(existsSync(join(src, 'a.xml'))).toBe(false);
+        });
+
         it('documents the options in the help', () => {
             const help = svgvd('--help').stdout;
+            expect(help).toContain('--current-color');
+            expect(help).toContain('--color-map');
             expect(help).toContain('--auto-mirrored');
             expect(help).toContain('--width <dp>');
             expect(help).toContain('--height <dp>');

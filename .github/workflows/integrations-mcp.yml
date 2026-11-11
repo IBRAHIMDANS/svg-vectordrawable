@@ -1,0 +1,48 @@
+name: MCP server
+
+# integrations/mcp-server is a standalone package (own lockfile) built on the published library.
+on:
+    push:
+        branches: [main, master]
+        paths:
+            - 'integrations/mcp-server/**'
+            - '.github/workflows/integrations-mcp.yml'
+    pull_request:
+        paths:
+            - 'integrations/mcp-server/**'
+            - '.github/workflows/integrations-mcp.yml'
+
+defaults:
+    run:
+        working-directory: integrations/mcp-server
+
+jobs:
+    test:
+        runs-on: ubuntu-latest
+        strategy:
+            fail-fast: false
+            matrix:
+                node-version: [22, 24]
+        steps:
+            - uses: actions/checkout@v4
+            - uses: pnpm/action-setup@v6
+            - uses: actions/setup-node@v4
+              with:
+                  node-version: ${{ matrix.node-version }}
+                  cache: pnpm
+                  cache-dependency-path: integrations/mcp-server/pnpm-lock.yaml
+            - run: pnpm install --frozen-lockfile
+            - run: pnpm run typecheck
+            # Builds dist/, then drives the server over stdio with the MCP SDK client.
+            - run: pnpm test
+            - name: Package contents
+              run: npm pack --dry-run
+            # `engines` says >= 18: rerun the end-to-end tests on the built server under Node 18
+            # (the toolchain itself needs a recent Node, hence the switch after the build).
+            - if: matrix.node-version == 22
+              uses: actions/setup-node@v4
+              with:
+                  node-version: 18
+            - if: matrix.node-version == 22
+              name: End-to-end tests on Node 18
+              run: node --version && node --test test/server.e2e.mjs

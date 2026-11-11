@@ -10,7 +10,10 @@ export const WARNING_CODES = [
     'unsupported-stroke-dasharray',
     /** No longer emitted (gradient strokes are converted); kept for compatibility. */
     'unsupported-stroke-gradient',
-    /** A paint server VectorDrawable cannot express (e.g. `<pattern>`). */
+    /**
+     * A paint VectorDrawable cannot express: a `<pattern>`, or a translucent gradient stop mapped to
+     * an Android reference by `currentColor` / `colorMap` (an `<item>` has no alpha; literal kept).
+     */
     'unsupported-paint',
     /** A clipPath that cannot be (fully) converted. */
     'unsupported-clip-path',
@@ -115,8 +118,25 @@ export interface ConvertOptions {
     svgoConfig?: SvgoConfig;
     /** Decimal places kept for generated numbers (coordinates, radii). @default 3 */
     floatPrecision?: number;
-    /** Concrete color substituted for `currentColor`. @default '#000000' */
+    /**
+     * What `currentColor` stands for: a CSS color, or an Android color reference emitted as is in
+     * `android:fillColor` / `android:strokeColor` so the icon follows the theme: `?attr/name`,
+     * `?android:attr/name`, `@color/name`, `@android:color/name` (any `package:` prefix; the
+     * `?name` shorthand is not accepted). A reference carries no alpha: `fill-opacity` / `opacity`
+     * go to `fillAlpha` / `strokeAlpha` as usual. A malformed value throws a `TypeError`.
+     * @default '#000000'
+     */
     currentColor?: string;
+    /**
+     * SVG colors to Android color references (same syntax as a `currentColor` reference), e.g.
+     * `{ '#1A73E8': '@color/brand' }`. Keys are any CSS color, compared after normalization to
+     * `#AARRGGBB` (`#f00`, `red` and `rgb(255,0,0)` are one key). An exact key wins; otherwise an
+     * opaque key also matches its color at any alpha, that alpha going to `fillAlpha` / `strokeAlpha`.
+     * Gradient stops get the reference only when opaque (an `<item>` has no alpha): a translucent
+     * one keeps its literal color, with an `unsupported-paint` warning. A malformed key or value, or
+     * two keys for one color with different references, throw a `TypeError`.
+     */
+    colorMap?: Record<string, string>;
     /**
      * SVG paints unfilled shapes black by default. When true, paths without an
      * explicit fill get `android:fillColor="#FF000000"`. @default true

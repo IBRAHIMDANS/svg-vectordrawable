@@ -40,6 +40,13 @@ export default tseslint.config(
             globals: { ...globals.node },
         },
     },
+    // Documentation asset generators (e.g. the README before/after image) run on Node.
+    {
+        files: ['docs/assets/**/*.mjs'],
+        languageOptions: {
+            globals: { ...globals.node },
+        },
+    },
     // Playground (static page on GitHub Pages): browser modules, a classic worker, a Node smoke test.
     {
         files: ['playground/*.js'],
@@ -56,6 +63,14 @@ export default tseslint.config(
     },
     {
         files: ['playground/*.mjs'],
+        languageOptions: {
+            globals: { ...globals.node },
+        },
+    },
+    // MCP server (standalone package built on the published library): Node code, tsc output ignored.
+    { ignores: ['integrations/mcp-server/dist'] },
+    {
+        files: ['integrations/mcp-server/**/*.{ts,mjs}'],
         languageOptions: {
             globals: { ...globals.node },
         },
