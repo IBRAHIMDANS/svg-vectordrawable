@@ -31,6 +31,18 @@ export function batchOutputPath(input: string, root: string, outputDir?: string,
 }
 
 /**
+ * Path of the PNG fallback of the drawable `xmlOutput` for a `density` bucket:
+ * `drawable-<density>/<name>.png` in the XML's directory (`out/icon.xml` → `out/drawable-mdpi/icon.png`),
+ * or beside it when that directory is an Android `drawable` (`res/drawable/icon.xml` →
+ * `res/drawable-mdpi/icon.png`), since a resource directory has no subdirectories.
+ */
+export function fallbackPngPath(xmlOutput: string, density: string): string {
+    const dir = dirname(xmlOutput);
+    const res = basename(dir) === 'drawable' ? dirname(dir) : dir;
+    return join(res, `drawable-${density}`, `${basename(xmlOutput, extname(xmlOutput))}.png`);
+}
+
+/**
  * The output paths shared by several inputs, in input order; empty when all are distinct.
  * Only checked with `androidNames`, where distinct source names can collapse to the same resource name.
  */
@@ -69,7 +81,7 @@ export function listSvgFiles(dir: string, recursive = false): string[] {
 }
 
 /** Writes `content` to `target`, creating its parent directories first. */
-export function writeOutput(target: string, content: string): void {
+export function writeOutput(target: string, content: string | Uint8Array): void {
     mkdirSync(dirname(target), { recursive: true });
     writeFileSync(target, content);
 }

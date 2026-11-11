@@ -6,10 +6,12 @@ import { fileURLToPath } from 'node:url';
 import { colorRefs } from './colorRef.js';
 import { convert } from './convert.js';
 import { ConversionError } from './errors.js';
+import { DENSITIES, renderFallbackPng, type Density } from './fallback.js';
 import {
     assertDistinctOutputs,
     batchOutputPath,
     defaultOutputPath,
+    fallbackPngPath,
     findOutputCollisions,
     listSvgFiles,
     writeOutput,
@@ -41,6 +43,12 @@ Options:
   --json               Print a JSON report on stdout (input, output, warnings,
                        minSdk, error per file); XML must go to files (-o)
   --dry-run            Convert and report, but write nothing
+  --fallback-png <d>   When a file is rejected (--strict, --rule <code>=error),
+                       render it to PNG instead of failing: <name>.png in
+                       drawable-<density>/ inside the XML's directory (beside it
+                       when that directory is named drawable). <d>: all, or a
+                       comma list of mdpi,hdpi,xhdpi,xxhdpi,xxxhdpi. Needs the
+                       optional dependency @resvg/resvg-js
   --no-optimize        Skip svgo normalization (not recommended)
   --strict             Fail on the first lossy or approximated construct
   --strict=lossy       Fail only when content is lost (approximations stay warnings)
@@ -102,6 +110,11 @@ export interface ReportEntry {
     minSdk: number | null;
     /** Why nothing was produced; `code` / `category` when a warning was escalated to an error. */
     error: { message: string; code?: WarningCode; category?: WarningCategory } | null;
+    /**
+     * The PNGs written instead of the XML (`--fallback-png`), with the warning that made the
+     * conversion fail; `null` when the file was not rendered to bitmaps.
+     */
+    fallback: { outputs: string[]; reason: Warning & { category: WarningCategory } } | null;
 }
 
 /** One conversion: a file, stdin or the `-s` string. */
@@ -132,6 +145,7 @@ function parseArgs(
     recursive: boolean;
     json: boolean;
     dryRun: boolean;
+    fallback?: Density[];
     opts: ConvertOptions;
     naming: FileNamingOptions;
 } {
@@ -144,6 +158,7 @@ function parseArgs(
     let recursive = false;
     let json = false;
     let dryRun = false;
+    let fallback: Density[] | undefined;
     const fail = (message: string): never => {
         io.stderr(`${message}\n`);
         throw new CliExit(1);
@@ -161,7 +176,15 @@ function parseArgs(
         else if (arg === '-r' || arg === '--recursive') recursive = true;
         else if (arg === '--json') json = true;
         else if (arg === '--dry-run') dryRun = true;
-        else if (arg === '--no-optimize') opts.optimize = false;
+        else if (arg === '--fallback-png') {
+            const list = value();
+            const names = list === 'all' ? Object.keys(DENSITIES) : list.split(',').map((d) => d.trim());
+            if (!names.every((d) => Object.hasOwn(DENSITIES, d)))
+                fail(
+                    `Invalid --fallback-png (expected all, or a comma list of ${Object.keys(DENSITIES).join(',')}): ${list}`,
+                );
+            fallback = [...new Set(names)] as Density[];
+        } else if (arg === '--no-optimize') opts.optimize = false;
         else if (arg === '--strict') opts.strict = true;
         else if (arg === '--strict=lossy') opts.strict = 'lossy';
         else if (arg === '--min-sdk') {
@@ -205,7 +228,7 @@ function parseArgs(
     } catch (err) {
         fail((err as Error).message);
     }
-    return { inputs, inline, out, stdout, recursive, json, dryRun, opts, naming };
+    return { inputs, inline, out, stdout, recursive, json, dryRun, fallback, opts, naming };
 }
 
 /** The error of a failed job, for the report. */
@@ -215,15 +238,71 @@ function reportError(err: unknown): NonNullable<ReportEntry['error']> {
     return { message, code: err.warning.code, category: WARNING_CATEGORIES[err.warning.code] };
 }
 
+/** How the jobs of a run are carried out. */
+interface RunSettings {
+    opts: ConvertOptions;
+    dryRun: boolean;
+    /** Densities of the PNG fallback (`--fallback-png`), undefined without it. */
+    fallback?: readonly Density[];
+}
+
+/** A warning with its category, as reported. */
+const categorized = (w: Warning): Warning & { category: WarningCategory } => ({
+    ...w,
+    category: WARNING_CATEGORIES[w.code],
+});
+
 /**
- * Converts one job, writes or prints its XML (unless `dryRun`) and logs to stderr. Never throws:
- * a failure is returned in the entry's `error`.
+ * Renders the SVG of a job its conversion rejected to one PNG per fallback density next to its
+ * `output` and writes them (unless `dryRun`). Never throws: a rendering failure (resvg missing,
+ * invalid SVG) is returned in the entry's `error`, with the rejection's code.
  */
-function runJob(job: Job, opts: ConvertOptions, dryRun: boolean, io: CliIo): ReportEntry {
+function runFallback(
+    job: Job & { output: string },
+    svg: string,
+    rejection: ConversionError,
+    { opts, dryRun, fallback = [] }: RunSettings,
+    file: string | undefined,
+    io: CliIo,
+): ReportEntry {
+    try {
+        const pngs = fallback.map((density) => ({
+            path: fallbackPngPath(job.output, density),
+            png: renderFallbackPng(svg, { density, width: opts.width, height: opts.height }),
+        }));
+        if (!dryRun) for (const { path, png } of pngs) writeOutput(path, png);
+        // One line for all densities: out/drawable-{mdpi,hdpi}/icon.png.
+        const target = fallbackPngPath(job.output, fallback.length > 1 ? `{${fallback.join(',')}}` : fallback[0]!);
+        const source = file === undefined ? '' : `${file} `;
+        io.stderr(`✓ ${source}→ ${target}${dryRun ? ' (dry run)' : ''} (PNG fallback: ${rejection.message})\n`);
+        return {
+            input: job.input,
+            output: null,
+            warnings: [],
+            minSdk: null,
+            error: null,
+            fallback: { outputs: pngs.map((p) => p.path), reason: categorized(rejection.warning) },
+        };
+    } catch (err) {
+        const message = `${rejection.message} PNG fallback failed: ${(err as Error).message}`;
+        io.stderr(`✗ ${file === undefined ? '' : `${file}: `}${message}\n`);
+        return { ...failedEntry(job.input, message), error: { ...reportError(rejection), message } };
+    }
+}
+
+/**
+ * Converts one job, writes or prints its XML (unless `dryRun`) and logs to stderr; a job rejected by
+ * the conversion goes to {@link runFallback} with `fallback` and a file target. Never throws: a
+ * failure is returned in the entry's `error`.
+ */
+function runJob(job: Job, settings: RunSettings, io: CliIo): ReportEntry {
+    const { opts, dryRun } = settings;
     const file = job.input !== null && job.input !== '-' ? job.input : undefined;
     const label = file === undefined ? '' : `${basename(file)}: `;
+    let svg: string | undefined;
     try {
-        const { xml, warnings, minSdk } = convert(job.read(), opts);
+        svg = job.read();
+        const { xml, warnings, minSdk } = convert(svg, opts);
         for (const w of warnings) io.stderr(`  ⚠ ${label}[${w.code}] ${w.message}\n`);
         if (job.output === undefined) {
             if (!dryRun) io.stdout(xml);
@@ -234,19 +313,30 @@ function runJob(job: Job, opts: ConvertOptions, dryRun: boolean, io: CliIo): Rep
         return {
             input: job.input,
             output: job.output ?? null,
-            warnings: warnings.map((w) => ({ ...w, category: WARNING_CATEGORIES[w.code] })),
+            warnings: warnings.map(categorized),
             minSdk,
             error: null,
+            fallback: null,
         };
     } catch (err) {
+        const { output } = job;
+        if (err instanceof ConversionError && settings.fallback && output !== undefined && svg !== undefined)
+            return runFallback({ ...job, output }, svg, err, settings, file, io);
         io.stderr(`✗ ${file === undefined ? '' : `${file}: `}${(err as Error).message}\n`);
-        return { input: job.input, output: null, warnings: [], minSdk: null, error: reportError(err) };
+        return {
+            input: job.input,
+            output: null,
+            warnings: [],
+            minSdk: null,
+            error: reportError(err),
+            fallback: null,
+        };
     }
 }
 
 /** A failed entry that produced nothing. */
 function failedEntry(input: string | null, message: string): ReportEntry {
-    return { input, output: null, warnings: [], minSdk: null, error: { message } };
+    return { input, output: null, warnings: [], minSdk: null, error: { message }, fallback: null };
 }
 
 /** The `--json` report. */
@@ -339,7 +429,7 @@ export function run(argv: string[], io: CliIo = processIo): number {
         if (err instanceof CliExit) return err.code;
         throw err;
     }
-    const { inputs, inline, out, stdout, recursive, json, dryRun, opts, naming } = args;
+    const { inputs, inline, out, stdout, recursive, json, dryRun, fallback, opts, naming } = args;
 
     const explicitStdin = inline === undefined && inputs[0] === '-';
     const implicitStdin = inline === undefined && inputs.length === 0 && io.stdin !== undefined && !io.stdin.isTTY;
@@ -352,6 +442,12 @@ export function run(argv: string[], io: CliIo = processIo): number {
     const singleTarget = out !== undefined && extname(out) === '.xml' ? out : undefined;
     if (json && !dryRun && (single ? singleTarget === undefined : stdout)) {
         io.stderr('--json prints the report on stdout: write the XML with -o <file.xml>, or add --dry-run\n');
+        return 1;
+    }
+    if (fallback && (single ? singleTarget === undefined : stdout)) {
+        io.stderr(
+            '--fallback-png writes PNG files next to the XML: write it to files (-o <file.xml> for a single source)\n',
+        );
         return 1;
     }
 
@@ -373,7 +469,7 @@ export function run(argv: string[], io: CliIo = processIo): number {
             return 1;
         }
     }
-    for (const job of jobs) entries.push(runJob(job, opts, dryRun, io));
+    for (const job of jobs) entries.push(runJob(job, { opts, dryRun, fallback }, io));
     if (json) io.stdout(report(entries));
     return entries.some((entry) => entry.error !== null) ? 1 : 0;
 }
