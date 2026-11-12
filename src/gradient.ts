@@ -14,6 +14,7 @@ import {
 } from './transform.js';
 import type { Warning } from './types.js';
 import { parseLength, VALID_UNRESOLVED_LENGTH } from './units.js';
+import { warnOnce } from './warnOnce.js';
 
 /** A gradient color stop, with its offset normalized to [0, 1]. */
 interface GradientStop {
@@ -457,7 +458,7 @@ export function collectGradients(
             matrix,
             stops,
             ...(tileMode ? { tileMode } : {}),
-            ...(notes.length ? { report: once(() => notes.forEach(warn)) } : {}),
+            ...(notes.length ? { report: once(() => notes.forEach((w) => warnOnce({ warn }, w))) } : {}),
         });
     }
     return out;

@@ -343,6 +343,12 @@ function decodedReference(ref: string, hex: string | undefined, dec: string | un
     return PARSE_KEPT_CHARS.has(char) ? ref : char;
 }
 
+/** true when an attribute of some tag of `svg` is named with `prefix` (`ns0:foo="…"`). */
+function usesAttributePrefix(svg: string, prefix: string): boolean {
+    const escaped = prefix.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    return new RegExp(`\\s${escaped}:[^\\s=/>]+\\s*=`).test(svg);
+}
+
 /** Prefixes declared in `svg` whose every binding is `uri` (other than the reserved `xml` / `xmlns`). */
 function prefixesBoundOnlyTo(svg: string, uri: string): Set<string> {
     const bound = new Set<string>();
@@ -363,8 +369,10 @@ function prefixesBoundOnlyTo(svg: string, uri: string): Set<string> {
  *   same characters; the markup ones and whitespace stay encoded, like invalid references;
  * - elements whose prefix is bound to the SVG namespace (`<ns0:svg xmlns:ns0="…/2000/svg">`, written
  *   by Python's ElementTree) lose the prefix: the converter matches elements by local name and would
- *   find no `<svg>` root. Prefixed attributes are left as they are (in the SVG namespace, they are no
- *   presentation attributes), and so are the declarations they need;
+ *   find no `<svg>` root. Its declaration goes, replaced by a default `xmlns` when the element has
+ *   none (so a namespace-aware reader, resvg, still finds SVG elements). Prefixed attributes are left
+ *   as they are (in the SVG namespace, they are no presentation attributes), and so are the
+ *   declarations they need;
  * - attributes whose prefix is bound to the XLink namespace under another name (`xl:href`) are
  *   renamed `xlink:…`, with their declaration.
  * A prefix bound to another namespace anywhere in the document is left alone (its elements stay
@@ -377,6 +385,10 @@ export function prepareSource(svg: string): string {
     xlinkAliases.delete('xlink');
     if (!svg.includes('&#') && svgPrefixes.size === 0 && xlinkAliases.size === 0) return svg;
 
+    // A declaration of an SVG prefix is dropped once no attribute uses the prefix (an unbound prefix
+    // would make a namespace-aware parser, resvg, reject the document).
+    const droppedPrefixes = new Set([...svgPrefixes].filter((prefix) => !usesAttributePrefix(svg, prefix)));
+
     const localName = (name: string): string => {
         const colon = name.indexOf(':');
         return colon > 0 && svgPrefixes.has(name.slice(0, colon)) ? name.slice(colon + 1) : name;
@@ -385,6 +397,7 @@ export function prepareSource(svg: string): string {
         const colon = name.indexOf(':');
         if (colon <= 0) return name;
         const prefix = name.slice(0, colon);
+        if (prefix === 'xmlns' && droppedPrefixes.has(name.slice(colon + 1))) return undefined;
         if (prefix === 'xmlns' && xlinkAliases.has(name.slice(colon + 1)))
             return declaresXlink ? undefined : 'xmlns:xlink';
         return xlinkAliases.has(prefix) ? `xlink${name.slice(colon)}` : name;
@@ -394,16 +407,21 @@ export function prepareSource(svg: string): string {
         (token: string, slash?: string, name?: string, attrs?: string, hex?: string, dec?: string) => {
             if (name === undefined) return token.startsWith('&') ? decodedReference(token, hex, dec) : token;
             const declaresXlink = /\sxmlns:xlink\s*=/.test(attrs!);
+            let droppedSvgDeclaration = false;
             const rewritten = attrs!.replace(
                 TAG_ATTRIBUTE,
                 (_attr: string, space: string, attrName: string, rest: string) => {
+                    if (attrName.startsWith('xmlns:') && droppedPrefixes.has(attrName.slice(6)))
+                        droppedSvgDeclaration = true;
                     const renamed = renameAttribute(attrName, declaresXlink);
                     return renamed === undefined
                         ? ''
                         : `${space}${renamed}${rest.replace(NUMERIC_REFERENCE, decodedReference)}`;
                 },
             );
-            return `<${slash}${localName(name)}${rewritten}>`;
+            // The unprefixed element is in the SVG namespace only with a default declaration.
+            const defaultNs = droppedSvgDeclaration && !/\sxmlns\s*=/.test(attrs!) ? ` xmlns="${SVG_NS}"` : '';
+            return `<${slash}${localName(name)}${defaultNs}${rewritten}>`;
         },
     );
 }
@@ -426,7 +444,7 @@ type IdPluginNode = { type: string; attributes?: Record<string, string> };
  * at it finds nothing). {@link INLINE_STYLES_KEEPING_IDS} runs `inlineStyles` on its own before the
  * preset, between {@link stashIds} (the id copied aside) and {@link restoreIds} (put back), so that
  * referenced and named (`preserveIds`) elements keep their id; the preset's own pass finds nothing
- * left to inline. `preserveIds` stashes the ids again around the preset.
+ * left to inline.
  */
 const stashIds = {
     name: 'svgvd-stash-ids',
@@ -488,12 +506,15 @@ function hasStyledReference(svg: string): boolean {
  * `preserveIds`: named elements must stay separate and where they are authored. `mergePaths` joins
  * sibling paths, `collapseGroups` dissolves groups (moving a group's id onto its only child), and
  * `moveGroupAttrsToElems` pushes a group's transform down onto its children (the named group would
- * lose the transform an AnimatedVectorDrawable animates from).
+ * lose the transform an AnimatedVectorDrawable animates from). `cleanupIds` deletes a repeated id
+ * (its only effect with `remove` / `minify` off): the converter gives the name to the first element
+ * that draws something, which may be a later one.
  */
 const PRESERVE_IDS_OVERRIDES = {
     mergePaths: false,
     collapseGroups: false,
     moveGroupAttrsToElems: false,
+    cleanupIds: false,
 };
 
 /**
@@ -733,9 +754,7 @@ function defaultConfigFor(
     const degPrecision = Math.min(Math.max(floatPrecision, SVGO_FLOAT_PRECISION), SVGO_MAX_FLOAT_PRECISION);
     overrides.convertTransform = { ...(overrides.convertTransform as object | undefined), degPrecision };
     const preset = { name: 'preset-default', params };
-    // `preserveIds` also keeps each id through the rest of the preset (an element whose id another
-    // plugin drops keeps its name).
-    if (preserveIds) return { plugins: [...INLINE_STYLES_KEEPING_IDS, stashIds, preset, restoreIds] } as Config;
+    if (preserveIds) return { plugins: [...INLINE_STYLES_KEEPING_IDS, preset] } as Config;
     return { plugins: hasStyledReference(svg) ? [...INLINE_STYLES_KEEPING_IDS, preset] : [preset] } as Config;
 }
 

@@ -784,8 +784,9 @@ describe('resolveUses — expansion budget', () => {
     it('refuses a document whose <use> nesting multiplies past the budget', () => {
         const started = performance.now();
         expect(() => convert(bomb(9, 10), { optimize: false })).toThrow(`exceeds ${MAX_EXPANDED_NODES} elements`);
-        expect(performance.now() - started).toBeLessThan(2000);
-    });
+        // A bound against the blow-up (10^9 instances without the budget), not a benchmark: ~70 ms alone.
+        expect(performance.now() - started).toBeLessThan(10_000);
+    }, 30_000);
 
     it('still expands a large but bounded document', () => {
         const { xml } = convert(bomb(3, 10), { optimize: false });

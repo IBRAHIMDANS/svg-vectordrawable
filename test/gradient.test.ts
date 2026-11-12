@@ -664,7 +664,7 @@ describe('gradient features VectorDrawable cannot express are reported on use', 
         }
     });
 
-    it('reports SMIL animations in a gradient, its stops or its template as unsupported-element', () => {
+    it('reports SMIL animations in a gradient, its stops or its template as unsupported-element, once per message', () => {
         const input = svg(
             '<linearGradient id="t"><animate attributeName="x2" to="0.5" dur="1s"/></linearGradient>' +
                 '<linearGradient id="g" href="#t"><set attributeName="y2" to="1"/>' +
@@ -675,7 +675,7 @@ describe('gradient features VectorDrawable cannot express are reported on use', 
             const { warnings } = convert(input, { optimize });
             expect(warnings.map((w) => [w.code, w.node])).toEqual([
                 ['unsupported-element', 'set'],
-                ['unsupported-element', 'animate'],
+                // The template's <animate> and the stop's say the same thing about "g": reported once.
                 ['unsupported-element', 'animate'],
             ]);
         }

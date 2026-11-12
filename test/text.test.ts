@@ -1,6 +1,6 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { Resvg } from '@resvg/resvg-js';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import { convert, ConversionError } from '../src/index.js';
 import { textLayout as browserTextLayout } from '../src/text-browser.js';
 import type { ConvertOptions } from '../src/types.js';
@@ -185,12 +185,20 @@ describe('<text> with the fonts option', () => {
             }
         });
 
-        it('a <tspan> declaring a non-inherited property at its initial value is drawn as plain, in both modes', () => {
+        // One test per <tspan>: each converts twice with the font, too slow for one 5 s timeout under load.
+        describe('a <tspan> declaring a non-inherited property at its initial value is drawn as plain, in both modes', () => {
             const text = (tspan: string): string =>
                 svg(`<text x="5" y="28" font-family="Quicksand">a${tspan}b</tspan> c</text>`);
-            const expected = convert(text('<tspan>'), { fonts: FONTS, optimize: false }).xml;
-            expect(expected).toContain('<path');
-            const tspans = [
+            let expected: string;
+            beforeAll(() => {
+                expected = convert(text('<tspan>'), { fonts: FONTS, optimize: false }).xml;
+            });
+
+            it('draws the plain <tspan> reference', () => {
+                expect(expected).toContain('<path');
+            });
+
+            it.each([
                 '<tspan opacity="1">',
                 '<tspan opacity="1.0">',
                 '<tspan id="b" opacity="1">', // svgo keeps a default on an element with an id
@@ -226,13 +234,13 @@ describe('<text> with the fonts option', () => {
                 '<tspan marker-mid="none">',
                 '<tspan marker-end="none">',
                 '<tspan style="marker: none">',
-            ];
-            for (const tspan of tspans)
+            ])('%s', (tspan) => {
                 for (const optimize of [true, false]) {
                     const result = convert(text(tspan), { fonts: FONTS, optimize });
-                    expect(result.warnings, `${tspan}, optimize: ${optimize}`).toEqual([]);
-                    expect(result.xml, `${tspan}, optimize: ${optimize}`).toBe(expected);
+                    expect(result.warnings, `optimize: ${optimize}`).toEqual([]);
+                    expect(result.xml, `optimize: ${optimize}`).toBe(expected);
                 }
+            });
         });
 
         it('a <tspan> restating an inherited property at its initial value, the <text> setting none, is drawn as plain, in both modes', () => {

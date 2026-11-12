@@ -1,2 +1,2 @@
-minimumReleaseAgeExclude:
-  - svg-vectordrawable@0.3.0
+# Makes this folder its own workspace root (own lockfile, independent of the repository root):
+# run a plain `pnpm install` here.

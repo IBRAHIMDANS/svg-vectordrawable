@@ -49,7 +49,8 @@ const convertInput = {
         .optional()
         .describe(
             'Severity per warning code, overriding strict: "off" drops the warning, "warn" reports it, "error" fails. ' +
-                'E.g. {"strict": true, "rules": {"opacity-approximated": "warn"}}, or {"long-path-data": "warn"} to enable that hint.',
+                'E.g. {"strict": true, "rules": {"opacity-approximated": "warn"}}. The hints "long-path-data" and ' +
+                '"invalid-path-data" are off by default: {"invalid-path-data": "warn"} enables one.',
         ),
     // `currentColor` and `colorMap` are validated by the library (its TypeError becomes a tool error):
     // a reference is emitted only when it matches @[package:]color/name or ?[package:]attr/name.

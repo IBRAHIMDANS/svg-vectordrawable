@@ -17,9 +17,10 @@ import { closedSubpathCount, enclosesArea, evenOddToNonZero } from './pathContou
 import { normalizeArcFlags, pathBBox, transformPathData } from './pathData.js';
 import { isNone, presentation } from './style.js';
 import { multiply, scaleFactor, type Matrix } from './transform.js';
-import type { AndroidColor, Warning } from './types.js';
+import type { AndroidColor } from './types.js';
 import { parseLength, VALID_UNRESOLVED_LENGTH } from './units.js';
 import { diagonal } from './viewport.js';
+import { warnOnce } from './warnOnce.js';
 
 /**
  * An SVG paint: `url(#id)` or a non-local `url(…)` (`external`), each with an optional fallback
@@ -33,7 +34,7 @@ interface Paint {
 }
 
 /** `url(…)` (quoted or not) followed by an optional fallback; svgo may drop the space before it. */
-const URL_PAINT = /^url\(\s*(?:'([^']*)'|"([^"]*)"|([^'"()\s]*))\s*\)\s*(.*)$/is;
+export const URL_PAINT = /^url\(\s*(?:'([^']*)'|"([^"]*)"|([^'"()\s]*))\s*\)\s*(.*)$/is;
 
 function parsePaint(raw: string): Paint {
     const m = URL_PAINT.exec(raw.trim());
@@ -223,24 +224,7 @@ class PathBuilder {
  * (`resolveStyle`, src/inherited.ts); one that reaches the paint code is outside a `<use>` (or in a
  * marker), or its context paint is a gradient / pattern, and cannot be resolved.
  */
-const CONTEXT_PAINT = /^context-(?:fill|stroke)$/i;
-
-/** Warnings already reported by {@link warnOnce}, per conversion (its `warn`, shared by the `ctx` copies). */
-const reported = new WeakMap<ConvertContext['warn'], Set<string>>();
-
-/**
- * Reports a warning once per code, message and conversion: a declaration inherited by several
- * painted elements, or a `<use>` instance read again, says the same thing each time (svgo, which
- * may merge those elements, would otherwise report it fewer times). Two messages stay two warnings.
- */
-export function warnOnce(ctx: Pick<ConvertContext, 'warn'>, warning: Warning): void {
-    let seen = reported.get(ctx.warn);
-    if (!seen) reported.set(ctx.warn, (seen = new Set()));
-    const key = `${warning.code}\0${warning.message}`;
-    if (seen.has(key)) return;
-    seen.add(key);
-    ctx.warn(warning);
-}
+export const CONTEXT_PAINT = /^context-(?:fill|stroke)$/i;
 
 /**
  * Reports a length that is present but cannot be resolved (`ex`, `ch`, `calc()`…), for which the
