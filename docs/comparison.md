@@ -10,8 +10,9 @@ A factual comparison of `svg-vectordrawable` with the two converters people usua
 
 Only facts verified in this repository are listed. Each section says where they come from and the
 command that reproduces it. Unless stated otherwise, the figures were measured on 2026-11-11 against
-the **published `svg-vectordrawable` 0.4.0** (npm), not against `main` or `develop`. Changes merged on
-`develop` but not released yet (changelog, _Unreleased_) are marked **unreleased**.
+the **published `svg-vectordrawable` 0.4.0** (npm), not against `main` or `develop`; the sections
+remeasured on 2026-11-12 against the **published 1.0.0** say so. Changes merged on `develop` but not
+released yet (changelog, _Unreleased_) are marked **unreleased**.
 
 ## At a glance
 
@@ -78,12 +79,14 @@ same metric as `test/visual/` (resvg, mismatch over inked pixels, < 1 % counts a
 Inputs: the test fixtures, Android-specific probes and the pinned icon corpus (9,251 icons from
 Feather, Bootstrap Icons, Heroicons and Tabler).
 
-Run of 2026-11-11, `svg-vectordrawable` **0.4.0** (npm tarball's `dist/`, harness of `develop` at
-`6755bee`), `com.android.tools:sdk-common` 32.4.1, library output with `optimize: true`:
+Run of 2026-11-12, `svg-vectordrawable` **1.0.0** (npm tarball's `dist/`, harness of `develop` at
+`4aa5f70`), `com.android.tools:sdk-common` 32.4.1, library output with `optimize: true`. Every figure
+is the same as on 0.4.0 (2026-11-11), except the fixture count: `develop` now has 19 fixtures instead
+of 10.
 
 | Input               | `svg-vectordrawable` < 1 % | Svg2Vector < 1 % | Notes                                                                                                                                                                                                            |
 | ------------------- | -------------------------- | ---------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Fixtures (10)       | 10                         | 9                | Svg2Vector ignores `stroke-dasharray` (issue #1 logo: 24.05 %)                                                                                                                                                   |
+| Fixtures (19)       | 19                         | 18               | Svg2Vector ignores `stroke-dasharray` (issue #1 logo: 24.05 %)                                                                                                                                                   |
 | Android probes (8)  | 8                          | 5                | Svg2Vector loses the elliptical radial (39.92 %), `clip-rule="evenodd"` (29.09 %) and the masks of `mask-as-clip.svg` (5.35 %, with an error in its log); the library is at 0.00 % on all three, with no warning |
 | Icon corpus (9,251) | 9,251                      | 9,251            | median and p95 mismatch 0 % for both                                                                                                                                                                             |
 
@@ -103,16 +106,17 @@ paint could still be compared. Source: `scripts/compare-svg2vector/compare.mjs` 
 Conversion time is not compared. The report prints it (column `time lib / s2v`), but it does not
 reproduce: three full runs of 0.3.0 on 2026-11-11 on the same laptop (Intel Core i7-1265U, 12 threads,
 31 GiB, Linux, Node 24.22.1, OpenJDK 21) gave a corpus total of 5.4, 10.7 and 23.1 s for the library
-and 5.3, 7.3 and 7.9 s for Svg2Vector, and the 0.4.0 run 24.6 s and 16.5 s, depending on what else the
-machine was running (load average 28 at the start of one run, 16 during the 0.4.0 run). Both stay
+and 5.3, 7.3 and 7.9 s for Svg2Vector, the 0.4.0 run 24.6 s and 16.5 s, and the 1.0.0 run 10.1 s and
+6.8 s, depending on what else the machine was running (load average 28 at the start of one run, 16
+during the 0.4.0 run). Both stay
 under 3 ms per icon on average in every run.
 
-Reproduce on 0.4.0 (`pnpm run build` instead of the `npm pack` line measures the current sources):
+Reproduce on 1.0.0 (`pnpm run build` instead of the `npm pack` line measures the current sources):
 
 ```sh
 pnpm install
-npm pack svg-vectordrawable@0.4.0 && tar -xzf svg-vectordrawable-0.4.0.tgz \
-  && rm -rf dist && mv package/dist dist && rm -rf package svg-vectordrawable-0.4.0.tgz
+npm pack svg-vectordrawable@1.0.0 && tar -xzf svg-vectordrawable-1.0.0.tgz \
+  && rm -rf dist && mv package/dist dist && rm -rf package svg-vectordrawable-1.0.0.tgz
 node scripts/corpus.mjs
 node scripts/compare-svg2vector/compare.mjs --limit 0
 ```
@@ -155,7 +159,7 @@ icons), then `lib: linked`.
 
 Facts already established by the harness (from `scripts/compare-svg2vector/README.md`; replayed on
 2026-11-11 by calling `Svg2Vector.parseSvgToXml` of `sdk-common` 32.4.1 directly and running 0.4.0
-on the same probes):
+on the same probes; same results with 1.0.0 on 2026-11-12):
 
 - Svg2Vector copies `currentColor` verbatim into `android:fillColor` / `android:strokeColor`. That is
   not a valid Android color, so such a file does not build as-is (see the `aapt2` check above).
@@ -169,7 +173,9 @@ on the same probes):
 ## How `svg-vectordrawable` itself is checked
 
 From the README (Robustness) and the changelog; every figure was remeasured on 0.4.0 on 2026-11-11
-(the Android renderer with `pnpm run validate:android`, on the 0.4.0 `dist/`):
+(the Android renderer with `pnpm run validate:android`, on the 0.4.0 `dist/`). On 1.0.0 (2026-11-12) the
+icon corpus, the Android renderer (19 fixtures and 8 probes within 0.11 %) and the issue #1 logo
+(0.17 %) give the same figures; the large-input timing was not remeasured:
 
 | Check              | What                                                                                                                                                  | Where                                          |
 | ------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------- |
@@ -189,16 +195,16 @@ like its source within the visual-test threshold. A file that converts but rende
 silent wrong render, unless resvg itself is known to render the source differently from the wpt
 reference (`KNOWN_ARTEFACTS` in the script, each entry checked against the reference).
 
-Run of 2026-11-11, `develop` at `71985ef` (**unreleased**, after 0.4.0), wpt at
-`76f5455a0a266f098dd8bd888a8a84b0cad0350d`, Node 24.22.1:
+Run of 2026-11-12, `svg-vectordrawable` **1.0.0** (npm tarball's `dist/`, harness of `develop` at
+`4aa5f70`), wpt at `76f5455a0a266f098dd8bd888a8a84b0cad0350d`, Node 24.22.1:
 
 | Figure                                                              | Value         |
 | ------------------------------------------------------------------- | ------------- |
 | Files kept (1,376 `.svg` minus text, script, references, SMIL, ...) | 226 × 2 modes |
 | Conversions                                                         | 452           |
 | Converted, render differs, not a known resvg artefact               | **0**         |
-| Converted, render differs, known resvg artefact                     | 73            |
-| Rejected (`optimize: true` / `false`)                               | 128 / 164     |
+| Converted, render differs, known resvg artefact                     | 84            |
+| Rejected (`optimize: true` / `false`)                               | 117 / 164     |
 | Converted and matching (`optimize: true` / `false`)                 | 48 / 39       |
 
 Reproduce (the script reads the built `dist/` and fetches wpt `svg/` once into a cache outside the
@@ -210,7 +216,9 @@ pnpm run validate:wpt   # = node scripts/wpt-corpus.mjs
 ```
 
 The two figures to read are the `converted+mismatch, not in KNOWN_ARTEFACTS (converter bugs)` and
-`known harness artefacts` lines of its output. To be remeasured on the 1.0.0 `dist/` at release.
+`known harness artefacts` lines of its output. Against the unreleased `develop` of 2026-11-11
+(`71985ef`), 11 more files are converted instead of rejected with `optimize: true`; each of them differs
+from its source only by a known resvg artefact (73 → 84), and no `KNOWN_ARTEFACTS` entry is stale.
 
 Limitations that apply to every converter, because VectorDrawable cannot express them, are listed in
 the README under _Known limitations_ (non-uniform `<mask>` such as a gradient mask, `<filter>`,
