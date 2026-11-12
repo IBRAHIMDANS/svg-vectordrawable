@@ -8,6 +8,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.0] - 2026-11-12
+
 The converter now warns (and `strict` rejects) where it used to draw wrong silently, matches Chrome and Firefox on edge cases, and gives the same result with `optimize: true` and `false`.
 
 - **Breaking:** Node.js 20+ is required; `strict` rejects more files (unresolvable lengths, empty path data, invalid transforms, unresolved CSS); a missing paint server without fallback is no longer painted; new code `unsupported-color-reference`; outputs that collide (even by case) fail before writing.
