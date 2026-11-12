@@ -37,12 +37,12 @@ jobs:
             - run: pnpm test
             - name: Package contents
               run: npm pack --dry-run
-            # `engines` says >= 18: rerun the end-to-end tests on the built server under Node 18
+            # `engines` says >= 20: rerun the end-to-end tests on the built server under Node 20
             # (the toolchain itself needs a recent Node, hence the switch after the build).
             - if: matrix.node-version == 22
               uses: actions/setup-node@v4
               with:
-                  node-version: 18
+                  node-version: 20
             - if: matrix.node-version == 22
-              name: End-to-end tests on Node 18
+              name: End-to-end tests on Node 20
               run: node --version && node --test test/server.e2e.mjs

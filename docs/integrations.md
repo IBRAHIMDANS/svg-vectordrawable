@@ -145,7 +145,7 @@ Gradients in VectorDrawable require API 24+, which adaptive icons (API 26+) alwa
 and no version in `plugins`. The [Gradle plugin](../integrations/gradle-plugin/README.md)
 (`id("io.github.ibrahimdans.svg-vectordrawable")`) registers a cacheable
 `convert<Variant>SvgToVectorDrawable` task per Android variant, wired before the resource merge, and
-passes the variant's `minSdk`. It runs the `svgvd` CLI, so it needs **Node.js 18+** on the `PATH` and
+passes the variant's `minSdk`. It runs the `svgvd` CLI, so it needs **Node.js 20+** on the `PATH` and
 `svg-vectordrawable` installed in the folder the CLI runs in (the root project by default). The
 `command` property changes how the CLI is started (default `npx --no-install svgvd`, `npx.cmd` on
 Windows), for instance `listOf("node", "tools/node_modules/svg-vectordrawable/dist/cli.js")`; see its
@@ -332,7 +332,7 @@ this repository does in `scripts/aapt2-validate.mjs`, or simply build the Androi
 ## MCP server
 
 **Not published yet.** The [MCP server](../integrations/mcp-server/README.md)
-(`svg-vectordrawable-mcp`, stdio, Node.js 18+) lets an AI assistant use the library. It exposes two
+(`svg-vectordrawable-mcp`, stdio, Node.js 20+) lets an AI assistant use the library. It exposes two
 tools:
 
 - `convert`: SVG markup → `{ xml, warnings, minSdk }`, with the options `strict` (`true`, `false` or
