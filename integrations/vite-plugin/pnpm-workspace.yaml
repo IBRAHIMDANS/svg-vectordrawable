@@ -1,2 +1,5 @@
 # Makes this folder its own workspace root (own lockfile, independent of the repository root):
 # run a plain `pnpm install` here.
+# svg-vectordrawable@1.0.0 is younger than pnpm's minimum release age until 2026-11-13 08:37 UTC.
+minimumReleaseAgeExclude:
+  - svg-vectordrawable@1.0.0

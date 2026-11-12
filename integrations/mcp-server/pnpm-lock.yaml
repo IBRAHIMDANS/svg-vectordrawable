@@ -12,8 +12,8 @@ importers:
         specifier: ^1.32.2
         version: 1.32.2(zod@4.6.7)
       svg-vectordrawable:
-        specifier: ^0.4.0
-        version: 0.4.0
+        specifier: ^1.0.0
+        version: 1.0.0
       zod:
         specifier: ^4.6.7
         version: 4.6.7
@@ -426,14 +426,17 @@ packages:
     resolution: {integrity: sha512-DvEy55V3DB7uknRo+4iOGT5fP1slR8wQohVdknigZPMpMstaKJQWhwiYBACJE3Ul2pTnATihhBYnRhZQHGBiRw==}
     engines: {node: '>= 0.8'}
 
-  svg-vectordrawable@0.4.0:
-    resolution: {integrity: sha512-18gVL2ZvKJ+x/fUi9x4vkUQrk7JYtoCz7dWS4KTH7w+k82ECWmL62+85eMlHygC0BHyAwHRpJpyT3TIzHkRETA==}
-    engines: {node: '>=18'}
+  svg-vectordrawable@1.0.0:
+    resolution: {integrity: sha512-bvB0lti/DtCiAUNUgfQkeBbRWpE0fFsR/TVQOw3Z5qIYfJ9Xl8t9EgMjQu1H+ok4Ftf6xZXIt1wH0su6dkMN/g==}
+    engines: {node: '>=20'}
     hasBin: true
     peerDependencies:
       '@resvg/resvg-js': ^2.6.2
+      opentype.js: ^2.0.0
     peerDependenciesMeta:
       '@resvg/resvg-js':
+        optional: true
+      opentype.js:
         optional: true
 
   svgo@4.1.0:
@@ -924,7 +927,7 @@ snapshots:
 
   statuses@2.0.2: {}
 
-  svg-vectordrawable@0.4.0:
+  svg-vectordrawable@1.0.0:
     dependencies:
       svgo: 4.1.0
 

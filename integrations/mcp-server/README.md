@@ -6,7 +6,7 @@ An [MCP](https://modelcontextprotocol.io) server (stdio) that lets an AI assista
 svgo-based: no Android SDK, no JVM), so gradients (including `gradientTransform`), clip paths and
 CSS colors are handled, and what a VectorDrawable cannot represent is reported, not silently dropped.
 
-Requires Node.js 18 or later.
+Requires Node.js 20 or later.
 
 ## Tools
 

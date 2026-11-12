@@ -42,10 +42,10 @@
         "url": "https://github.com/IBRAHIMDANS/svg-vectordrawable/issues"
     },
     "engines": {
-        "node": ">=18"
+        "node": ">=20"
     },
     "dependencies": {
-        "svg-vectordrawable": "^0.3.0"
+        "svg-vectordrawable": "^1.0.0"
     },
     "peerDependencies": {
         "vite": ">=5"
