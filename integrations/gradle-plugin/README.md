@@ -7,7 +7,7 @@ nothing changed it is `UP-TO-DATE`, and restored `FROM-CACHE` with the build cac
 
 ## Requirements
 
-- **Node.js 18+** on the `PATH` (or a custom `command`, see below), and `svg-vectordrawable` installed in
+- **Node.js 20+** on the `PATH` (or a custom `command`, see below), and `svg-vectordrawable` installed in
   the folder the CLI runs in (the root project folder by default):
 
     ```sh

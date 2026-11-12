@@ -38,11 +38,11 @@
         "url": "https://github.com/IBRAHIMDANS/svg-vectordrawable/issues"
     },
     "engines": {
-        "node": ">=18"
+        "node": ">=20"
     },
     "dependencies": {
         "@modelcontextprotocol/sdk": "^1.32.2",
-        "svg-vectordrawable": "^0.4.0",
+        "svg-vectordrawable": "^1.0.0",
         "zod": "^4.6.7"
     },
     "devDependencies": {

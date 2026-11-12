@@ -9,8 +9,8 @@ importers:
   .:
     dependencies:
       svg-vectordrawable:
-        specifier: ^0.3.0
-        version: 0.3.0
+        specifier: ^1.0.0
+        version: 1.0.0
     devDependencies:
       '@types/node':
         specifier: ^26.6.6
@@ -302,10 +302,18 @@ packages:
     resolution: {integrity: sha512-KGj/8Y43x35aZVDtt+J4mK1hoLGHULMYfSkODJNQjNDC3oW1PqPoxMwo0pLUsWM/UEGzON/NxeHywEfNXNP3Vw==}
     engines: {node: '>=0.10.0'}
 
-  svg-vectordrawable@0.3.0:
-    resolution: {integrity: sha512-mKIOB493d8NobGWpTzl+nAIZ+a+06ZIXEjKaaJuqcRTwRkvhHMk1k1fJ7EjeW/lVdAMtSmeQAuJPZj18kirPtw==}
-    engines: {node: '>=18'}
+  svg-vectordrawable@1.0.0:
+    resolution: {integrity: sha512-bvB0lti/DtCiAUNUgfQkeBbRWpE0fFsR/TVQOw3Z5qIYfJ9Xl8t9EgMjQu1H+ok4Ftf6xZXIt1wH0su6dkMN/g==}
+    engines: {node: '>=20'}
     hasBin: true
+    peerDependencies:
+      '@resvg/resvg-js': ^2.6.2
+      opentype.js: ^2.0.0
+    peerDependenciesMeta:
+      '@resvg/resvg-js':
+        optional: true
+      opentype.js:
+        optional: true
 
   svgo@4.1.0:
     resolution: {integrity: sha512-bkxnTg1kSU0guhIBmibA6UUhrQmPVA1XsQLN+ylCd+UWzbnLkySOcXpyk1mrl05f+pcaCx2eHb+sp6BgMZWX+Q==}
@@ -573,7 +581,7 @@ snapshots:
 
   source-map-js@1.2.2: {}
 
-  svg-vectordrawable@0.3.0:
+  svg-vectordrawable@1.0.0:
     dependencies:
       svgo: 4.1.0
 
