@@ -87,9 +87,11 @@ describe('normalize: convertPathData threshold', () => {
 
 describe('normalize: user svgoConfig', () => {
     it('is used as-is: mergePaths stays on for large inputs', () => {
+        // One path past MERGE_PATHS_MAX_ELEMENTS (500), where the default config turns mergePaths off.
         const svgoConfig = { plugins: ['preset-default' as const] };
-        expect(countPaths(convert(svg(grid(600)), { svgoConfig }).xml)).toBe(1);
-    });
+        expect(countPaths(convert(svg(grid(501)), { svgoConfig }).xml)).toBe(1);
+        expect(countPaths(convert(svg(grid(501))).xml)).toBe(501);
+    }, 30_000);
 
     it('is used as-is: mergePaths can be turned off for small inputs', () => {
         const svgoConfig = {
@@ -1153,6 +1155,36 @@ describe('normalize: numeric character references do not count as entities (T-16
     it('returns a source without references nor prefixes unchanged', () => {
         const source = icon('<path d="M2 2h20v20H2z"/>');
         expect(prepareSource(source)).toBe(source);
+    });
+});
+
+describe('normalize: prepareSource drops the declaration of an SVG prefix it removes', () => {
+    const NS = 'http://www.w3.org/2000/svg';
+
+    it('replaces it with a default xmlns on an element that has none', () => {
+        expect(prepareSource(`<ns0:svg xmlns:ns0="${NS}" viewBox="0 0 24 24"><ns0:path d="M2 2h9"/></ns0:svg>`)).toBe(
+            `<svg xmlns="${NS}" viewBox="0 0 24 24"><path d="M2 2h9"/></svg>`,
+        );
+    });
+
+    it('only drops it when the element already has a default xmlns', () => {
+        expect(prepareSource(`<svg xmlns="${NS}" xmlns:s="${NS}"><s:g><s:path d="M2 2h9"/></s:g></svg>`)).toBe(
+            `<svg xmlns="${NS}"><g><path d="M2 2h9"/></g></svg>`,
+        );
+    });
+
+    it('keeps it while an attribute still uses the prefix (an unbound prefix is not well-formed)', () => {
+        expect(prepareSource(`<ns0:svg xmlns:ns0="${NS}" ns0:foo="1"><ns0:path/></ns0:svg>`)).toBe(
+            `<svg xmlns:ns0="${NS}" ns0:foo="1"><path/></svg>`,
+        );
+    });
+
+    it('still renames an XLink alias next to it', () => {
+        expect(
+            prepareSource(
+                `<svg:svg xmlns:svg="${NS}" xmlns:xl="http://www.w3.org/1999/xlink"><svg:use xl:href="#p"/></svg:svg>`,
+            ),
+        ).toBe(`<svg xmlns="${NS}" xmlns:xlink="http://www.w3.org/1999/xlink"><use xlink:href="#p"/></svg>`);
     });
 });
 

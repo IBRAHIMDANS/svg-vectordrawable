@@ -74,8 +74,8 @@ function sizeRoot(root: XastRoot, scale: number, width?: number, height?: number
     const svg = root.children.find((c): c is XastElement => c.type === 'element' && c.name === 'svg');
     if (!svg) throw new Error('No <svg> root element found');
     const attrs = (svg.attributes ??= {});
-    // resvg reads namespaces, svgo and convert do not: a root whose SVG prefix prepareSource dropped
-    // (`<ns0:svg xmlns:ns0=…>`) needs the default namespace back to be found.
+    // resvg reads namespaces, svgo and convert do not: a root without any declaration (prepareSource
+    // gives a prefixed `<ns0:svg>` its default one) needs the SVG namespace to be found.
     attrs.xmlns ??= 'http://www.w3.org/2000/svg';
     // A zero or negative viewBox width or height disables rendering (SVG 2 §8.6): as convert does, an
     // empty image sized as if the viewBox were absent.

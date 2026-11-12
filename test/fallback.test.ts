@@ -126,6 +126,26 @@ describe('renderFallbackPng', () => {
         }
     });
 
+    it('reads a minified root transform-origin (`50%0`, as csso writes it) like the spaced one', () => {
+        const svg = (style: string): string =>
+            `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 12 12" width="24" height="24" transform="rotate(90)" style="${style}"><rect width="6" height="12" fill="#1A73E8"/></svg>`;
+        for (const density of ['mdpi', 'xhdpi'] as const) {
+            const spaced = renderFallbackPng(svg('transform-origin: 50% 0'), { density });
+            expect(renderFallbackPng(svg('transform-origin:50%0'), { density }), density).toEqual(spaced);
+            // Not dropped: the default origin (the center) renders otherwise.
+            expect(renderFallbackPng(svg(''), { density }), density).not.toEqual(spaced);
+        }
+    });
+
+    it('renders a root <svg> without any xmlns like one with the SVG namespace', () => {
+        const body =
+            '<rect x="2" y="4" width="20" height="16" fill="#1A73E8"/><circle cx="12" cy="12" r="5" fill="#E8711A"/>';
+        const withNs = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">${body}</svg>`;
+        const withoutNs = `<svg viewBox="0 0 24 24">${body}</svg>`;
+        for (const density of ['mdpi', 'xhdpi'] as const)
+            expect(renderFallbackPng(withoutNs, { density }), density).toEqual(renderFallbackPng(withNs, { density }));
+    });
+
     it('renders an empty image for a viewBox that disables rendering, sized as convert does', () => {
         const source =
             '<svg xmlns="http://www.w3.org/2000/svg" width="20" height="10" viewBox="0 0 0 10"><rect width="20" height="10"/></svg>';

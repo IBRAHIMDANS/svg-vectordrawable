@@ -16,7 +16,7 @@ import type { XastElement } from './ast.js';
 import { contextGradient, type RawGradient } from './gradient.js';
 import { checkGroupOpacity } from './groupOpacity.js';
 import { type ContextElement, type ContextServer, isHidden, resolveStyle, type Inherited } from './inherited.js';
-import { claimName, renderPath, warnOnce, warnUnresolvedLength } from './paint.js';
+import { claimName, renderPath, warnUnresolvedLength } from './paint.js';
 import { matrixScale, pathBBox, scaledPrecision, transformPathData } from './pathData.js';
 import { isNone, parseStyle, presentation } from './style.js';
 import {
@@ -32,6 +32,7 @@ import {
 } from './transform.js';
 import { SHAPE_NAMES, unresolvedShapeLengths } from './shapes.js';
 import { nestedLayout, unresolvedNestedLengths, type Viewport } from './viewport.js';
+import { warnOnce } from './warnOnce.js';
 
 /** Nested `<svg>` attributes consumed by its viewport mapping (not inherited by its content). */
 const VIEWPORT_ATTRS = new Set(['x', 'y', 'width', 'height', 'viewBox', 'preserveAspectRatio']);

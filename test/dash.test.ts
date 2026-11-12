@@ -361,9 +361,10 @@ describe('dash budget (MAX_DASHES)', () => {
             const [{ xml, warnings }, ms] = timed(() => convert(svg(atBudget, '1'), { optimize, strict: true }));
             expect(warnings).toEqual([]);
             expect(pathData(xml).match(/M/g)).toHaveLength(MAX_DASHES);
-            expect(ms).toBeLessThan(1000);
+            // A bound against the blow-up without MAX_DASHES, not a benchmark: ~70 ms alone.
+            expect(ms).toBeLessThan(5_000);
         }
-    });
+    }, 30_000);
 
     it('warns and falls back to the solid stroke past the budget, in bounded time', () => {
         // svgo must not round a single tiny value to "0" (= no dashes): the pattern reaches the dasher.
@@ -380,9 +381,10 @@ describe('dash budget (MAX_DASHES)', () => {
             expect(warnings[0]!.message).toContain('drawn solid');
             expect(pathData(xml)).toBe(`M0 0h${length}`);
             expect(xml).toContain('android:strokeColor="#FF000000"');
-            expect(ms).toBeLessThan(1000);
+            // A bound against the blow-up without MAX_DASHES, not a benchmark: ~70 ms alone.
+            expect(ms).toBeLessThan(5_000);
         }
-    });
+    }, 30_000);
 
     it('rejects an over-budget pattern under strict, the warning being lossy', () => {
         for (const optimize of [true, false])

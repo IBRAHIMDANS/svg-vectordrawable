@@ -3,6 +3,7 @@ import { GROUPS, isNotRendered, pathDataOf, switchChild, UNSUPPORTED } from './e
 import type { BBox, XastElement } from './ast.js';
 import { fillOf, isHidden, resolveStyle, strokeWidthOf, type Inherited } from './inherited.js';
 import { pathBBox, transformPathData } from './pathData.js';
+import { CONTEXT_PAINT, URL_PAINT } from './paint.js';
 import { parsePath } from './pathParse.js';
 import { isNone, presentation } from './style.js';
 import { IDENTITY, maxStretch, multiply, parseTransform, type Matrix } from './transform.js';
@@ -49,10 +50,6 @@ export function strokeMargin(
     const miter = join !== 'round' && join !== 'bevel' && miterLimit > 1 && hasJoin(d);
     return (width / 2) * Math.max(capFactor, miter ? miterLimit : 1) * stretch;
 }
-
-/** `url(…)` (quoted or not) and its optional fallback, as `src/paint.ts` parses a paint. */
-const URL_PAINT = /^url\(\s*(?:'([^']*)'|"([^"]*)"|([^'"()\s]*))\s*\)\s*(.*)$/is;
-const CONTEXT_PAINT = /^context-(?:fill|stroke)$/i;
 
 /**
  * True when the `fill` / `stroke` paint `raw` draws something, as `renderPath` decides it (without

@@ -334,9 +334,12 @@ describe('evenOddToNonZero', () => {
     });
 
     it('gives up (null) beyond the segment cap', () => {
-        const many = Array.from({ length: 30_000 }, (_, i) => `M${i} 0h0.5v0.5h-0.5z`).join('');
-        expect(evenOddToNonZero(many)).toBeNull();
-    });
+        // 3 flattened segments per square: 21,000, past MAX_SEGMENTS (20,000), which gives up at once;
+        // under the cap the same squares are analyzed.
+        const squares = (n: number): string => Array.from({ length: n }, (_, i) => `M${i} 0h0.5v0.5h-0.5z`).join('');
+        expect(evenOddToNonZero(squares(7_000))).toBeNull();
+        expect(evenOddToNonZero(squares(10))).not.toBeNull();
+    }, 30_000);
 });
 
 describe('windingSign / reversePathData', () => {
