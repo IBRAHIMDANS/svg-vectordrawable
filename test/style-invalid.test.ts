@@ -246,3 +246,33 @@ describe('isValidPropertyValue', () => {
         for (const v of invalid) expect(isValidPropertyValue(property, v), `${property}: ${v}`).toBe(false);
     });
 });
+
+/**
+ * T-179: a declaration that is not `<identifier>: value` (no colon, a name like `1x` or `a<b`) is
+ * invalid CSS, which a browser ignores. svgo's minifyStyles (csso, css-tree 2.2.1) used to crash on
+ * it, reported as "Invalid SVG" with `optimize: true` only.
+ */
+describe('declarations that are not identifier: value (T-179)', () => {
+    it.each([
+        'fill:red; stroke',
+        'fill:red; stroke-width 2',
+        'fill: red; 1x: 2',
+        'a&lt;b:c;fill:red',
+        '&lt;/g&gt;stroke:#0f0;fill:red',
+        'fill:red;-:1',
+    ])('%s: ignored, the rest applies, in both modes', (style) => {
+        for (const optimize of [true, false]) {
+            const { xml } = convert(svg(`<rect width="10" height="10" style="${style}"/>`), { optimize });
+            expect(xml, `optimize: ${optimize}`).toContain('android:fillColor="#FFFF0000"');
+            expect(xml).not.toContain('strokeColor');
+        }
+    });
+
+    it('cascadedStyle drops them, and keeps names that are identifiers', () => {
+        expect(cascadedStyle('fill:red; stroke')).toBe('fill:red');
+        expect(cascadedStyle('a<b:c;fill:red')).toBe('fill:red');
+        expect(cascadedStyle('fill:red;;')).toBe('fill:red;;');
+        expect(cascadedStyle('fill:red;--brand:blue;-webkit-x:1;é:1')).toBe('fill:red;--brand:blue;-webkit-x:1;é:1');
+        expect(cascadedStyle('/*c*/fill:red')).toBe('/*c*/fill:red');
+    });
+});

@@ -72,6 +72,15 @@ export function styleDeclarations(style: string | undefined): [string, string, b
     return out;
 }
 
+/** A CSS identifier, custom properties (`--x`) and escapes (`\\66 ill`) included (CSS Syntax 3 §4.3.9). */
+const IDENT = /^(?:--|-?(?:[a-z_]|[\u0080-\uffff]|\\[\s\S]))(?:[\w-]|[\u0080-\uffff]|\\[\s\S])*$/i;
+
+/**
+ * Whether a declaration name is a CSS identifier once its comments are removed: a declaration
+ * named otherwise (`1x`, `a<b`, `stroke-width 2`) is invalid, and a browser ignores it.
+ */
+const isPropertyName = (name: string): boolean => IDENT.test(name.replace(/\/\*[\s\S]*?\*\//g, '').trim());
+
 /**
  * The declarations of an inline `style` that apply, with the cascade of a single declaration block
  * (CSS 2.1 §4.2, CSS Cascade §6.4): a declaration whose value is invalid for its property is ignored
@@ -81,7 +90,8 @@ export function styleDeclarations(style: string | undefined): [string, string, b
 function cascade(style: string | undefined): Map<string, { value: string; important: boolean }> {
     const out = new Map<string, { value: string; important: boolean }>();
     for (const [name, value, important] of styleDeclarations(style)) {
-        if (!isValidPropertyValue(name, value) || (!important && out.get(name)?.important)) continue;
+        if (!isPropertyName(name) || !isValidPropertyValue(name, value)) continue;
+        if (!important && out.get(name)?.important) continue;
         out.set(name, { value, important });
     }
     return out;
@@ -103,7 +113,10 @@ export function parseStyle(style: string | undefined): Record<string, string> {
  */
 export function cascadedStyle(style: string): string {
     const applied = cascade(style);
-    if (applied.size === styleDeclarations(style).length) return style;
+    // Every non-blank declaration counts: one without a colon (`stroke`) is invalid too, and csso
+    // (svgo's minifyStyles) crashes on it, as on a name that is not an identifier (T-179).
+    const written = topLevelDeclarations(style).filter((decl) => decl.trim() !== '').length;
+    if (applied.size === written) return style;
     return [...applied]
         .map(([name, { value, important }]) => `${name}:${value}${important ? '!important' : ''}`)
         .join(';');
