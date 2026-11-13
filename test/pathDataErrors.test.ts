@@ -21,6 +21,9 @@ describe('validPathData', () => {
     });
 
     it.each([
+        // T-178: a number a float cannot hold is an error, like Firefox and Chrome draw it.
+        ['M0 0L10 0L10 10L1e39 5Z', 'M0 0L10 0L10 10'],
+        ['M0 0 L10 10 L-1e400 5', 'M0 0 L10 10'],
         ['M10 10 L20 20 L', 'M10 10 L20 20'],
         ['M10 10 L20 20 garbage', 'M10 10 L20 20'],
         ['M10,10 L20,20 L30', 'M10,10 L20,20'],

@@ -309,3 +309,39 @@ describe('CSS d property on <path> (SVG 2 §9.3.1: the declaration wins over the
         });
     }
 });
+
+/**
+ * T-178: SVG numbers are floats in browsers and in Android's PathParser. A shape whose geometry leaves
+ * the float range (~3.4e38) is not drawn, as in Firefox (Chrome clamps it); verified in Firefox 158 and
+ * Chrome 157 on 2026-11-13. Both draw up to 1e37.
+ */
+describe('geometry beyond the float range (T-178)', () => {
+    const svg = (body: string): string =>
+        `<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24">${body}</svg>`;
+
+    it.each([
+        ['circle r', '<circle cx="12" cy="12" r="1e400"/>'],
+        ['circle r above the float', '<circle cx="12" cy="12" r="1e39"/>'],
+        ['circle whose diameter overflows', '<circle cx="12" cy="12" r="2e38"/>'],
+        ['circle cx', '<circle cx="1e400" cy="12" r="5"/>'],
+        ['ellipse rx', '<ellipse cx="12" cy="12" rx="1e400" ry="5"/>'],
+        ['rect width', '<rect width="1e400" height="5"/>'],
+        ['rect width above the float', '<rect width="1e39" height="5"/>'],
+        ['line x2', '<line x1="0" y1="0" x2="1e400" y2="0" stroke="#000"/>'],
+        ['polyline point', '<polyline points="0 0 1e400 5 10 10" stroke="#000"/>'],
+    ])('%s: nothing drawn, empty-path, in both modes', (_, body) => {
+        for (const optimize of [true, false]) {
+            const { xml, warnings } = convert(svg(body), { optimize });
+            expect(xml, `optimize: ${optimize}`).not.toContain('pathData');
+            expect(warnings.map((w) => w.code)).toContain('empty-path');
+        }
+    });
+
+    it('draws a polygon up to the point that overflows', () => {
+        expect(shapeToPathData('polygon', { points: '0 0 10 0 10 10 1e400 5' })).toBe('M0,0L10,0L10,10z');
+    });
+
+    it('keeps a large geometry within the float range', () => {
+        expect(shapeToPathData('rect', { width: '1e37', height: '5' })).toBe('M0,0h1e+37v5h-1e+37z');
+    });
+});

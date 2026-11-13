@@ -8,6 +8,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+- **Fixed:** a shape or path number beyond the float range (`1e39`, `1e400`) no longer writes `Infinity` into `android:pathData` with `optimize: false`: the shape is not drawn (`empty-path`) and path data stops at that number, as in Firefox and with `optimize: true`.
+
 ## [1.0.0] - 2026-11-12
 
 The converter now warns (and `strict` rejects) where it used to draw wrong silently, matches Chrome and Firefox on edge cases, and gives the same result with `optimize: true` and `false`.

@@ -1,6 +1,7 @@
 import { fmt, toAbsolute } from './pathAbsolute.js';
 import { parsePath } from './pathParse.js';
 import { applyPoint, type Matrix } from './transform.js';
+import { inFloatRange } from './units.js';
 
 export { pathBBox } from './pathBBox.js';
 export { evenOddToNonZero, reversePathData, windingSign } from './pathContours.js';
@@ -53,7 +54,8 @@ export function validPathData(d: string): string | null {
     const readNumber = (): boolean => {
         NUMBER_RE.lastIndex = i;
         const m = NUMBER_RE.exec(d);
-        if (!m) return false;
+        // A number a float cannot hold (`1e39`, `1e400`) is an error: browsers draw up to it.
+        if (!m || !inFloatRange(Number(m[0]))) return false;
         i += m[0].length;
         return true;
     };

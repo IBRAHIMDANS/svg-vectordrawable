@@ -17,6 +17,15 @@ const UNIT_PX: Record<string, number> = {
     rem: FONT_SIZE_PX,
 };
 
+/**
+ * Largest finite single-precision float. SVG numbers are floats in browsers and in Android's
+ * `PathParser`: beyond it Firefox draws nothing (Chrome clamps), and a VectorDrawable cannot hold it.
+ */
+export const FLOAT_MAX = 3.4028234663852886e38;
+
+/** Whether `v` is a finite number a float can hold (NaN is not). */
+export const inFloatRange = (v: number): boolean => Math.abs(v) <= FLOAT_MAX;
+
 const LENGTH_RE = /^([+-]?(?:\d+\.?\d*|\.\d+)(?:e[+-]?\d+)?)([a-z]*|%)$/i;
 
 /**

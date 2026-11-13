@@ -1,5 +1,5 @@
 import { isUnresolvableCssLength, styleDeclarations } from './style.js';
-import { parseLength } from './units.js';
+import { inFloatRange, parseLength } from './units.js';
 
 type Attrs = Record<string, string>;
 
@@ -112,8 +112,20 @@ function withCssGeometry(name: string, attrs: Attrs): Attrs {
     return resolved;
 }
 
+/**
+ * Path data of a basic shape, or null when it draws nothing. A shape whose geometry (a length, or a
+ * coordinate derived from them) leaves the float range is not drawn, as in Firefox (Chrome clamps it).
+ */
 export function shapeToPathData(name: string, ownAttrs: Attrs, options: ShapeOptions = {}): string | null {
-    const attrs = withCssGeometry(name, ownAttrs);
+    const d = shapePathData(name, withCssGeometry(name, ownAttrs), options);
+    return d !== null && pathNumbersInFloatRange(d) ? d : null;
+}
+
+/** Whether every number of the path data written by {@link shapePathData} fits in a float. */
+const pathNumbersInFloatRange = (d: string): boolean =>
+    !/Infinity|NaN/.test(d) && (d.match(/[-+]?[\d.]+(?:e[-+]?\d+)?/gi) ?? []).every((v) => inFloatRange(Number(v)));
+
+function shapePathData(name: string, attrs: Attrs, options: ShapeOptions): string | null {
     const { viewport, precision = 3 } = options;
     const f = 10 ** precision;
     /** Rounds away float noise (`0.49999999999999994`); integers print unchanged. */
@@ -180,11 +192,14 @@ export function shapeToPathData(name: string, ownAttrs: Attrs, options: ShapeOpt
             return p`M${n('x1', 'x')},${n('y1', 'y')}L${n('x2', 'x')},${n('y2', 'y')}`;
         case 'polyline':
         case 'polygon': {
-            const pts = (attrs.points ?? '')
+            const all = (attrs.points ?? '')
                 .trim()
                 .split(/[\s,]+/)
                 .map(Number)
                 .filter((v) => !Number.isNaN(v));
+            // A number a float cannot hold is an error: the list is drawn up to it (SVG 2 §10.10).
+            const overflow = all.findIndex((v) => !inFloatRange(v));
+            const pts = overflow === -1 ? all : all.slice(0, overflow - (overflow % 2));
             if (pts.length < 4) return null;
             let d = `M${pts[0]},${pts[1]}`;
             for (let i = 2; i + 1 < pts.length; i += 2) d += `L${pts[i]},${pts[i + 1]}`;
