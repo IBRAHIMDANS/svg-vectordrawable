@@ -47,8 +47,8 @@ const num = fc.oneof(
 const length = fc.oneof(
     { weight: 12, arbitrary: num },
     { weight: 2, arbitrary: fc.tuple(num, fc.constantFrom('px', '%', 'em', 'pt', 'mm')).map(([n, u]) => n + u) },
-    // No `1e400` (Infinity) or value above the float range: written as is in `optimize: false` (T-178).
-    { weight: 1, arbitrary: fc.constantFrom('', 'auto', 'x', '-0', '.5') },
+    // `1e400` (Infinity) and `1e39` leave the float range: the shape draws nothing (T-178).
+    { weight: 1, arbitrary: fc.constantFrom('', 'auto', 'x', '-0', '.5', '1e400', '1e39') },
 );
 const paint = fc.constantFrom(
     'none',
