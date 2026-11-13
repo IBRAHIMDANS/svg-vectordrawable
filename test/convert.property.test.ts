@@ -26,17 +26,6 @@ const DOCUMENTED_ERRORS = [
     EXPANSION,
 ];
 
-/**
- * Known internal failures, each tracked by a task: remove the entry with the fix. T-179: a `<` in a
- * `style` value (even escaped, `style="a&lt;b:c"`) crashes csso's css-tree 2.2.1 under `optimize: true`.
- */
-const KNOWN_BUGS: ((err: unknown) => boolean)[] = [
-    (err) =>
-        err instanceof Error &&
-        err.message.startsWith('Invalid SVG: Cannot read properties of undefined') &&
-        String((err.cause as Error | undefined)?.stack).includes('css-tree'),
-];
-
 /** A conversion must not take longer than this on a document of a few dozen elements. */
 const MAX_MS = 5000;
 
@@ -105,6 +94,9 @@ const PRESENTATION: Record<string, fc.Arbitrary<string>> = {
         'opacity:.5',
         'transform:rotate(10deg)',
         'display:none',
+        // Invalid declarations a browser ignores; csso used to crash on them (T-179).
+        'fill:red; stroke',
+        'stroke-width 2;fill:blue',
     ),
     id: fc.constantFrom('a', 'b', 'shape'),
 };
@@ -224,7 +216,7 @@ function run(svg: string, opts: { optimize: boolean; strict: boolean | 'lossy' }
 
 /** True for a ConversionError, or a plain Error whose message is one `convert` documents. */
 function isDocumented(err: unknown, allowed = DOCUMENTED_ERRORS): boolean {
-    if (err instanceof ConversionError || KNOWN_BUGS.some((known) => known(err))) return true;
+    if (err instanceof ConversionError) return true;
     return err instanceof Error && err.constructor === Error && allowed.some((re) => re.test(err.message));
 }
 

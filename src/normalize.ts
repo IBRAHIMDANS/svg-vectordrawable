@@ -834,6 +834,8 @@ export function parseSvg(
     try {
         optimize(source, { ...base, plugins });
     } catch (err) {
+        // An internal failure (a bug, here or in svgo) is not the document's fault: let it surface.
+        if (err instanceof TypeError || err instanceof RangeError || err instanceof ReferenceError) throw err;
         throw new Error(`Invalid SVG: ${(err as Error).message}`, { cause: err });
     }
     if (!captured) throw new Error('Failed to parse SVG: empty document');

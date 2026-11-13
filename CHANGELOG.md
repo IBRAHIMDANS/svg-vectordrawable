@@ -8,7 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-- **Fixed:** a shape or path number beyond the float range (`1e39`, `1e400`) no longer writes `Infinity` into `android:pathData` with `optimize: false`: the shape is not drawn (`empty-path`) and path data stops at that number, as in Firefox and with `optimize: true`.
+- **Fixed:** a shape or path number beyond the float range (`1e39`, `1e400`) no longer writes `Infinity` into `android:pathData` with `optimize: false`: the shape is not drawn (`empty-path`) and path data stops at that number, as in Firefox and with `optimize: true`; an invalid `style` declaration (`stroke-width 2`, no colon) is ignored as in a browser instead of failing the default conversion with "Invalid SVG".
 
 ## [1.0.0] - 2026-11-12
 
