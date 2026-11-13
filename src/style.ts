@@ -27,12 +27,47 @@ const OPENING = new Set(['(', '[', '{']);
 const CLOSING = new Set([')', ']', '}']);
 
 /**
- * Splits a declaration list on its top-level `;` only (CSS Syntax 3 §5.4.4): one inside a block
+ * Removes the comments of a declaration list (CSS Syntax 3 §4.3.2), each replaced by a space since it
+ * separates two tokens (`1`, a comment, then `0px` is not `10px`). A comment opener inside a string or
+ * an unquoted `url(…)` is literal; a comment that is not closed runs to the end.
+ */
+function stripCssComments(style: string): string {
+    if (!style.includes('/*')) return style;
+    let out = '';
+    let quote = '';
+    let inUrl = false;
+    for (let i = 0; i < style.length; i++) {
+        const c = style[i]!;
+        if (c === '\\') {
+            out += style.slice(i, i + 2);
+            i++;
+        } else if (quote) {
+            if (c === quote || c === '\n') quote = '';
+            out += c;
+        } else if (inUrl) {
+            if (c === ')') inUrl = false;
+            out += c;
+        } else if (c === '/' && style[i + 1] === '*') {
+            const end = style.indexOf('*/', i + 2);
+            out += ' ';
+            i = end === -1 ? style.length : end + 1;
+        } else {
+            if (c === '"' || c === "'") quote = c;
+            else if (c === '(' && /url\s*$/i.test(out) && !/^\s*["']/.test(style.slice(i + 1))) inUrl = true;
+            out += c;
+        }
+    }
+    return out;
+}
+
+/**
+ * Splits a declaration list, comments removed, on its top-level `;` only (CSS Syntax 3 §5.4.4): one inside a block
  * (`url('data:…;base64,…')`, `[…]`, `{…}`) or a string (`'a;b'`, backslash escapes included) belongs
  * to the value. An unclosed block runs to the end, so the rest is one (invalid) declaration; a string
  * ends at its quote or at a newline.
  */
-function topLevelDeclarations(style: string): string[] {
+function topLevelDeclarations(source: string): string[] {
+    const style = stripCssComments(source);
     const out: string[] = [];
     let depth = 0;
     let quote = '';
@@ -76,10 +111,10 @@ export function styleDeclarations(style: string | undefined): [string, string, b
 const IDENT = /^(?:--|-?(?:[a-z_]|[\u0080-\uffff]|\\[\s\S]))(?:[\w-]|[\u0080-\uffff]|\\[\s\S])*$/i;
 
 /**
- * Whether a declaration name is a CSS identifier once its comments are removed: a declaration
- * named otherwise (`1x`, `a<b`, `stroke-width 2`) is invalid, and a browser ignores it.
+ * Whether a declaration name (comments already removed) is a CSS identifier: a declaration named
+ * otherwise (`1x`, `a<b`, `stroke-width 2`) is invalid, and a browser ignores it.
  */
-const isPropertyName = (name: string): boolean => IDENT.test(name.replace(/\/\*[\s\S]*?\*\//g, '').trim());
+const isPropertyName = (name: string): boolean => IDENT.test(name.trim());
 
 /**
  * The declarations of an inline `style` that apply, with the cascade of a single declaration block

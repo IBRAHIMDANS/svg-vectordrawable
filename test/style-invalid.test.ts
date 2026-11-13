@@ -276,3 +276,35 @@ describe('declarations that are not identifier: value (T-179)', () => {
         expect(cascadedStyle('/*c*/fill:red')).toBe('/*c*/fill:red');
     });
 });
+
+/** T-180: CSS comments in an inline `style` are removed before it is read, as by a browser and csso. */
+describe('comments in an inline style (T-180)', () => {
+    it.each([
+        ['/*c*/fill:red', 'red'],
+        ['fill/*c*/:red', 'red'],
+        ['fill:/*c*/red', 'red'],
+        ['fill:red/*c*/', 'red'],
+        ['/* fill:blue; */fill:red', 'red'],
+        ['fill:red/* not closed', 'red'],
+        // A comment separates two tokens: `re d` is not a color.
+        ['fill:/*a*/re/**/d', 'black'],
+    ])('%s: fill %s in both modes', (style, color) => {
+        const expected = color === 'red' ? '#FFFF0000' : '#FF000000';
+        for (const optimize of [true, false]) {
+            const { xml } = convert(svg(`<rect width="10" height="10" style="${style}"/>`), { optimize });
+            expect(xml, `optimize: ${optimize}`).toContain(`android:fillColor="${expected}"`);
+        }
+    });
+
+    it('keeps a comment opener inside a string or an unquoted url()', () => {
+        expect(parseStyle('fill:red;--x:"/*";stroke:blue')).toEqual({ fill: 'red', '--x': '"/*"', stroke: 'blue' });
+        expect(parseStyle('fill:url(a/*b);stroke:blue')).toEqual({ fill: 'url(a/*b)', stroke: 'blue' });
+    });
+
+    it('reads the declarations around a comment, which separates tokens', () => {
+        expect(styleDeclarations('/*a*/fill/*b*/:/*c*/red/*d*/;stroke-width:1/**/0')).toEqual([
+            ['fill', 'red', false],
+            ['stroke-width', '1 0', false],
+        ]);
+    });
+});
