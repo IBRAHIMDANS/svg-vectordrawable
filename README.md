@@ -444,7 +444,7 @@ Limits of the converter itself, some of them **not warned**:
 
 - [Migrating from `svg2vectordrawable`](docs/migration-from-svg2vectordrawable.md)
 - [Integrations](docs/integrations.md) (Node scripts, React Native icons, Gradle, Vite/webpack, CI)
-- Build plugins / MCP server: [Gradle plugin](integrations/gradle-plugin/README.md), [Vite plugin](integrations/vite-plugin/README.md), [MCP server](integrations/mcp-server/README.md), [Figma plugin](integrations/figma-plugin/README.md) (Gradle plugin submitted to the Gradle Plugin Portal, pending review; the others not published yet; [overview](docs/integrations.md#plugins-and-mcp-server))
+- Build plugins / MCP server: [Gradle plugin](integrations/gradle-plugin/README.md), [Vite plugin](integrations/vite-plugin/README.md), [MCP server](integrations/mcp-server/README.md), [Figma plugin](integrations/figma-plugin/README.md) (Gradle, Vite and MCP published; the Figma plugin not yet; [overview](docs/integrations.md#plugins-and-mcp-server))
 - [Comparison with `svg2vectordrawable` and Android Studio's Svg2Vector](docs/comparison.md)
 
 ## Questions and feedback
