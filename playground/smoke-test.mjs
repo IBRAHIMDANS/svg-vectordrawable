@@ -7,8 +7,10 @@ import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 import { Worker } from 'node:worker_threads';
 import {
+    CLI_SNIPPETS,
     buildOptions,
     createConverter,
+    describeApiLevel,
     describeError,
     describeSize,
     describeUnresolvedColors,
@@ -340,4 +342,39 @@ test('the page never parses markup as HTML and loads nothing from another origin
     for (const name of [...loaded, 'core.js', 'examples.js', 'worker.js']) {
         assert.ok(workflow.includes(`playground/${name}`), `pages.yml does not publish ${name}`);
     }
+});
+
+test('every option has a visible hint, referenced by its control (T-188)', () => {
+    const html = readFileSync(here('./index.html'), 'utf8');
+    const fieldset = html.slice(html.indexOf('<fieldset id="settings"'), html.indexOf('</fieldset>'));
+    const controls = [...fieldset.matchAll(/<(?:input|select|textarea)\b[^>]*>/g)].map((m) => m[0]);
+    assert.ok(controls.length >= 6, 'the options are found');
+    for (const control of controls) {
+        const id = /\sid="([^"]+)"/.exec(control)?.[1];
+        const describedBy = /aria-describedby="([^"]+)"/.exec(control)?.[1];
+        assert.equal(describedBy, `${id}-hint`, `${id} is described by its hint`);
+        assert.match(
+            fieldset,
+            new RegExp(`<span id="${describedBy}" class="field-hint"\\s*>\\s*\\S`),
+            `${id} has a hint`,
+        );
+    }
+});
+
+test('the guide sections exist, and the command-line card covers four package managers (T-188)', () => {
+    const html = readFileSync(here('./index.html'), 'utf8');
+    for (const id of ['use', 'coverage', 'api-note', 'cli-snippet']) assert.match(html, new RegExp(`id="${id}"`));
+    assert.ok(html.includes('href="#use"') && html.includes('href="#coverage"'), 'the nav links to the sections');
+    assert.deepEqual(Object.keys(CLI_SNIPPETS), ['npm', 'pnpm', 'yarn', 'bun']);
+    for (const [pm, snippet] of Object.entries(CLI_SNIPPETS)) {
+        assert.match(snippet, /svg-vectordrawable\n/, `${pm} installs the package`);
+        assert.match(snippet, /svgvd icons\/ -o app\/src\/main\/res\/drawable$/, `${pm} runs the CLI`);
+        assert.match(html, new RegExp(`name="pm" value="${pm}"`), `${pm} has a switch`);
+    }
+});
+
+test('describeApiLevel says what the drawable needs', () => {
+    assert.match(describeApiLevel(null), /Convert an SVG/);
+    assert.match(describeApiLevel(21), /from API 21/);
+    assert.match(describeApiLevel(24), /needs API 24.*app:srcCompat/);
 });

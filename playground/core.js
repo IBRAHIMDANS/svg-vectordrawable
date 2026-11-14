@@ -221,3 +221,24 @@ export function describeSize(xml) {
     const height = /android:height="([^"]+?)dp"/.exec(xml);
     return width && height ? `${width[1]} × ${height[1]} dp` : '';
 }
+
+/**
+ * Install and run commands of the command-line card, per package manager. `dlx` / `bunx` would run
+ * it without installing; the card shows the usual setup: a dev dependency, then the project's binary.
+ */
+export const CLI_SNIPPETS = {
+    npm: 'npm install -D svg-vectordrawable\nnpx svgvd icons/ -o app/src/main/res/drawable',
+    pnpm: 'pnpm add -D svg-vectordrawable\npnpm exec svgvd icons/ -o app/src/main/res/drawable',
+    yarn: 'yarn add -D svg-vectordrawable\nyarn svgvd icons/ -o app/src/main/res/drawable',
+    bun: 'bun add -D svg-vectordrawable\nbunx svgvd icons/ -o app/src/main/res/drawable',
+};
+
+/**
+ * What the API-level card says about a conversion's `minSdk` (the level the drawable needs; 21 is the
+ * VectorDrawable floor, 24 means gradients or `fillType`).
+ */
+export function describeApiLevel(minSdk) {
+    if (!minSdk) return 'Convert an SVG to see the API level it needs.';
+    if (minSdk <= 21) return `This drawable works from API ${minSdk} (every VectorDrawable device) with android:src.`;
+    return `This drawable needs API ${minSdk} with android:src (gradients or fill rules): use app:srcCompat below it.`;
+}

@@ -45,6 +45,8 @@
                 <span>svg-vectordrawable</span>
             </a>
             <nav aria-label="Project links">
+                <a href="#use">Use the result</a>
+                <a href="#coverage">What converts</a>
                 <a href="https://github.com/IBRAHIMDANS/svg-vectordrawable#readme">Docs</a>
                 <a href="https://github.com/IBRAHIMDANS/svg-vectordrawable">GitHub</a>
                 <a href="https://www.npmjs.com/package/svg-vectordrawable">npm</a>
@@ -63,6 +65,23 @@
                     <li>Gradients, clip-path and groups</li>
                     <li>Free and open source</li>
                 </ul>
+                <ol class="steps" aria-label="How to use this page">
+                    <li>
+                        <strong>Paste or drop an SVG</strong>
+                        <span>or pick an example under the input.</span>
+                    </li>
+                    <li>
+                        <strong>Check the warnings and the preview</strong>
+                        <span>they show what Android will draw, and what it cannot.</span>
+                    </li>
+                    <li>
+                        <strong>Download the XML into <code>res/drawable/</code></strong>
+                        <span
+                            >its file name is the resource name: <a href="#use">use it</a> as
+                            <code>@drawable/name</code>.</span
+                        >
+                    </li>
+                </ol>
             </section>
 
             <div class="workbench">
@@ -114,29 +133,49 @@
                     <legend>Options</legend>
                     <div class="field field-strict">
                         <label for="opt-strict">Strict mode</label>
-                        <select id="opt-strict" name="strict">
+                        <select id="opt-strict" aria-describedby="opt-strict-hint" name="strict">
                             <option value="off">Off: report warnings</option>
                             <option value="lossy">Lossy: fail on lossy constructs</option>
                             <option value="all">On: fail on lossy and approximations</option>
                         </select>
+                        <span id="opt-strict-hint" class="field-hint"
+                            >Off converts and lists every change. Lossy and On refuse the file instead, as a build with
+                            <code>--strict</code> does.</span
+                        >
                     </div>
                     <div class="field">
                         <label for="opt-current-color">currentColor</label>
                         <input
                             id="opt-current-color"
+                            aria-describedby="opt-current-color-hint"
                             name="currentColor"
                             type="text"
                             placeholder="#000000 or ?attr/colorOnSurface"
                         />
+                        <span id="opt-current-color-hint" class="field-hint"
+                            >What <code>currentColor</code> means. A theme attribute such as
+                            <code>?attr/colorOnSurface</code> makes the icon follow the theme.</span
+                        >
                     </div>
                     <div class="field">
                         <label for="opt-tint">Tint</label>
-                        <input id="opt-tint" name="tint" type="text" placeholder="none, e.g. #FF6200EE" />
+                        <input
+                            id="opt-tint"
+                            aria-describedby="opt-tint-hint"
+                            name="tint"
+                            type="text"
+                            placeholder="none, e.g. #FF6200EE"
+                        />
+                        <span id="opt-tint-hint" class="field-hint"
+                            >An Android color applied over the whole drawable (<code>android:tint</code>), e.g.
+                            <code>#FF6200EE</code>.</span
+                        >
                     </div>
                     <div class="field">
                         <label for="opt-float-precision">Float precision</label>
                         <input
                             id="opt-float-precision"
+                            aria-describedby="opt-float-precision-hint"
                             name="floatPrecision"
                             type="number"
                             min="0"
@@ -145,11 +184,16 @@
                             inputmode="numeric"
                             placeholder="3"
                         />
+                        <span id="opt-float-precision-hint" class="field-hint"
+                            >Decimals kept in the path data (default 3): fewer makes a smaller file, a little less
+                            exact.</span
+                        >
                     </div>
                     <div class="field">
                         <label for="opt-min-sdk">minSdk</label>
                         <input
                             id="opt-min-sdk"
+                            aria-describedby="opt-min-sdk-hint"
                             name="minSdk"
                             type="number"
                             min="1"
@@ -157,6 +201,10 @@
                             inputmode="numeric"
                             placeholder="not checked"
                         />
+                        <span id="opt-min-sdk-hint" class="field-hint"
+                            >Your app's <code>minSdk</code>: warns when the drawable needs a higher API level (gradients
+                            need 24).</span
+                        >
                     </div>
                     <div class="field field-wide">
                         <label for="opt-preview-colors">Preview colors</label>
@@ -209,6 +257,116 @@
                     <ul id="warnings" class="warnings" aria-labelledby="warnings-title"></ul>
                 </section>
             </div>
+            <p class="feedback">
+                Wrong result?
+                <a href="https://github.com/IBRAHIMDANS/svg-vectordrawable/issues/new">Report it with the SVG</a>
+                · Missing a feature?
+                <a href="https://github.com/IBRAHIMDANS/svg-vectordrawable/discussions">Ask in Discussions</a>
+            </p>
+
+            <section id="use" class="more" aria-labelledby="use-title">
+                <h2 id="use-title">Use the result in your app</h2>
+                <p class="more-lede">
+                    Save the downloaded file as
+                    <code>app/src/main/res/drawable/<span class="res-name">icon</span>.xml</code>. Android names the
+                    resource after the file: lowercase letters, digits and underscores only, which the Download button
+                    already takes care of.
+                </p>
+                <div class="cards">
+                    <article class="card">
+                        <h3>Layout XML</h3>
+                        <div class="snippet">
+                            <pre><code>&lt;ImageView
+    android:layout_width="24dp"
+    android:layout_height="24dp"
+    app:srcCompat="@drawable/<span class="res-name">icon</span>" /&gt;</code></pre>
+                            <button type="button" class="button copy-snippet">Copy</button>
+                        </div>
+                        <p>
+                            <code>app:srcCompat</code> (AppCompat) also works below API 24;
+                            <code>android:src</code> needs API 24 for gradients.
+                        </p>
+                    </article>
+                    <article class="card">
+                        <h3>Jetpack Compose</h3>
+                        <div class="snippet">
+                            <pre><code>Icon(
+    painter = painterResource(R.drawable.<span class="res-name">icon</span>),
+    contentDescription = null,
+)</code></pre>
+                            <button type="button" class="button copy-snippet">Copy</button>
+                        </div>
+                        <p>
+                            <code>Icon</code> tints the drawable with the content color; use <code>Image</code> to keep
+                            its own colors.
+                        </p>
+                    </article>
+                    <article class="card">
+                        <h3>API level</h3>
+                        <p id="api-note" class="api-note">Convert an SVG to see the API level it needs.</p>
+                        <p>
+                            Below API 24, gradients need AppCompat:
+                            <code>vectorDrawables.useSupportLibrary = true</code> in <code>build.gradle</code>, and
+                            <code>app:srcCompat</code> in layouts. Set <strong>minSdk</strong> in the options to get a
+                            warning.
+                        </p>
+                    </article>
+                </div>
+            </section>
+
+            <section id="coverage" class="more" aria-labelledby="coverage-title">
+                <h2 id="coverage-title">What converts</h2>
+                <p class="more-lede">
+                    A VectorDrawable cannot draw everything an SVG can. Nothing is dropped silently: whatever is not
+                    converted exactly shows up in the warnings.
+                </p>
+                <div class="coverage">
+                    <article class="coverage-col" data-kind="exact">
+                        <h3>Converted exactly</h3>
+                        <ul>
+                            <li>Paths and shapes, fills and strokes (caps, joins, even-odd)</li>
+                            <li>Groups and transforms; skew is baked into the geometry</li>
+                            <li>Linear and radial gradients, <code>gradientTransform</code> included</li>
+                            <li><code>clip-path</code>, <code>&lt;use&gt;</code> and <code>&lt;symbol&gt;</code></li>
+                            <li>Dashed strokes, drawn as dash segments</li>
+                            <li>
+                                Colors (<code>hsl()</code>, named, <code>currentColor</code>), opacity,
+                                <code>viewBox</code>
+                            </li>
+                        </ul>
+                    </article>
+                    <article class="coverage-col" data-kind="approximation">
+                        <h3>Approximated, with a warning</h3>
+                        <ul>
+                            <li>Opacity of a group whose children overlap</li>
+                            <li>Masks: converted to a clip when they are one, otherwise warned</li>
+                            <li>Focal point of a radial gradient (<code>fx</code> / <code>fy</code>)</li>
+                        </ul>
+                    </article>
+                    <article class="coverage-col" data-kind="lossy">
+                        <h3>Not possible in a VectorDrawable</h3>
+                        <ul>
+                            <li>
+                                <code>&lt;filter&gt;</code>, <code>&lt;image&gt;</code>, <code>&lt;pattern&gt;</code>,
+                                blend modes
+                            </li>
+                            <li>
+                                <code>&lt;text&gt;</code> on this page (the package draws simple text from a font file)
+                            </li>
+                            <li>
+                                For those, the command line can write a PNG instead:
+                                <a href="https://github.com/IBRAHIMDANS/svg-vectordrawable#png-fallback"
+                                    ><code>--fallback-png</code></a
+                                >
+                            </li>
+                        </ul>
+                    </article>
+                </div>
+                <p class="more-note">
+                    This page uses the lightweight build: <code>&lt;style&gt;</code> rules are not applied here, they
+                    are by the package (an inline <code>style="…"</code> works in both).
+                </p>
+            </section>
 
             <section class="more" aria-labelledby="more-title">
                 <h2 id="more-title">Use it in your build</h2>
@@ -219,8 +377,14 @@
                 <div class="cards">
                     <article class="card">
                         <h3>Command line</h3>
+                        <div class="segmented pm-switch" role="radiogroup" aria-label="Package manager">
+                            <label><input type="radio" name="pm" value="npm" checked /><span>npm</span></label>
+                            <label><input type="radio" name="pm" value="pnpm" /><span>pnpm</span></label>
+                            <label><input type="radio" name="pm" value="yarn" /><span>Yarn</span></label>
+                            <label><input type="radio" name="pm" value="bun" /><span>Bun</span></label>
+                        </div>
                         <div class="snippet">
-                            <pre><code>npm i -D svg-vectordrawable
+                            <pre><code id="cli-snippet">npm install -D svg-vectordrawable
 npx svgvd icons/ -o app/src/main/res/drawable</code></pre>
                             <button type="button" class="button copy-snippet">Copy</button>
                         </div>

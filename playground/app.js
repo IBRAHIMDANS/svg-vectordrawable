@@ -5,8 +5,10 @@
 import {
     MAX_HIGHLIGHT_CHARS,
     MAX_INPUT_BYTES,
+    CLI_SNIPPETS,
     buildOptions,
     createConverter,
+    describeApiLevel,
     describeError,
     describeSize,
     describeUnresolvedColors,
@@ -46,6 +48,9 @@ const el = {
     previews: document.getElementById('previews'),
     sourcePreview: document.getElementById('source-preview'),
     vdPreview: document.getElementById('vd-preview'),
+    apiNote: document.getElementById('api-note'),
+    cliSnippet: document.getElementById('cli-snippet'),
+    resNames: document.querySelectorAll('.res-name'),
 };
 
 // Lists the color references the drawable preview drew in gray; built here, under both previews
@@ -184,6 +189,7 @@ function resetOutput(warningsText) {
     el.warningsCount.hidden = true;
     setPreview(el.vdPreview, null, '', 'No drawable yet.');
     renderUnresolvedColors([]);
+    el.apiNote.textContent = describeApiLevel(null);
 }
 
 function render(outcome) {
@@ -205,6 +211,7 @@ function render(outcome) {
             `No preview: ${outcome.previewError || 'unknown error'}`,
         );
         renderUnresolvedColors(outcome.unresolvedColors);
+        el.apiNote.textContent = describeApiLevel(outcome.minSdk);
         return;
     }
     resetOutput('No drawable: see the error under the XML pane.');
@@ -249,6 +256,9 @@ function schedule(delay = DEBOUNCE_MS) {
 function setInput(svg, name = '', exampleId = '') {
     el.input.value = svg;
     sourceName = name;
+    // The "Use the result" snippets name the resource the Download button writes.
+    const resource = resourceFileName(sourceName).replace(/\.xml$/, '');
+    for (const span of el.resNames) span.textContent = resource;
     for (const chip of el.examples.children) chip.setAttribute('aria-pressed', String(chip.dataset.id === exampleId));
     schedule(0);
 }
@@ -320,6 +330,30 @@ el.fileInput.addEventListener('change', () => {
 el.previewColorsLink.addEventListener('click', focusPreviewColors);
 el.copyButton.addEventListener('click', copyXml);
 el.downloadButton.addEventListener('click', downloadXml);
+
+// Command-line card: the commands of the chosen package manager, remembered for the next visit.
+const PM_KEY = 'svgvd-playground-pm';
+function showPackageManager(pm) {
+    if (!Object.hasOwn(CLI_SNIPPETS, pm)) return;
+    el.cliSnippet.textContent = CLI_SNIPPETS[pm];
+    const radio = document.querySelector(`input[name="pm"][value="${pm}"]`);
+    if (radio) radio.checked = true;
+}
+for (const radio of document.querySelectorAll('input[name="pm"]')) {
+    radio.addEventListener('change', () => {
+        showPackageManager(radio.value);
+        try {
+            localStorage.setItem(PM_KEY, radio.value);
+        } catch {
+            // Storage blocked (private window): the choice only lasts for this visit.
+        }
+    });
+}
+try {
+    showPackageManager(localStorage.getItem(PM_KEY) ?? 'npm');
+} catch {
+    showPackageManager('npm');
+}
 
 for (const radio of document.querySelectorAll('input[name="preview-bg"]')) {
     radio.addEventListener('change', () => (el.previews.dataset.bg = radio.value));
