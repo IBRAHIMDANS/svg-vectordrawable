@@ -709,18 +709,17 @@ export function renderPath(
     const pathData = bake ? transformPathData(d, bake) : roundPathNumbers(normalizeArcFlags(d), ctx.precision);
     const usedGradient = ctx.usesGradient;
     const path = new PathBuilder(ctx, pathData, style, pad, bake, pathData, d);
-    // A fill of a geometry without area (a line, a flat polyline) covers nothing: beside a painted
-    // stroke it is neither emitted nor reported (no empty fill path, no fillColor on the stroke path).
-    // A flat path with only a fill is left as is, emitted after the stroke is known.
+    // A fill of a geometry without area (a line, a flat polyline) covers nothing: it is neither
+    // emitted nor reported, so a flat path with only a fill paints nothing and is dropped, as a
+    // browser draws nothing for it (T-184).
     const flat = !enclosesArea(pathData);
-    let fillPainted = !flat && emitFill(ctx, path, style);
+    const fillPainted = !flat && emitFill(ctx, path, style);
     const paint = resolveStroke(ctx, style);
     const strokeWidth = paint ? strokeWidthAttr(ctx, style, bake) : undefined;
     // A zero width (rounded to zero included) draws nothing in SVG, a hairline on Android.
     const stroke = strokeWidth === '0' ? null : paint;
     const dashed = stroke ? dashedPathData(ctx, d, el, style, bake) : undefined;
     const strokePainted = stroke !== null && dashed !== '';
-    if (flat && !strokePainted) fillPainted = emitFill(ctx, path, style);
     // A dashed stroke gets its own path: the fill keeps the original geometry.
     const strokePath = dashed ? new PathBuilder(ctx, dashed, style, pad, bake, pathData) : path;
     // An exact elliptical radial fill transforms its path's space: only without a stroke on that path.

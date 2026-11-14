@@ -963,8 +963,16 @@ describe('a fill without area beside a painted stroke is not emitted (T-157)', (
         }
     });
 
-    it('a flat path with only a fill is left as is', () => {
-        const { xml } = convert(svg('<path d="M0 0h5"/>'), { optimize: false });
-        expect(xml).toContain('fillColor="#FF000000"');
-    });
+    // T-184: it paints nothing (a browser draws nothing for it either), so nothing is written, without a
+    // warning, in both modes; tabler's filled/chess-bishop.svg has one (`M12 5v1`).
+    it.each(['<path d="M0 0h5"/>', '<path d="M12 5v1"/>', '<line x1="0" y1="0" x2="5" y2="5"/>'])(
+        'a flat %s with only a fill is not written',
+        (body) => {
+            for (const optimize of [true, false]) {
+                const { xml, warnings } = convert(svg(body + '<rect width="4" height="4"/>'), { optimize });
+                expect(paths(xml), `optimize: ${optimize}`).toHaveLength(1);
+                expect(warnings).toEqual([]);
+            }
+        },
+    );
 });

@@ -8,6 +8,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+- **Fixed:** a path without area and with only a fill (a line, `M12 5v1`), which draws nothing, is no longer written to the drawable; the position of an XML parse error (`<input>:line:col`) is the one in your file, also after character references (`&#233;`) or a dropped SVG prefix.
+
 ## [1.1.0] - 2026-11-14
 
 Existing VectorDrawables are now an input too, the preview draws trimmed strokes, and every warning is explained with how to fix it.

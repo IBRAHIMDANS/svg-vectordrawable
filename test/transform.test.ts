@@ -216,7 +216,9 @@ describe('large scale keeps the decimals of the scaled content', () => {
     it('adds ceil(log10(scale)) decimals to the content only (optimize: false)', () => {
         const pathData = (transform: string): string | undefined =>
             /pathData="([^"]*)"/.exec(
-                convert(svg(`<g transform="${transform}"><path d="M0.123456789 1h1z"/></g>`), { optimize: false }).xml,
+                convert(svg(`<g transform="${transform}"><path d="M0.123456789 1h1z" stroke="#000"/></g>`), {
+                    optimize: false,
+                }).xml,
             )?.[1];
         expect(pathData('scale(1000)')).toBe('M0.123457 1h1z');
         expect(pathData('scale(10 -100)')).toBe('M0.12346 1h1z');
@@ -228,8 +230,9 @@ describe('large scale keeps the decimals of the scaled content', () => {
         expect(pathData('rotate(45)')).toBe('M0.123 1h1z');
         // The group's own translation lives in the parent's space.
         expect(
-            convert(svg('<g transform="translate(1.23456 0) scale(1000)"><path d="M0 0h1z"/></g>'), { optimize: false })
-                .xml,
+            convert(svg('<g transform="translate(1.23456 0) scale(1000)"><path d="M0 0h1z" stroke="#000"/></g>'), {
+                optimize: false,
+            }).xml,
         ).toContain('android:translateX="1.235"');
     });
 

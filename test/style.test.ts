@@ -1076,14 +1076,16 @@ describe('CSS d: path() string (movetos alone, CSS escapes)', () => {
                 },
             );
 
-            it.each([String.raw`path('M0 0\68 5')`, String.raw`path("M0 0\000068 5")`, String.raw`path('M0\ 0h5')`])(
-                'decodes the CSS escapes of %s (Chrome: M 0 0 H 5)',
-                (value) => {
-                    const { xml, warnings } = convert(withCss(value), { optimize, strict: true });
-                    expect(warnings).toEqual([]);
-                    expect(pathData(xml)[0]).toBe('M0 0h5');
-                },
-            );
+            // Closed shapes: a flat path with only a fill is not written (T-184).
+            it.each([
+                String.raw`path('M0 0\68 5v5z')`,
+                String.raw`path("M0 0\000068 5v5z")`,
+                String.raw`path('M0\ 0h5v5z')`,
+            ])('decodes the CSS escapes of %s (Chrome: M 0 0 H 5 V 5 Z)', (value) => {
+                const { xml, warnings } = convert(withCss(value), { optimize, strict: true });
+                expect(warnings).toEqual([]);
+                expect(pathData(xml)[0]).toBe('M0 0h5v5z');
+            });
 
             it.each([
                 `path('M0 0 H20 Z X 5')`,
@@ -1097,10 +1099,10 @@ describe('CSS d: path() string (movetos alone, CSS escapes)', () => {
                 expect(pathData(xml)[0]).toBe(square);
             });
 
-            it(String.raw`reads path('M0 0\zz') as M0 0zz, a valid string (Chrome: M 0 0 Z Z)`, () => {
-                const { xml, warnings } = convert(withCss(String.raw`path('M0 0\zz')`), { optimize });
+            it(String.raw`reads path('M0 0h5v5\zz') as M0 0h5v5zz, a valid string (Chrome: M 0 0 H 5 V 5 Z Z)`, () => {
+                const { xml, warnings } = convert(withCss(String.raw`path('M0 0h5v5\zz')`), { optimize });
                 expect(warnings).toEqual([]);
-                expect(pathData(xml)[0]).toBe('M0 0zz');
+                expect(pathData(xml)[0]).toBe('M0 0h5v5zz');
             });
         });
     }

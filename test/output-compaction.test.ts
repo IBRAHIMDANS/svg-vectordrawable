@@ -121,7 +121,8 @@ describe('invisible drawables are dropped', () => {
 
 describe('raw pathData is rounded to floatPrecision with optimize:false', () => {
     const pathData = (d: string, floatPrecision?: number): string => {
-        const { xml } = convert(svg(`<path d="${d}"/>`), {
+        // Stroked: a path without area and only a fill would not be written (T-184).
+        const { xml } = convert(svg(`<path d="${d}" stroke="#000"/>`), {
             optimize: false,
             ...(floatPrecision === undefined ? {} : { floatPrecision }),
         });

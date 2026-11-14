@@ -240,10 +240,12 @@ describe('CSS d property on <path> (SVG 2 §9.3.1: the declaration wins over the
             expect(result.mismatch).toBeLessThan(DEFAULT_MAX_MISMATCH);
         });
 
-        it('optimize: false (the inline style applies; the <style> rule is reported)', () => {
+        it('optimize: false (the <style> rule is reported; without its stroke nothing is drawn)', () => {
             const { xml, warnings } = convert(svg, { optimize: false });
             expect(warnings.map((w) => w.code)).toEqual(['unsupported-style']);
-            expect(pathsOf(xml)[1]).toBe('M 20 80 h 70');
+            // The stroke comes from the <style> rule: unapplied, both lines are fills without area,
+            // which draw nothing and are not written (T-184).
+            expect(pathsOf(xml)).toEqual([]);
             expect(() => convert(svg, { optimize: false, strict: true })).toThrow();
         });
     });
@@ -270,15 +272,15 @@ describe('CSS d property on <path> (SVG 2 §9.3.1: the declaration wins over the
 
             it('keeps the last valid declaration, !important over normal ones', () => {
                 const pick = (style: string) => pathsOf(run(`<path d="${square}" style="${style}"/>`).xml);
-                expect(pick(`d:path('M1 1h5');d:path('M2 2h5')`)).toEqual(['M2 2h5']);
-                expect(pick(`d:path('M1 1h5') !important;d:path('M2 2h5')`)).toEqual(['M1 1h5']);
-                expect(pick(`D: PATH(&quot;M1 1h5&quot;)`)).toEqual(['M1 1h5']);
+                expect(pick(`d:path('M1 1h5v5z');d:path('M2 2h5v5z')`)).toEqual(['M2 2h5v5z']);
+                expect(pick(`d:path('M1 1h5v5z') !important;d:path('M2 2h5v5z')`)).toEqual(['M1 1h5v5z']);
+                expect(pick(`D: PATH(&quot;M1 1h5v5z&quot;)`)).toEqual(['M1 1h5v5z']);
                 // Invalid declarations are ignored: the previous one, then the attribute, applies
                 // (with optimize: true, the cascade runs before svgo's minifyStyles merges them).
-                expect(pick(`d:path('M1 1h5');d:path('M2 2 L')`)).toEqual(['M1 1h5']);
-                expect(pick(`d:path('M1 1h5');d:bogus`)).toEqual(['M1 1h5']);
+                expect(pick(`d:path('M1 1h5v5z');d:path('M2 2 L')`)).toEqual(['M1 1h5v5z']);
+                expect(pick(`d:path('M1 1h5v5z');d:bogus`)).toEqual(['M1 1h5v5z']);
                 expect(pick(`d:url(#a)`).length).toBe(1);
-                expect(pick(`d:path(evenodd, 'M1 1h5')`).length).toBe(1);
+                expect(pick(`d:path(evenodd, 'M1 1h5v5z')`).length).toBe(1);
             });
 
             it('leaves the property to <path>: a <rect> stays a rect (svgo convertShapeToPath kept off)', () => {
@@ -408,7 +410,9 @@ describe('polygon / polyline points in error or with an odd count (T-182)', () =
                 ] as const) {
                     const { xml, warnings } = convert(svg(el, points, paint), { optimize });
                     const where = `${el} ${label}, optimize: ${optimize}`;
-                    expect(pathDataOf(xml), where).toEqual([open(d)]);
+                    // Two points draw a line: filled only, it has no area and is not written (T-184).
+                    const flatFill = label === 'filled' && points === '0 0 10 0 10';
+                    expect(pathDataOf(xml), where).toEqual(flatFill ? [] : [open(d)]);
                     expect(warnings, where).toEqual([]);
                 }
             }
