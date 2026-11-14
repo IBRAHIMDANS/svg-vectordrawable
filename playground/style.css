@@ -508,10 +508,12 @@ textarea.code-area::placeholder {
 
 /* ---------- Options ---------- */
 
+/* Flex rather than grid: the short fields share a row at any width, without the empty column a grid
+   track would leave next to them, and the wide field takes a row of its own below them. */
 .options {
-    display: grid;
+    display: flex;
+    flex-wrap: wrap;
     gap: 12px;
-    grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
     min-width: 0;
     margin: 0;
     padding: 6px 16px 14px;
@@ -529,8 +531,21 @@ textarea.code-area::placeholder {
 
 .field {
     display: grid;
+    flex: 1 1 170px;
+    align-content: start;
     gap: 4px;
     min-width: 0;
+}
+
+/* Preview colors: pairs such as `?attr/colorControlNormal=#FF6750A4` are long, so the field spans the
+   whole options width and wraps instead of scrolling sideways. */
+.field-wide {
+    flex-basis: 100%;
+}
+
+.field-hint {
+    color: var(--muted);
+    font-size: 0.8rem;
 }
 
 .field label {
@@ -540,7 +555,8 @@ textarea.code-area::placeholder {
 }
 
 .field input,
-.field select {
+.field select,
+.field textarea {
     width: 100%;
     min-height: 36px;
     padding: 5px 9px;
@@ -550,6 +566,17 @@ textarea.code-area::placeholder {
     color: inherit;
     font: inherit;
     font-size: 0.9rem;
+}
+
+.field textarea {
+    font-family: var(--mono);
+    font-size: 0.85rem;
+    line-height: 1.5;
+    resize: vertical;
+}
+
+.field textarea::placeholder {
+    color: var(--muted);
 }
 
 /* ---------- Preview ---------- */
@@ -625,6 +652,23 @@ textarea.code-area::placeholder {
     display: inline-block;
     max-width: 100%;
     word-break: break-all;
+}
+
+/* "Set preview colors": a link-looking button that takes the user to the field the note is about. */
+.link-button {
+    display: inline;
+    padding: 0;
+    border: 0;
+    background: none;
+    color: var(--accent);
+    font: inherit;
+    text-decoration: underline;
+    text-underline-offset: 3px;
+    cursor: pointer;
+}
+
+.link-button:hover {
+    color: var(--accent-strong);
 }
 
 /* ---------- Warnings ---------- */
