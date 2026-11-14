@@ -18,6 +18,10 @@
 //   build/render/reference/<name>.svg            that reference SVG, for inspection
 //   build/render/fixtures.tsv                    name, width, height, kind, source, note
 //
+// layoutlib is not a reference for every case: it is the hwui of one release. Its 16.2.3 draws only
+// [0, e] of a trim window that wraps past the start of a path (Android 16 QPR2 bug,
+// https://issuetracker.google.com/issues/585623232), where earlier releases draw [s, 1] and [0, e].
+//
 // Two deliberately broken drawables (kind `broken`) are added: compare.mjs requires them to FAIL,
 // proving the comparison actually detects a wrong Android render.
 

@@ -963,8 +963,39 @@ describe('a fill without area beside a painted stroke is not emitted (T-157)', (
         }
     });
 
-    it('a flat path with only a fill is left as is', () => {
-        const { xml } = convert(svg('<path d="M0 0h5"/>'), { optimize: false });
-        expect(xml).toContain('fillColor="#FF000000"');
+    // T-184: it paints nothing (a browser draws nothing for it either), so nothing is written, without a
+    // warning, in both modes; tabler's filled/chess-bishop.svg has one (`M12 5v1`).
+    it.each(['<path d="M0 0h5"/>', '<path d="M12 5v1"/>', '<line x1="0" y1="0" x2="5" y2="5"/>'])(
+        'a flat %s with only a fill is not written',
+        (body) => {
+            for (const optimize of [true, false]) {
+                const { xml, warnings } = convert(svg(body + '<rect width="4" height="4"/>'), { optimize });
+                expect(paths(xml), `optimize: ${optimize}`).toHaveLength(1);
+                expect(warnings).toEqual([]);
+            }
+        },
+    );
+
+    // Collinear up to rounding only: relative steps that do not add up exactly are still a line.
+    it('a collinear polyline written with relative decimal steps is still flat', () => {
+        for (const optimize of [true, false]) {
+            const { xml } = convert(svg('<path d="M0 0l1.1 1.1l2.2 2.2l0.3 0.3z"/><rect width="4" height="4"/>'), {
+                optimize,
+            });
+            expect(paths(xml), `optimize: ${optimize}`).toHaveLength(1);
+        }
+    });
+
+    // T-189: flatness is not relative to the length. A strip 1e15 long and 24 high covers the viewport in
+    // Chrome, Firefox and layoutlib; it was dropped without a warning (fill only, or fill and stroke).
+    it.each([
+        ['fill only', ''],
+        ['fill and stroke', ' stroke="#00f"'],
+    ])('a long thin filled strip is written (%s)', (_, stroke) => {
+        for (const optimize of [true, false]) {
+            const { xml, warnings } = convert(svg(`<path d="M0 0H1e15V24H0Z"${stroke}/>`), { optimize });
+            expect(xml, `optimize: ${optimize}`).toContain('android:fillColor');
+            expect(warnings).toEqual([]);
+        }
     });
 });

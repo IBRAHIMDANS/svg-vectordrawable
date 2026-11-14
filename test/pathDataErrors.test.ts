@@ -74,9 +74,12 @@ describe('convert: path data in error', () => {
             ['garbage after valid segments', 'M10 10 L20 20 garbage', 'M10 10 L20 20'],
             ['missing number at the end', 'M10,10 L20,20 L30', 'M10,10 L20,20'],
         ])('draws the valid prefix (%s)', (_, d, prefix) => {
-            const r = convert(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="${d}"/></svg>`, {
-                optimize,
-            });
+            const r = convert(
+                `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="${d}" stroke="#000"/></svg>`,
+                {
+                    optimize,
+                },
+            );
             // The segment 10,10 → 20,20 only, as each mode spells it (svgo rewrites it relative).
             expect(pathData(r.xml)).toEqual([optimize ? 'm10 10 10 10' : prefix]);
             expect(codes(r)).toEqual([]);
@@ -106,7 +109,7 @@ describe('convert: path data in error', () => {
         });
 
         it('keeps the next shape after a path cut after a closepath (no merge)', () => {
-            const r = convert(svg('M0 0 L5 5 Z 10 10'), { optimize });
+            const r = convert(svg('M0 0 L5 5 L0 5 Z 10 10'), { optimize });
             expect(pathData(r.xml)).toHaveLength(2);
             expect(pathData(r.xml)[1]).toMatch(/^M0[ ,]0h1v1/);
             expect(codes(r)).toEqual([]);
@@ -121,7 +124,7 @@ describe('convert: path data in error', () => {
 
     it('cuts numbers after a closepath (parsePath would loop forever on them)', () => {
         const r = convert(
-            '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M0 0 L5 5 Z 10 10"/></svg>',
+            '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M0 0 L5 5 Z 10 10" stroke="#000"/></svg>',
             { optimize: false },
         );
         expect(pathData(r.xml)).toEqual(['M0 0 L5 5 Z']);

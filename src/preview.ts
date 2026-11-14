@@ -296,6 +296,11 @@ function paintOf(path: XmlNode, key: 'fillColor' | 'strokeColor', ctx: Ctx): Svg
  * start = end draws nothing; otherwise s = (start + offset) mod 1, e = (end + offset) mod 1 (sign
  * kept, as C `fmod`), clamped to [0, 1]; s > e wraps: [s, 1] then [0, e]. `PathMeasure` measures only
  * the first contour, so the trimmed path never contains the other contours.
+ *
+ * Android 16 QPR2 draws only [0, e] of a wrapping window: its Skia `getSegment(SkPath*)` replaces the
+ * path instead of appending to it, so the second call of `applyTrim` drops [s, 1] (layoutlib 16.2.3
+ * too). The preview keeps the documented behaviour, that of every earlier release (T-190, reported as
+ * https://issuetracker.google.com/issues/585623232).
  */
 function trimWindow(a: Record<string, string>): [number, number][] | null {
     const start = num(a, 'trimPathStart', 0);

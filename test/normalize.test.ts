@@ -185,7 +185,7 @@ describe('normalize: rotate / skew angles keep their decimals (svgo convertTrans
 
 describe('convert() forwards floatPrecision to svgo', () => {
     const input =
-        '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M2.123456 2L10.987654 3.333333z"/></svg>';
+        '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M2.123456 2L10.987654 3.333333z" stroke="#000"/></svg>';
 
     it('keeps 6 decimals with optimize: true', () => {
         expect(convert(input, { floatPrecision: 6 }).xml).toContain('2.123456');
@@ -1238,5 +1238,39 @@ describe('normalize: an id targeted by a <style> rule and referenced survives in
             convert(icon(`${STYLE}${RECT}<path d="M0 0h1v1z"/>`), { optimize: true }).xml,
         );
         expect(convert(without, { optimize: true }).xml).toBe(convert(red, { optimize: true }).xml);
+    });
+});
+
+/**
+ * T-185: prepareSource decodes numeric references and drops SVG prefixes before parsing, which
+ * shortens lines; a parse error is reported at its place in the original source. The parser points
+ * at the `>` closing the tag in error (`</svg>` at column 44 is reported at 49).
+ */
+describe('parse error positions refer to the original source (T-185)', () => {
+    const errorOf = (svg: string, optimize: boolean): string => {
+        try {
+            convert(svg, { optimize });
+        } catch (err) {
+            return (err as Error).message;
+        }
+        throw new Error('expected a parse error');
+    };
+    const NS = 'xmlns="http://www.w3.org/2000/svg"';
+
+    it.each([
+        ['no rewrite', `<svg ${NS}><g></svg>`, '1:49'],
+        ['decoded references before the error', `<svg ${NS}><title>&#x41;&#65;&amp;</title><g></svg>`, '1:80'],
+        ['on a later line', `<svg ${NS}>\n<title>&#x1F600;&#233;&#233;</title>\n  <g>\n</svg>`, '4:6'],
+        [
+            'in a tag whose SVG prefix is dropped',
+            '<ns0:svg xmlns:ns0="http://www.w3.org/2000/svg"><ns0:g></ns0:svg>',
+            '1:65',
+        ],
+    ])('%s', (_, svg, position) => {
+        for (const optimize of [true, false]) {
+            expect(errorOf(svg, optimize), `optimize: ${optimize}`).toBe(
+                `Invalid SVG: <input>:${position}: Unexpected close tag`,
+            );
+        }
     });
 });

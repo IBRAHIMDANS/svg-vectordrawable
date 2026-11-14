@@ -323,21 +323,33 @@ function flattenContour(c: Contour, tol: number): number[] {
     return out;
 }
 
-/** Whether every vertex of a polyline lies on one line (relative tolerance): it encloses no area. */
+/**
+ * Whether every vertex of a polyline lies on one line: it encloses no area. The tolerance only absorbs
+ * rounding (a few ulps of the largest coordinate), not a thin shape: a 1e15 × 24 strip covers the
+ * viewport in a browser and must not be dropped (T-189). When in doubt the polyline is not flat: a
+ * path written for nothing costs some XML, a dropped one is a wrong render.
+ */
 function isFlat(poly: number[]): boolean {
     const [x0, y0] = [poly[0]!, poly[1]!];
     let fx = 0;
     let fy = 0;
     let len = 0;
-    for (let i = 2; i < poly.length; i += 2) {
+    let magnitude = 0;
+    for (let i = 0; i < poly.length; i += 2) {
+        magnitude = Math.max(magnitude, Math.abs(poly[i]!), Math.abs(poly[i + 1]!));
         const l = Math.hypot(poly[i]! - x0, poly[i + 1]! - y0);
         if (l > len) [fx, fy, len] = [poly[i]! - x0, poly[i + 1]! - y0, l];
     }
     if (len === 0) return true;
+    // Distance of a vertex to the line = |cross| / len; rounding moves a vertex by ~ε × magnitude.
+    const tolerance = FLAT_ULPS * Number.EPSILON * magnitude * len;
     for (let i = 2; i < poly.length; i += 2)
-        if (Math.abs(fx * (poly[i + 1]! - y0) - fy * (poly[i]! - x0)) > 1e-9 * len * len) return false;
+        if (Math.abs(fx * (poly[i + 1]! - y0) - fy * (poly[i]! - x0)) > tolerance) return false;
     return true;
 }
+
+/** Rounding allowance of `isFlat`, in ulps of the largest coordinate (relative commands accumulate a few). */
+const FLAT_ULPS = 64;
 
 const orient = (ax: number, ay: number, bx: number, by: number, cx: number, cy: number): number =>
     (bx - ax) * (cy - ay) - (by - ay) * (cx - ax);
