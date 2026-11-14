@@ -417,11 +417,24 @@ function prefixesBoundOnlyTo(svg: string, uri: string): Set<string> {
  * foreign). Without references nor such prefixes the source is returned as is.
  */
 export function prepareSource(svg: string): string {
+    return prepareSourceWithEdits(svg).source;
+}
+
+/** One rewrite of {@link prepareSource}: at `at` in the original source, `from` characters became `to`. */
+interface SourceEdit {
+    at: number;
+    from: number;
+    to: number;
+}
+
+/** {@link prepareSource}, with its rewrites in source order, to map a position back to the original. */
+function prepareSourceWithEdits(svg: string): { source: string; edits: SourceEdit[] } {
+    const edits: SourceEdit[] = [];
     const hasPrefixes = svg.includes('xmlns:');
     const svgPrefixes = hasPrefixes ? prefixesBoundOnlyTo(svg, SVG_NS) : new Set<string>();
     const xlinkAliases = hasPrefixes ? prefixesBoundOnlyTo(svg, XLINK_NS) : new Set<string>();
     xlinkAliases.delete('xlink');
-    if (!svg.includes('&#') && svgPrefixes.size === 0 && xlinkAliases.size === 0) return svg;
+    if (!svg.includes('&#') && svgPrefixes.size === 0 && xlinkAliases.size === 0) return { source: svg, edits };
 
     // A declaration of an SVG prefix is dropped once no attribute uses the prefix (an unbound prefix
     // would make a namespace-aware parser, resvg, reject the document).
@@ -440,28 +453,85 @@ export function prepareSource(svg: string): string {
             return declaresXlink ? undefined : 'xmlns:xlink';
         return xlinkAliases.has(prefix) ? `xlink${name.slice(colon)}` : name;
     };
-    return svg.replace(
-        SOURCE_TOKEN,
-        (token: string, slash?: string, name?: string, attrs?: string, hex?: string, dec?: string) => {
-            if (name === undefined) return token.startsWith('&') ? decodedReference(token, hex, dec) : token;
-            const declaresXlink = /\sxmlns:xlink\s*=/.test(attrs!);
-            let droppedSvgDeclaration = false;
-            const rewritten = attrs!.replace(
-                TAG_ATTRIBUTE,
-                (_attr: string, space: string, attrName: string, rest: string) => {
-                    if (attrName.startsWith('xmlns:') && droppedPrefixes.has(attrName.slice(6)))
-                        droppedSvgDeclaration = true;
-                    const renamed = renameAttribute(attrName, declaresXlink);
-                    return renamed === undefined
-                        ? ''
-                        : `${space}${renamed}${rest.replace(NUMERIC_REFERENCE, decodedReference)}`;
-                },
-            );
-            // The unprefixed element is in the SVG namespace only with a default declaration.
-            const defaultNs = droppedSvgDeclaration && !/\sxmlns\s*=/.test(attrs!) ? ` xmlns="${SVG_NS}"` : '';
-            return `<${slash}${localName(name)}${defaultNs}${rewritten}>`;
-        },
-    );
+    const rewrite = (
+        token: string,
+        slash?: string,
+        name?: string,
+        attrs?: string,
+        hex?: string,
+        dec?: string,
+    ): string => {
+        if (name === undefined) return token.startsWith('&') ? decodedReference(token, hex, dec) : token;
+        const declaresXlink = /\sxmlns:xlink\s*=/.test(attrs!);
+        let droppedSvgDeclaration = false;
+        const rewritten = attrs!.replace(
+            TAG_ATTRIBUTE,
+            (_attr: string, space: string, attrName: string, rest: string) => {
+                if (attrName.startsWith('xmlns:') && droppedPrefixes.has(attrName.slice(6)))
+                    droppedSvgDeclaration = true;
+                const renamed = renameAttribute(attrName, declaresXlink);
+                return renamed === undefined
+                    ? ''
+                    : `${space}${renamed}${rest.replace(NUMERIC_REFERENCE, decodedReference)}`;
+            },
+        );
+        // The unprefixed element is in the SVG namespace only with a default declaration.
+        const defaultNs = droppedSvgDeclaration && !/\sxmlns\s*=/.test(attrs!) ? ` xmlns="${SVG_NS}"` : '';
+        return `<${slash}${localName(name)}${defaultNs}${rewritten}>`;
+    };
+    const source = svg.replace(SOURCE_TOKEN, (token: string, ...rest: unknown[]) => {
+        const [slash, name, attrs, hex, dec, at] = rest as [
+            string | undefined,
+            string | undefined,
+            string | undefined,
+            string | undefined,
+            string | undefined,
+            number,
+        ];
+        const rewritten = rewrite(token, slash, name, attrs, hex, dec);
+        if (rewritten !== token) edits.push({ at, from: token.length, to: rewritten.length });
+        return rewritten;
+    });
+    return { source, edits };
+}
+
+/**
+ * The offset in the original source of an offset in the source {@link prepareSource} rewrote with
+ * `edits`. A position inside a rewritten token maps into that token, counted from its end.
+ */
+function originalOffset(edits: readonly SourceEdit[], prepared: number): number {
+    let delta = 0;
+    for (const { at, from, to } of edits) {
+        const start = at + delta;
+        if (prepared < start) break;
+        // Aligned on the token's end: the parser reports a tag's error at its closing `>`.
+        if (prepared < start + to) return Math.max(at, at + from - (to - (prepared - start)));
+        delta += to - from;
+    }
+    return prepared - delta;
+}
+
+/**
+ * A parser message whose `<input>:line:col` position refers to the prepared source, with the
+ * position of the same place in the original source (decoded references and renamed prefixes
+ * change line lengths). A message without a position is returned as is.
+ */
+function withOriginalPosition(
+    message: string,
+    prepared: string,
+    original: string,
+    edits: readonly SourceEdit[],
+): string {
+    const m = /<input>:(\d+):(\d+):/.exec(message);
+    if (!m || edits.length === 0) return message;
+    const [line, column] = [Number(m[1]), Number(m[2])];
+    let offset = 0;
+    for (let i = 1; i < line; i++) offset = prepared.indexOf('\n', offset) + 1;
+    const at = originalOffset(edits, offset + column - 1);
+    const before = original.slice(0, at);
+    const origLine = before.split('\n').length;
+    const origColumn = at - (before.lastIndexOf('\n') + 1) + 1;
+    return message.replace(m[0], `<input>:${origLine}:${origColumn}:`);
 }
 
 /** svgo's own default `floatPrecision`: up to it, svgo's rounding is left exactly as it is. */
@@ -831,7 +901,7 @@ export function parseSvg(
     fillBlackForUnfilled = true,
     preserveIds = false,
 ): XastRoot {
-    const source = prepareSource(svg);
+    const { source, edits } = prepareSourceWithEdits(svg);
     let captured: XastRoot | null = null;
     const capture = {
         name: 'svgvd-capture',
@@ -874,7 +944,8 @@ export function parseSvg(
     } catch (err) {
         // An internal failure (a bug, here or in svgo) is not the document's fault: let it surface.
         if (err instanceof TypeError || err instanceof RangeError || err instanceof ReferenceError) throw err;
-        throw new Error(`Invalid SVG: ${(err as Error).message}`, { cause: err });
+        const message = withOriginalPosition((err as Error).message, source, svg, edits);
+        throw new Error(`Invalid SVG: ${message}`, { cause: err });
     }
     if (!captured) throw new Error('Failed to parse SVG: empty document');
     return captured;
