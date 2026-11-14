@@ -27,7 +27,7 @@ The plugin is published on the
 // app/build.gradle.kts
 plugins {
     id("com.android.application")
-    id("io.github.ibrahimdans.svg-vectordrawable") version "0.1.0"
+    id("io.github.ibrahimdans.svg-vectordrawable") version "1.0.0"
 }
 
 svgVectorDrawable {
