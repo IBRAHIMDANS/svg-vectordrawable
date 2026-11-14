@@ -975,4 +975,27 @@ describe('a fill without area beside a painted stroke is not emitted (T-157)', (
             }
         },
     );
+
+    // Collinear up to rounding only: relative steps that do not add up exactly are still a line.
+    it('a collinear polyline written with relative decimal steps is still flat', () => {
+        for (const optimize of [true, false]) {
+            const { xml } = convert(svg('<path d="M0 0l1.1 1.1l2.2 2.2l0.3 0.3z"/><rect width="4" height="4"/>'), {
+                optimize,
+            });
+            expect(paths(xml), `optimize: ${optimize}`).toHaveLength(1);
+        }
+    });
+
+    // T-189: flatness is not relative to the length. A strip 1e15 long and 24 high covers the viewport in
+    // Chrome, Firefox and layoutlib; it was dropped without a warning (fill only, or fill and stroke).
+    it.each([
+        ['fill only', ''],
+        ['fill and stroke', ' stroke="#00f"'],
+    ])('a long thin filled strip is written (%s)', (_, stroke) => {
+        for (const optimize of [true, false]) {
+            const { xml, warnings } = convert(svg(`<path d="M0 0H1e15V24H0Z"${stroke}/>`), { optimize });
+            expect(xml, `optimize: ${optimize}`).toContain('android:fillColor');
+            expect(warnings).toEqual([]);
+        }
+    });
 });
