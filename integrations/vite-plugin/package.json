@@ -1,6 +1,6 @@
 {
     "name": "vite-plugin-svg-vectordrawable",
-    "version": "0.1.0",
+    "version": "0.1.1",
     "description": "Vite / Rollup plugin: convert a folder of SVGs into Android VectorDrawable XML (res/drawable) at build time and in watch mode, with svg-vectordrawable.",
     "type": "module",
     "exports": {
