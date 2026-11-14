@@ -2,6 +2,7 @@
 // worker.js runs in a real thread (worker_threads + a tiny shim for importScripts / postMessage), driven
 // by core.js exactly as the page does. Named *-test.mjs, not *.test.mjs, so vitest does not collect it.
 import assert from 'node:assert/strict';
+import { execFileSync } from 'node:child_process';
 import { existsSync, readFileSync } from 'node:fs';
 import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
@@ -14,8 +15,11 @@ import {
     describeConversion,
     describeError,
     describeSize,
+    effectiveFormat,
     describeUnresolvedColors,
     formatBytes,
+    isVectorDrawable,
+    outputFileName,
     parsePreviewColors,
     resourceFileName,
     svgDataUrl,
@@ -278,6 +282,7 @@ test('every example converts, and only the one meant to shows warnings', async (
         stroke: [],
         clip: [],
         unsupported: ['unsupported-attribute', 'unsupported-element'],
+        drawable: [],
     });
 });
 
@@ -406,4 +411,64 @@ test('each warning links to its explanation in docs/warnings.md, which has a sec
     }
     assert.equal(warningHelpUrl('not a code'), null);
     assert.equal(warningHelpUrl(undefined), null);
+});
+
+test('the output format follows the input: Compose from both, SVG from a drawable only (T-188)', async (t) => {
+    const { converter } = trackedConverter([spawnPlaygroundWorker]);
+    t.after(converter.dispose);
+    const svg = EXAMPLES.find((e) => e.id === 'gradient').svg;
+    const drawable = EXAMPLES.find((e) => e.id === 'drawable').svg;
+    assert.equal(isVectorDrawable(svg), false);
+    assert.equal(isVectorDrawable(drawable), true);
+    assert.equal(isVectorDrawable('<?xml version="1.0"?>\n<!-- icon -->\n<vector android:width="24dp"/>'), true);
+    assert.deepEqual(
+        [effectiveFormat('vector', false), effectiveFormat('svg', false), effectiveFormat('compose', false)],
+        ['vector', 'vector', 'compose'],
+    );
+    assert.deepEqual(
+        [effectiveFormat('vector', true), effectiveFormat('svg', true), effectiveFormat('compose', true)],
+        ['svg', 'svg', 'compose'],
+    );
+
+    const compose = await converter.convert(svg, buildOptions(), {}, { format: 'compose', name: 'gradient-icon' });
+    assert.equal(compose.status, 'ok', compose.message);
+    assert.equal(compose.format, 'compose');
+    assert.equal(compose.kotlinName, 'GradientIcon');
+    assert.match(compose.output, /val GradientIcon: ImageVector by lazy/);
+    assert.match(compose.preview, /^<svg/);
+
+    const fromDrawable = await converter.convert(
+        drawable,
+        buildOptions(),
+        {},
+        { format: 'compose', name: 'ic_favorite' },
+    );
+    assert.equal(fromDrawable.status, 'ok', fromDrawable.message);
+    assert.equal(fromDrawable.input, 'vectordrawable');
+    assert.match(fromDrawable.output, /val IcFavorite: ImageVector/);
+    assert.match(fromDrawable.sourcePreview, /^<svg/);
+
+    const back = await converter.convert(drawable, buildOptions(), {}, { format: 'svg' });
+    assert.equal(back.format, 'svg');
+    assert.match(back.output, /^<svg[^>]*viewBox="0 0 24 24"/);
+    assert.equal(back.minSdk, null);
+
+    assert.deepEqual(
+        [
+            outputFileName('vector', 'Arrow Left.svg'),
+            outputFileName('svg', 'ic_favorite.xml'),
+            outputFileName('compose', 'x.svg', 'GradientIcon'),
+        ],
+        ['arrow_left.xml', 'ic_favorite.svg', 'GradientIcon.kt'],
+    );
+});
+
+test('the command-line options table lists every option of svgvd --help (T-188)', () => {
+    const help = execFileSync(process.execPath, [here('../dist/cli.js'), '--help'], { encoding: 'utf8' });
+    const flags = [...new Set([...help.matchAll(/^\s{2}(?:-\w, )?(--[a-z-]+(?:=lossy)?)/gm)].map((m) => m[1]))];
+    assert.ok(flags.length >= 25, `flags found: ${flags.length}`);
+    const html = readFileSync(here('./index.html'), 'utf8');
+    const table = html.slice(html.indexOf('<table class="options-table"'), html.indexOf('</table>'));
+    for (const flag of flags)
+        assert.ok(table.includes(`<code>${flag}`) || table.includes(`, ${flag}`), `${flag} is in the table`);
 });

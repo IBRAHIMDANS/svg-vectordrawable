@@ -47,6 +47,7 @@
             <nav aria-label="Project links">
                 <a href="#use">Use the result</a>
                 <a href="#coverage">What converts</a>
+                <a href="#cli-options">CLI options</a>
                 <a href="https://github.com/IBRAHIMDANS/svg-vectordrawable#readme">Docs</a>
                 <a href="https://github.com/IBRAHIMDANS/svg-vectordrawable">GitHub</a>
                 <a href="https://www.npmjs.com/package/svg-vectordrawable">npm</a>
@@ -91,7 +92,12 @@
                         <span id="input-meta" class="meta"></span>
                         <div class="pane-actions">
                             <label class="button" for="file-input">Open file</label>
-                            <input id="file-input" class="visually-hidden" type="file" accept=".svg,image/svg+xml" />
+                            <input
+                                id="file-input"
+                                class="visually-hidden"
+                                type="file"
+                                accept=".svg,image/svg+xml,.xml,text/xml,application/xml"
+                            />
                             <button id="clear-button" type="button" class="button">Clear</button>
                         </div>
                     </header>
@@ -101,7 +107,7 @@
                         spellcheck="false"
                         autocomplete="off"
                         aria-labelledby="input-title"
-                        placeholder="Paste SVG markup here, or drop a .svg file anywhere on the page"
+                        placeholder="Paste SVG markup (or an Android VectorDrawable) here, or drop a .svg / .xml file anywhere on the page"
                     ></textarea>
                     <div class="pane-foot">
                         <span id="examples-label" class="foot-label">Try</span>
@@ -118,6 +124,16 @@
                             <button id="download-button" type="button" class="button primary" disabled>Download</button>
                         </div>
                     </header>
+                    <div class="pane-bar">
+                        <span class="foot-label" id="format-label">Output as</span>
+                        <div class="segmented format-switch" role="radiogroup" aria-labelledby="format-label">
+                            <label
+                                ><input type="radio" name="format" value="vector" checked /><span>Drawable</span></label
+                            >
+                            <label><input type="radio" name="format" value="compose" /><span>Compose</span></label>
+                            <label><input type="radio" name="format" value="svg" /><span>SVG</span></label>
+                        </div>
+                    </div>
                     <pre
                         id="xml-output"
                         class="code-area"
@@ -240,7 +256,7 @@
                     <div id="previews" class="previews" data-bg="checker">
                         <figure>
                             <div id="source-preview" class="preview"></div>
-                            <figcaption>Source SVG</figcaption>
+                            <figcaption id="source-caption">Source SVG</figcaption>
                         </figure>
                         <figure>
                             <div id="vd-preview" class="preview"></div>
@@ -298,7 +314,8 @@
                         </div>
                         <p>
                             <code>Icon</code> tints the drawable with the content color; use <code>Image</code> to keep
-                            its own colors.
+                            its own colors. Prefer Kotlin? Choose <strong>Compose</strong> above the output for an
+                            <code>ImageVector</code>: <code>Icon(imageVector = Name, …)</code>.
                         </p>
                     </article>
                     <article class="card">
@@ -427,6 +444,161 @@ const { xml, warnings, minSdk } = convert(svg);</code></pre>
                             </li>
                         </ul>
                     </article>
+                </div>
+            </section>
+            <section id="cli-options" class="more" aria-labelledby="cli-options-title">
+                <h2 id="cli-options-title">Command-line options</h2>
+                <p class="more-lede">
+                    <code>svgvd &lt;input.svg|dir…&gt; [options]</code> converts files or folders;
+                    <code>svgvd -</code> reads stdin. Every option of <code>svgvd --help</code>:
+                </p>
+                <div class="table-wrap">
+                    <table class="options-table">
+                        <thead>
+                            <tr>
+                                <th scope="col">Option</th>
+                                <th scope="col">What it does</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <tr>
+                                <th colspan="2" scope="rowgroup">Input and output</th>
+                            </tr>
+                            <tr>
+                                <td><code>-o, --out &lt;path&gt;</code></td>
+                                <td>Output file (one input) or folder (a batch)</td>
+                            </tr>
+                            <tr>
+                                <td><code>-s, --string &lt;svg&gt;</code></td>
+                                <td>Convert an inline SVG string, printed to stdout</td>
+                            </tr>
+                            <tr>
+                                <td><code>--stdout</code></td>
+                                <td>Print the result instead of writing a file</td>
+                            </tr>
+                            <tr>
+                                <td><code>-r, --recursive</code></td>
+                                <td>Also convert the subfolders, keeping the tree under <code>-o</code></td>
+                            </tr>
+                            <tr>
+                                <td><code>--android-names</code></td>
+                                <td>
+                                    Name outputs as Android resources (<code>Arrow-Left.svg</code> →
+                                    <code>arrow_left.xml</code>)
+                                </td>
+                            </tr>
+                            <tr>
+                                <td><code>--format &lt;f&gt;</code></td>
+                                <td>
+                                    <code>vector</code> (default), <code>compose</code> (Kotlin
+                                    <code>ImageVector</code>) or <code>svg</code> (a VectorDrawable back to SVG)
+                                </td>
+                            </tr>
+                            <tr>
+                                <td><code>--package &lt;name&gt;</code></td>
+                                <td>Kotlin package of the <code>--format compose</code> files</td>
+                            </tr>
+                            <tr>
+                                <td><code>-w, --watch</code></td>
+                                <td>Convert, then reconvert each file you save (Ctrl+C to stop)</td>
+                            </tr>
+                            <tr>
+                                <td><code>--json</code></td>
+                                <td>Print a JSON report (outputs, warnings, errors) for CI</td>
+                            </tr>
+                            <tr>
+                                <td><code>--dry-run</code></td>
+                                <td>Convert and report, write nothing</td>
+                            </tr>
+                            <tr>
+                                <th colspan="2" scope="rowgroup">What to reject</th>
+                            </tr>
+                            <tr>
+                                <td><code>--strict</code></td>
+                                <td>Fail on anything lost or approximated</td>
+                            </tr>
+                            <tr>
+                                <td><code>--strict=lossy</code></td>
+                                <td>Fail only when content is lost</td>
+                            </tr>
+                            <tr>
+                                <td><code>--rule &lt;code=level&gt;</code></td>
+                                <td>
+                                    Severity of one
+                                    <a
+                                        href="https://github.com/IBRAHIMDANS/svg-vectordrawable/blob/main/docs/warnings.md"
+                                        >warning code</a
+                                    >: <code>off</code>, <code>warn</code> or <code>error</code>
+                                </td>
+                            </tr>
+                            <tr>
+                                <td><code>--fallback-png &lt;d&gt;</code></td>
+                                <td>
+                                    Write a PNG for a rejected file instead of failing (<code>all</code> or
+                                    <code>mdpi,xhdpi…</code>)
+                                </td>
+                            </tr>
+                            <tr>
+                                <td><code>--min-sdk &lt;n&gt;</code></td>
+                                <td>Warn when the drawable needs a higher API level than your app's</td>
+                            </tr>
+                            <tr>
+                                <th colspan="2" scope="rowgroup">Drawing</th>
+                            </tr>
+                            <tr>
+                                <td><code>--current-color &lt;c&gt;</code></td>
+                                <td>
+                                    What <code>currentColor</code> stands for: a color, or a theme attribute
+                                    (<code>?attr/colorOnSurface</code>)
+                                </td>
+                            </tr>
+                            <tr>
+                                <td><code>--color-map &lt;c=ref&gt;</code></td>
+                                <td>Map an SVG color to an Android color resource or attribute</td>
+                            </tr>
+                            <tr>
+                                <td><code>--tint &lt;color&gt;</code></td>
+                                <td>Add <code>android:tint</code> to the drawable</td>
+                            </tr>
+                            <tr>
+                                <td><code>--width &lt;dp&gt;</code>, <code>--height &lt;dp&gt;</code></td>
+                                <td>Set the size in dp, keeping the viewport</td>
+                            </tr>
+                            <tr>
+                                <td><code>--auto-mirrored</code></td>
+                                <td>Flip the drawable in right-to-left layouts</td>
+                            </tr>
+                            <tr>
+                                <td><code>--preserve-ids</code></td>
+                                <td>
+                                    Keep SVG ids as <code>android:name</code>, for <code>AnimatedVectorDrawable</code>
+                                </td>
+                            </tr>
+                            <tr>
+                                <td><code>--font &lt;f=file&gt;</code></td>
+                                <td>
+                                    Draw <code>&lt;text&gt;</code> in font family <code>f</code> as outlines, from a
+                                    font file
+                                </td>
+                            </tr>
+                            <tr>
+                                <td><code>-p, --precision &lt;n&gt;</code></td>
+                                <td>Decimals of the numbers (default 3)</td>
+                            </tr>
+                            <tr>
+                                <td><code>--xml-tag</code></td>
+                                <td>Start the file with an XML declaration</td>
+                            </tr>
+                            <tr>
+                                <td><code>--no-optimize</code></td>
+                                <td>Skip the svgo normalization (not recommended)</td>
+                            </tr>
+                            <tr>
+                                <td><code>-h, --help</code></td>
+                                <td>Show this list</td>
+                            </tr>
+                        </tbody>
+                    </table>
                 </div>
             </section>
         </main>

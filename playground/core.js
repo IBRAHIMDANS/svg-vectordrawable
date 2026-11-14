@@ -60,9 +60,10 @@ export function createConverter(createWorker, { timeoutMs = DEFAULT_TIMEOUT_MS }
      * @param {string} svg
      * @param {object} options ConvertOptions of the lite build
      * @param {{ applyTint?: boolean, colors?: Record<string, string> }} [preview] options of vectorDrawableToSvg
+     * @param {{ format?: 'vector' | 'compose' | 'svg', name?: string }} [request] output format, Kotlin name
      * @returns {Promise<object>} an outcome: `ok`, `error`, `timeout` or `superseded`
      */
-    function convert(svg, options, preview = {}) {
+    function convert(svg, options, preview = {}, request = {}) {
         if (pending) {
             // The worker is still busy: it cannot be interrupted, only replaced.
             discardWorker();
@@ -79,7 +80,8 @@ export function createConverter(createWorker, { timeoutMs = DEFAULT_TIMEOUT_MS }
             }, timeoutMs);
             pending = { id, resolve, timer };
             try {
-                ensureWorker().postMessage({ id, svg, options, preview });
+                const { format = 'vector', name = 'Icon' } = request;
+                ensureWorker().postMessage({ id, svg, options, preview, format, name });
             } catch (error) {
                 // e.g. a SecurityError when the page is opened from file:// instead of over HTTP.
                 discardWorker();
@@ -275,4 +277,33 @@ export function describeConversion(minSdk, warnings = []) {
         };
     if (warnings.length) return { text: `${head}, faithful; ${plural(warnings.length, 'note')} below.`, tone: 'ok' };
     return { text: `${head}: faithful, no warning.`, tone: 'ok' };
+}
+
+/** Same test as the CLI and the worker: the root element is <vector>, after a prolog and comments. */
+const VECTOR_ROOT = /^\uFEFF?\s*(?:<\?xml[^>]*\?>\s*)?(?:<!--[\s\S]*?-->\s*)*<vector[\s>]/;
+
+/** Whether the input is an existing Android VectorDrawable rather than an SVG. */
+export const isVectorDrawable = (source) => VECTOR_ROOT.test(source ?? '');
+
+/** The output formats of the output pane: its title, the downloaded file's extension and type. */
+export const FORMATS = {
+    vector: { title: 'VectorDrawable XML', extension: '.xml', type: 'application/xml' },
+    compose: { title: 'Compose ImageVector', extension: '.kt', type: 'text/plain' },
+    svg: { title: 'SVG', extension: '.svg', type: 'image/svg+xml' },
+};
+
+/**
+ * The format actually produced for an input: VectorDrawable XML is the output of an SVG, SVG the
+ * output of a VectorDrawable; Compose works from both. An impossible request falls back to the other.
+ */
+export function effectiveFormat(requested, vectorInput) {
+    if (requested === 'compose') return 'compose';
+    return vectorInput ? 'svg' : 'vector';
+}
+
+/** The name the Download button gives the output: a resource name, or the Kotlin name for Compose. */
+export function outputFileName(format, sourceName = '', kotlinName = '') {
+    if (format === 'compose') return `${kotlinName || 'Icon'}.kt`;
+    const resource = resourceFileName(sourceName.replace(/\.xml$/i, ''));
+    return format === 'svg' ? resource.replace(/\.xml$/, '.svg') : resource;
 }
