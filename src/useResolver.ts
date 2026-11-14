@@ -12,7 +12,7 @@ import { nestedLayout, parseViewBox, rootLayout, viewBoxMatrix } from './viewpor
  * has no equivalent of "instance a symbol", so we inline each referenced subtree by hand.
  */
 
-/** Max nesting of `<use>` → `<use>` we expand before giving up (guards against reference cycles). */
+/** Max nesting of `<use>` → `<use>` we expand before giving up (a safety net: cycles are detected). */
 const MAX_DEPTH = 10;
 
 /**
@@ -66,14 +66,31 @@ function cloneBudget(): CloneBudget {
     };
 }
 
+/** Called for every `(source, clone)` pair a deep clone creates. */
+type OnClone = (source: XastElement, clone: XastElement) => void;
+
 /** Deep-clones an element so inlining never mutates (or aliases) the original target. */
-function cloneElement(node: XastElement, spend: CloneBudget): XastElement {
+function cloneElement(node: XastElement, spend: CloneBudget, onClone?: OnClone): XastElement {
     spend();
     const clone: XastElement = { type: node.type };
     if (node.name !== undefined) clone.name = node.name;
     if (node.attributes !== undefined) clone.attributes = { ...node.attributes };
-    if (node.children !== undefined) clone.children = node.children.map((child) => cloneElement(child, spend));
+    if (node.children !== undefined) clone.children = node.children.map((child) => cloneElement(child, spend, onClone));
+    onClone?.(node, clone);
     return clone;
+}
+
+/** Maps every node of a tree to its parent. */
+function indexParents(root: XastElement): WeakMap<XastElement, XastElement> {
+    const parents = new WeakMap<XastElement, XastElement>();
+    const visit = (node: XastElement): void => {
+        for (const child of node.children ?? []) {
+            parents.set(child, node);
+            visit(child);
+        }
+    };
+    visit(root);
+    return parents;
 }
 
 /** The `<use>` width/height that override its target's, or undefined when absent / `auto`. */
@@ -244,8 +261,9 @@ function buildReplacement(
     spend: CloneBudget,
     parent: Viewport | undefined,
     report: Report,
+    onClone: OnClone,
 ): { replacement: XastElement; viewport: Viewport | undefined } {
-    const clone = cloneElement(target, spend);
+    const clone = cloneElement(target, spend, onClone);
     const id = target.attributes?.id ?? '';
     const useAttrs = use.attributes ?? {};
     let children: XastElement[] = [clone];
@@ -329,9 +347,41 @@ export function resolveUses(root: XastElement, warn: Report = () => undefined): 
     // Instances are cloned from an unexpanded copy: a target expanded in place (a <use> in <defs>,
     // or a rendered group) resolved its percentages against its own location's viewport, not the
     // one it is instanced in. The copy is the input's size, so it does not spend the budget.
-    const byId = indexById(cloneElement(root, () => undefined));
+    // Every <use> walked (in the document or in an instance) is traced back to its element in that
+    // copy, the "original" whose ancestors and ongoing expansions tell a circular reference.
+    const originalOf = new WeakMap<XastElement, XastElement>();
+    const pristine = cloneElement(
+        root,
+        () => undefined,
+        (source, clone) => {
+            if (source.name === 'use') originalOf.set(source, clone);
+        },
+    );
+    const byId = indexById(pristine);
+    const parentOf = indexParents(pristine);
     const nextId = idAllocator(new Set(byId.keys()));
     const spend = cloneBudget();
+    // Instances are cloned from the copy: their source is already the original.
+    const traceInstance: OnClone = (source, clone) => {
+        if (source.name === 'use') originalOf.set(clone, source);
+    };
+    // The original <use> elements whose instance is being expanded (the walk is depth-first).
+    const expanding = new Set<XastElement>();
+
+    /**
+     * True when instancing `target` from `use` is a circular reference, which renders nothing: the
+     * target contains the original `<use>` (an ancestor of it, or the use itself), or the same
+     * original `<use>` is already being expanded further up (an indirect cycle). This is Firefox's
+     * test (SVGUseElement::IsCyclicReferenceTo); Chrome stops one level earlier on indirect cycles.
+     */
+    const isCircular = (use: XastElement, target: XastElement): boolean => {
+        const original = originalOf.get(use);
+        if (original === undefined) return false;
+        if (expanding.has(original)) return true;
+        for (let node: XastElement | undefined = original; node !== undefined; node = parentOf.get(node))
+            if (node === target) return true;
+        return false;
+    };
 
     const resolveChildren = (
         node: XastElement,
@@ -350,10 +400,22 @@ export function resolveUses(root: XastElement, warn: Report = () => undefined): 
             if (child.name === 'use') {
                 const id = depth > 0 ? targetId(child) : undefined;
                 const target = id !== undefined ? byId.get(id) : undefined;
+                if (target !== undefined && isCircular(child, target)) {
+                    report({
+                        code: 'unsupported-element',
+                        message: `<use href="#${id}"> is a circular reference (it instances an element that contains it, directly or through other <use>); it renders nothing and is dropped.`,
+                        node: 'use',
+                    });
+                    children.splice(i--, 1);
+                    continue;
+                }
                 if (target !== undefined) {
-                    const built = buildReplacement(child, target, nextId, spend, vp, report);
+                    const built = buildReplacement(child, target, nextId, spend, vp, report, traceInstance);
+                    const original = originalOf.get(child);
                     // Expand any `<use>` nested in the freshly inlined subtree, with less budget.
+                    if (original !== undefined) expanding.add(original);
                     resolveChildren(built.replacement, depth - 1, built.viewport, report, skipSymbols);
+                    if (original !== undefined) expanding.delete(original);
                     children[i] = built.replacement;
                     continue;
                 }
