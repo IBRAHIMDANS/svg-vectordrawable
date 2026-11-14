@@ -8,8 +8,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-- **Added:** existing VectorDrawables as input: `--format compose` accepts an `.xml` drawable (also `vectorDrawableToImageVector` in the API), and `--format svg` converts a drawable back to SVG.
-- **Fixed:** a shape or path number beyond the float range (`1e39`, `1e400`) no longer writes `Infinity` into `android:pathData` with `optimize: false`: the shape is not drawn (`empty-path`) and path data stops at that number, as in Firefox and with `optimize: true`; an invalid `style` declaration (`stroke-width 2`, no colon) is ignored as in a browser instead of failing the default conversion with "Invalid SVG"; a CSS comment in `style` (`/*c*/fill:red`) no longer hides the declaration with `optimize: false`.
+Existing VectorDrawables are now an input too, the preview draws trimmed strokes, and every warning is explained with how to fix it.
+
+- **Added:** `--format compose` accepts an existing `.xml` drawable (`vectorDrawableToImageVector` in the API), and `--format svg` converts a drawable back to SVG; `vectorDrawableToSvg` draws `android:trimPath*` on stroked paths; [docs/warnings.md](docs/warnings.md) explains each warning code and how to fix it.
+- **Fixed:** a `<use>` pointing at its own ancestor is dropped (it was expanded ten times, or failed on large files); `points` in error draw nothing and an odd trailing coordinate is ignored, as in Chrome and Firefox; geometry beyond the float range no longer writes `Infinity`; an invalid or commented `style` declaration no longer fails or hides the others.
 
 ## [1.0.0] - 2026-11-12
 
