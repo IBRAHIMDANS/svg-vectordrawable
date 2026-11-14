@@ -18,10 +18,13 @@
  *   `currentColor` / `colorMap` options) have no value outside an app: they take the color given in
  *   {@link PreviewOptions.colors}, otherwise {@link UNRESOLVED_COLOR} (neutral gray), reported through
  *   {@link PreviewOptions.onUnresolvedColor}.
+ * - `trimPathStart` / `trimPathEnd` / `trimPathOffset` (never produced by the converter): see
+ *   {@link trimWindow}. Rendered on a stroke-only path (`stroke-dasharray` over the measured contour); a
+ *   *filled* trimmed path is drawn whole ({@link hasUnrenderedTrim}), since Android fills the trimmed
+ *   geometry and SVG has no equivalent.
  *
  * Unsupported input throws an `Error` naming the construct: sweep gradients (no SVG equivalent),
  * malformed colors, unknown elements, malformed XML, a missing or non-positive viewport.
- * `trimPathStart` / `trimPathEnd` / `trimPathOffset` (never produced by the converter) are ignored.
  *
  * Deliberately self-contained (its own tiny XML parser, no import from the converter): the test
  * harness uses it to validate the converter's output, so a converter bug cannot be masked by shared
@@ -286,10 +289,250 @@ function paintOf(path: XmlNode, key: 'fillColor' | 'strokeColor', ctx: Ctx): Svg
     return value === undefined ? null : ctx.color(value);
 }
 
+/**
+ * Visible part of a trimmed path, as fractions of the length of its *first contour*, or `null` when
+ * the path is not trimmed. Mirrors Android (hwui `VectorDrawable.cpp` `applyTrim`, AndroidX
+ * `VectorDrawableCompat`): no trim unless start ≠ 0 or end ≠ 1 (an offset alone does nothing);
+ * start = end draws nothing; otherwise s = (start + offset) mod 1, e = (end + offset) mod 1 (sign
+ * kept, as C `fmod`), clamped to [0, 1]; s > e wraps: [s, 1] then [0, e]. `PathMeasure` measures only
+ * the first contour, so the trimmed path never contains the other contours.
+ */
+function trimWindow(a: Record<string, string>): [number, number][] | null {
+    const start = num(a, 'trimPathStart', 0);
+    const end = num(a, 'trimPathEnd', 1);
+    if (start === 0 && end === 1) return null;
+    if (start === end) return [];
+    const offset = num(a, 'trimPathOffset', 0);
+    const clamp = (x: number) => Math.min(1, Math.max(0, x));
+    const s = clamp((start + offset) % 1);
+    const e = clamp((end + offset) % 1);
+    if (s > e)
+        return e > 0
+            ? [
+                  [s, 1],
+                  [0, e],
+              ]
+            : [[s, 1]];
+    return s < e ? [[s, e]] : [];
+}
+
+/**
+ * The first contour of `d` (what Android trims): up to the next moveto once something was drawn, or
+ * up to a drawing command that follows a closepath (Skia starts a new contour there too).
+ */
+function firstContour(d: string): string {
+    const commands = /[MmZzLlHhVvCcSsQqTtAa]/g;
+    let drawn = false;
+    let closed = false;
+    for (let m = commands.exec(d); m; m = commands.exec(d)) {
+        const c = m[0];
+        if (c === 'M' || c === 'm') {
+            if (drawn) return d.slice(0, m.index).trimEnd();
+            // Coordinates after the first pair are implicit linetos.
+            const args = d.slice(m.index + 1).split(/[MmZzLlHhVvCcSsQqTtAa]/)[0]!;
+            if ((args.match(/[-+]?(?:\d*\.\d+|\d+\.?)(?:[eE][-+]?\d+)?/g) ?? []).length > 2) drawn = true;
+            closed = false;
+        } else if (c === 'Z' || c === 'z') {
+            closed = true;
+        } else {
+            if (closed) return d.slice(0, m.index).trimEnd();
+            drawn = true;
+        }
+    }
+    return d;
+}
+
+/** Steps used to measure a curve or an arc by flattening it (relative error about 1e-5). */
+const MEASURE_STEPS = 256;
+
+/**
+ * Length of SVG / VectorDrawable path data (all commands, relative or absolute; `Z` counts its closing
+ * line, as Skia's `PathMeasure` does). Curves and arcs are flattened; a malformed tail stops the
+ * measure where it is, like a renderer stops drawing there.
+ */
+function pathLength(d: string): number {
+    let i = 0;
+    const skip = () => {
+        while (i < d.length && /[\s,]/.test(d[i]!)) i++;
+    };
+    const number = (): number | null => {
+        skip();
+        const m = /^[-+]?(?:\d*\.\d+|\d+\.?)(?:[eE][-+]?\d+)?/.exec(d.slice(i));
+        if (!m) return null;
+        i += m[0].length;
+        return Number(m[0]);
+    };
+    // Arc flags may be written without separators (`a1,1 0 011,1`).
+    const flag = (): number | null => {
+        skip();
+        const c = d[i];
+        if (c !== '0' && c !== '1') return null;
+        i++;
+        return Number(c);
+    };
+    let length = 0;
+    let [x, y, sx, sy] = [0, 0, 0, 0];
+    // Last control point of a C/S (cubic) or Q/T (quadratic) command, for the smooth reflections.
+    let cubic: [number, number] | null = null;
+    let quad: [number, number] | null = null;
+    const curve = (point: (t: number) => [number, number]) => {
+        let [px, py] = [x, y];
+        for (let k = 1; k <= MEASURE_STEPS; k++) {
+            const [qx, qy] = point(k / MEASURE_STEPS);
+            length += Math.hypot(qx - px, qy - py);
+            [px, py] = [qx, qy];
+        }
+    };
+    const lineTo = (nx: number, ny: number) => {
+        length += Math.hypot(nx - x, ny - y);
+        [x, y] = [nx, ny];
+    };
+    let command = '';
+    for (;;) {
+        skip();
+        if (i >= d.length) break;
+        if (/[a-zA-Z]/.test(d[i]!)) command = d[i++]!;
+        else if (!command || command === 'Z' || command === 'z') break;
+        const rel = command === command.toLowerCase();
+        const [ox, oy] = rel ? [x, y] : [0, 0];
+        const C = command.toUpperCase();
+        if (C === 'Z') {
+            lineTo(sx, sy);
+            cubic = quad = null;
+            continue;
+        }
+        const arity = { M: 2, L: 2, H: 1, V: 1, C: 6, S: 4, Q: 4, T: 2, A: 7 }[C];
+        if (arity === undefined) break;
+        const n: number[] = [];
+        for (let k = 0; k < arity; k++) {
+            const v = C === 'A' && (k === 3 || k === 4) ? flag() : number();
+            if (v === null) return length;
+            n.push(v);
+        }
+        const nc: [number, number] | null = cubic;
+        const nq: [number, number] | null = quad;
+        cubic = quad = null;
+        if (C === 'M') {
+            [x, y] = [ox + n[0]!, oy + n[1]!];
+            [sx, sy] = [x, y];
+            // Coordinate pairs after a moveto are implicit linetos.
+            command = rel ? 'l' : 'L';
+        } else if (C === 'L') lineTo(ox + n[0]!, oy + n[1]!);
+        else if (C === 'H') lineTo(ox + n[0]!, y);
+        else if (C === 'V') lineTo(x, oy + n[0]!);
+        else if (C === 'C' || C === 'S') {
+            const [x1, y1]: [number, number] =
+                C === 'C' ? [ox + n[0]!, oy + n[1]!] : nc ? [2 * x - nc[0], 2 * y - nc[1]] : [x, y];
+            const k = C === 'C' ? 2 : 0;
+            const [x2, y2, ex, ey] = [ox + n[k]!, oy + n[k + 1]!, ox + n[k + 2]!, oy + n[k + 3]!];
+            const [x0, y0] = [x, y];
+            curve((t) => {
+                const u = 1 - t;
+                const [a, b, c, e] = [u * u * u, 3 * u * u * t, 3 * u * t * t, t * t * t];
+                return [a * x0 + b * x1 + c * x2 + e * ex, a * y0 + b * y1 + c * y2 + e * ey];
+            });
+            [x, y, cubic] = [ex, ey, [x2, y2]];
+        } else if (C === 'Q' || C === 'T') {
+            const [x1, y1]: [number, number] =
+                C === 'Q' ? [ox + n[0]!, oy + n[1]!] : nq ? [2 * x - nq[0], 2 * y - nq[1]] : [x, y];
+            const k = C === 'Q' ? 2 : 0;
+            const [ex, ey] = [ox + n[k]!, oy + n[k + 1]!];
+            const [x0, y0] = [x, y];
+            curve((t) => {
+                const u = 1 - t;
+                return [u * u * x0 + 2 * u * t * x1 + t * t * ex, u * u * y0 + 2 * u * t * y1 + t * t * ey];
+            });
+            [x, y, quad] = [ex, ey, [x1, y1]];
+        } else {
+            arcLength(n, ox, oy);
+        }
+    }
+    return length;
+
+    /** Endpoint → center parameterization (SVG 1.1 implementation notes, F.6.5 / F.6.6), then flattened. */
+    function arcLength([rx0, ry0, angle, large, sweep, ex0, ey0]: number[], ox: number, oy: number): void {
+        const [ex, ey] = [ox + ex0!, oy + ey0!];
+        let [rx, ry] = [Math.abs(rx0!), Math.abs(ry0!)];
+        if (rx === 0 || ry === 0 || (ex === x && ey === y)) return lineTo(ex, ey);
+        const phi = (angle! * Math.PI) / 180;
+        const [cos, sin] = [Math.cos(phi), Math.sin(phi)];
+        const [dx, dy] = [(x - ex) / 2, (y - ey) / 2];
+        const x1 = cos * dx + sin * dy;
+        const y1 = -sin * dx + cos * dy;
+        const scale = (x1 * x1) / (rx * rx) + (y1 * y1) / (ry * ry);
+        if (scale > 1) [rx, ry] = [rx * Math.sqrt(scale), ry * Math.sqrt(scale)];
+        const num = rx * rx * ry * ry - rx * rx * y1 * y1 - ry * ry * x1 * x1;
+        const den = rx * rx * y1 * y1 + ry * ry * x1 * x1;
+        const coef = (large === sweep ? -1 : 1) * Math.sqrt(Math.max(0, num / den));
+        const [cx1, cy1] = [(coef * rx * y1) / ry, (-coef * ry * x1) / rx];
+        const ang = (ux: number, uy: number, vx: number, vy: number) =>
+            Math.atan2(ux * vy - uy * vx, ux * vx + uy * vy);
+        const theta = ang(1, 0, (x1 - cx1) / rx, (y1 - cy1) / ry);
+        let delta = ang((x1 - cx1) / rx, (y1 - cy1) / ry, (-x1 - cx1) / rx, (-y1 - cy1) / ry);
+        if (!sweep && delta > 0) delta -= 2 * Math.PI;
+        if (sweep && delta < 0) delta += 2 * Math.PI;
+        const [cx, cy] = [cos * cx1 - sin * cy1 + (x + ex) / 2, sin * cx1 + cos * cy1 + (y + ey) / 2];
+        curve((t) => {
+            const a = theta + delta * t;
+            const [px, py] = [rx * Math.cos(a), ry * Math.sin(a)];
+            return [cx + cos * px - sin * py, cy + sin * px + cos * py];
+        });
+        [x, y] = [ex, ey];
+    }
+}
+
+/** A dash length for an SVG attribute, without float noise. */
+const len = (x: number) => String(Number(x.toFixed(4)));
+
+/**
+ * `stroke-dasharray` / `stroke-dashoffset` drawing exactly `window` (fractions) of a contour of
+ * `total` user units. Absolute lengths rather than `pathLength="1"`, which resvg ignores. Each gap is
+ * at least `total`, so the pattern never repeats along the contour. Known difference: when the
+ * window wraps across the start of a *closed* contour, SVG renderers join the two dashes there,
+ * where Android draws two separate segments (butt / round / square ends instead of a join).
+ */
+function trimDashes(window: [number, number][], total: number): string[] {
+    if (window.length === 2) {
+        const [[s], [, e]] = window as [[number, number], [number, number]];
+        return [`stroke-dasharray="${[e, s - e, 1 - s, 1].map((f) => len(f * total)).join(' ')}"`];
+    }
+    const [[s, e]] = window as [[number, number]];
+    const out = [`stroke-dasharray="${len((e - s) * total)} ${len(total)}"`];
+    if (s > 0) out.push(`stroke-dashoffset="${len(-s * total)}"`);
+    return out;
+}
+
+/** Whether a path has a fill (attribute or `<aapt:attr>` gradient), without resolving it. */
+function hasFill(path: XmlNode): boolean {
+    return (
+        path.attrs['android:fillColor'] !== undefined ||
+        path.children.some((c) => c.name === 'aapt:attr' && c.attrs.name === 'android:fillColor')
+    );
+}
+
+/**
+ * Whether the drawable has a trimmed *filled* path, which {@link vectorDrawableToSvg} draws whole
+ * (Android fills the trimmed geometry: not expressible with SVG dashes).
+ */
+export function hasUnrenderedTrim(xml: string): boolean {
+    const visit = (node: XmlNode): boolean =>
+        (node.name === 'path' && hasFill(node) && trimWindow(node.attrs) !== null) || node.children.some(visit);
+    return visit(parseXml(xml));
+}
+
 function pathToSvg(path: XmlNode, ctx: Ctx): string {
     const a = path.attrs;
-    const d = a['android:pathData'];
+    let d = a['android:pathData'];
     if (!d) return '';
+    // A stroke-only trimmed path: the first contour, dashed to the visible window.
+    let window = hasFill(path) ? null : trimWindow(a);
+    let total = 0;
+    if (window) {
+        d = firstContour(d);
+        total = pathLength(d);
+        // A zero-length contour has nothing to trim: Skia's getSegment draws nothing.
+        if (!(total > 0)) window = [];
+    }
     const out = [`d="${esc(d)}"`];
     const fill = paintOf(path, 'fillColor', ctx);
     if (fill) {
@@ -302,13 +545,15 @@ function pathToSvg(path: XmlNode, ctx: Ctx): string {
     }
     const stroke = paintOf(path, 'strokeColor', ctx);
     const strokeWidth = num(a, 'strokeWidth', 0);
-    if (stroke && strokeWidth > 0) {
+    // An empty trim window draws nothing: no stroke at all (the path is not filled).
+    if (stroke && strokeWidth > 0 && window?.length !== 0) {
         out.push(`stroke="${stroke.rgb}"`, `stroke-width="${strokeWidth}"`);
         const opacity = stroke.opacity * num(a, 'strokeAlpha', 1);
         if (opacity !== 1) out.push(`stroke-opacity="${opacity}"`);
         out.push(`stroke-linecap="${keyword(a, 'strokeLineCap', LINE_CAPS)}"`);
         out.push(`stroke-linejoin="${keyword(a, 'strokeLineJoin', LINE_JOINS)}"`);
         out.push(`stroke-miterlimit="${num(a, 'strokeMiterLimit', 4)}"`);
+        if (window) out.push(...trimDashes(window, total));
     }
     return `<path ${out.join(' ')}/>`;
 }

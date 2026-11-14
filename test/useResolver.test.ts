@@ -1041,3 +1041,90 @@ describe('resolveUses — <symbol> and <use> x / y (SVG 2 §5.6)', () => {
             expect(xml).toMatch(/android:translateY="5"/);
         });
 });
+
+describe('resolveUses — circular references (Firefox: the <use> renders nothing)', () => {
+    const doc = (body: string): string =>
+        `<svg xmlns="http://www.w3.org/2000/svg" width="48" height="48" viewBox="0 0 48 48">${body}</svg>`;
+    const red = (x: number, y: number): string => `<rect x="${x}" y="${y}" width="5" height="5" fill="red"/>`;
+    const green = (x: number, y: number): string => `<rect x="${x}" y="${y}" width="5" height="5" fill="green"/>`;
+    const circular = (id: string): string => `<use href="#${id}"> is a circular reference`;
+
+    for (const [label, source, expected, ids] of [
+        ['a <use> of its own ancestor group', doc(`<g id="s">${red(0, 0)}<use href="#s"/></g>`), doc(red(0, 0)), ['s']],
+        [
+            'a shifted <use> of its own ancestor group (no shifted copy)',
+            doc(`<g id="s">${red(0, 0)}<use href="#s" x="6"/></g>`),
+            doc(red(0, 0)),
+            ['s'],
+        ],
+        [
+            // Firefox stops when the same original <use> is met again: a, b, then a once more.
+            'an indirect cycle a → b → a',
+            doc(
+                `<defs><g id="a">${red(0, 0)}<use href="#b" x="6"/></g><g id="b">${green(0, 6)}<use href="#a" x="6"/></g></defs>` +
+                    '<use href="#a"/>',
+            ),
+            doc(red(0, 0) + green(6, 6) + red(12, 0)),
+            // The <use> in <defs> are expanded too: each closes the cycle once.
+            ['b', 'a'],
+        ],
+        [
+            'a <use> of the <symbol> that contains it',
+            doc(`<symbol id="sym"><g>${red(0, 0)}<use href="#sym" x="6"/></g></symbol><use href="#sym"/>`),
+            doc(red(0, 0)),
+            ['sym'],
+        ],
+        [
+            'a <use> of its parent group inside a <symbol>',
+            doc(`<symbol id="sym"><g id="p">${red(0, 0)}<use href="#p" x="6"/></g></symbol><use href="#sym"/>`),
+            doc(red(0, 0)),
+            ['p'],
+        ],
+    ] as const)
+        for (const optimize of [false, true])
+            it(`${label} (optimize: ${optimize})`, () => {
+                const { xml, warnings } = convert(source, { optimize });
+                expect(warnings.map((w) => w.code)).toEqual(ids.map(() => 'unsupported-element'));
+                ids.forEach((id, i) => expect(warnings[i]?.message).toContain(circular(id)));
+                const result = compareSvgs(expected, vdToSvg(xml));
+                expect(result.sizeMismatch).toBeNull();
+                expect(result.inked).toBeGreaterThan(0);
+                expect(result.mismatch).toBeLessThan(DEFAULT_MAX_MISMATCH);
+            });
+
+    for (const optimize of [false, true])
+        it(`does not blow up on circular <use> nested in one another (optimize: ${optimize})`, () => {
+            // Without cycle detection: 3^10 instances, past MAX_EXPANDED_NODES. The last <use> of b is
+            // not circular (b is a sibling): one shifted copy of b, its own <use> dropped.
+            const source = doc(
+                `<g id="a">${red(0, 0)}<g id="b">${green(6, 6)}<use href="#a"/><use href="#b" x="1"/><use href="#a" y="1"/></g>` +
+                    '<use href="#a" y="1"/><use href="#b" x="2"/></g>',
+            );
+            const started = performance.now();
+            const { xml, warnings } = convert(source, { optimize });
+            expect(performance.now() - started).toBeLessThan(50);
+            expect(xml.match(/<path/g)).toHaveLength(3);
+            expect(xml.length).toBeLessThan(1000);
+            expect(warnings.map((w) => w.message.slice(0, circular('a').length)).sort()).toEqual([
+                circular('a'),
+                circular('b'),
+            ]);
+        });
+
+    for (const optimize of [false, true])
+        it(`keeps a legitimate 3-level <use> nesting (optimize: ${optimize})`, () => {
+            const source = doc(
+                '<defs><rect id="p" width="5" height="5" fill="green"/>' +
+                    '<g id="row"><use href="#p"/><use href="#p" x="6"/></g>' +
+                    '<g id="grid"><use href="#row"/><use href="#row" y="6"/></g></defs>' +
+                    '<use href="#grid"/><use href="#grid" x="12" y="12"/>',
+            );
+            const { xml, warnings } = convert(source, { optimize, strict: true });
+            expect(warnings).toEqual([]);
+            const cells = [0, 12].flatMap((o) => [0, 6].flatMap((y) => [0, 6].map((x) => green(o + x, o + y))));
+            const result = compareSvgs(doc(cells.join('')), vdToSvg(xml));
+            expect(result.sizeMismatch).toBeNull();
+            expect(result.mismatch).toBeLessThan(DEFAULT_MAX_MISMATCH);
+            if (!optimize) expect(xml.match(/<path/g)).toHaveLength(8);
+        });
+});

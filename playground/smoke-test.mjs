@@ -2,21 +2,29 @@
 // worker.js runs in a real thread (worker_threads + a tiny shim for importScripts / postMessage), driven
 // by core.js exactly as the page does. Named *-test.mjs, not *.test.mjs, so vitest does not collect it.
 import assert from 'node:assert/strict';
+import { execFileSync } from 'node:child_process';
 import { existsSync, readFileSync } from 'node:fs';
 import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 import { Worker } from 'node:worker_threads';
 import {
+    CLI_SNIPPETS,
     buildOptions,
     createConverter,
+    describeApiLevel,
+    describeConversion,
     describeError,
     describeSize,
+    effectiveFormat,
     describeUnresolvedColors,
     formatBytes,
+    isVectorDrawable,
+    outputFileName,
     parsePreviewColors,
     resourceFileName,
     svgDataUrl,
     tokenizeXml,
+    warningHelpUrl,
 } from './core.js';
 import { EXAMPLES } from './examples.js';
 
@@ -179,6 +187,16 @@ test('parsePreviewColors reads reference=color pairs', () => {
     });
     // The last pair wins; a pair without `=` keeps an empty color, which the library rejects by name.
     assert.deepEqual(parsePreviewColors('?attr/a=#000, ?attr/a=#FFF, ?attr/b'), { '?attr/a': '#FFF', '?attr/b': '' });
+    // One pair per line, as typed in the multi-line field (Windows line ends included).
+    assert.deepEqual(parsePreviewColors('?attr/a=#000\r\n@color/b=#FFF\n'), { '?attr/a': '#000', '@color/b': '#FFF' });
+});
+
+test('the Preview colors field is multi-line and the gray note leads to it', () => {
+    const html = readFileSync(here('index.html'), 'utf8');
+    assert.match(html, /<textarea\s+id="opt-preview-colors"/);
+    const app = readFileSync(here('app.js'), 'utf8');
+    assert.match(app, /getElementById\('opt-preview-colors'\)/);
+    assert.match(app, /setAttribute\('aria-controls', 'opt-preview-colors'\)/);
 });
 
 test('an invalid SVG reports the error and the worker keeps working', async (t) => {
@@ -264,6 +282,7 @@ test('every example converts, and only the one meant to shows warnings', async (
         stroke: [],
         clip: [],
         unsupported: ['unsupported-attribute', 'unsupported-element'],
+        drawable: [],
     });
 });
 
@@ -330,4 +349,126 @@ test('the page never parses markup as HTML and loads nothing from another origin
     for (const name of [...loaded, 'core.js', 'examples.js', 'worker.js']) {
         assert.ok(workflow.includes(`playground/${name}`), `pages.yml does not publish ${name}`);
     }
+});
+
+test('every option has a visible hint, referenced by its control (T-188)', () => {
+    const html = readFileSync(here('./index.html'), 'utf8');
+    const fieldset = html.slice(html.indexOf('<fieldset id="settings"'), html.indexOf('</fieldset>'));
+    const controls = [...fieldset.matchAll(/<(?:input|select|textarea)\b[^>]*>/g)].map((m) => m[0]);
+    assert.ok(controls.length >= 6, 'the options are found');
+    for (const control of controls) {
+        const id = /\sid="([^"]+)"/.exec(control)?.[1];
+        const describedBy = /aria-describedby="([^"]+)"/.exec(control)?.[1];
+        assert.equal(describedBy, `${id}-hint`, `${id} is described by its hint`);
+        assert.match(
+            fieldset,
+            new RegExp(`<span id="${describedBy}" class="field-hint"\\s*>\\s*\\S`),
+            `${id} has a hint`,
+        );
+    }
+});
+
+test('the guide sections exist, and the command-line card covers four package managers (T-188)', () => {
+    const html = readFileSync(here('./index.html'), 'utf8');
+    for (const id of ['use', 'coverage', 'api-note', 'cli-snippet']) assert.match(html, new RegExp(`id="${id}"`));
+    assert.ok(html.includes('href="#use"') && html.includes('href="#coverage"'), 'the nav links to the sections');
+    assert.deepEqual(Object.keys(CLI_SNIPPETS), ['npm', 'pnpm', 'yarn', 'bun']);
+    for (const [pm, snippet] of Object.entries(CLI_SNIPPETS)) {
+        assert.match(snippet, /svg-vectordrawable\n/, `${pm} installs the package`);
+        assert.match(snippet, /svgvd icons\/ -o app\/src\/main\/res\/drawable$/, `${pm} runs the CLI`);
+        assert.match(html, new RegExp(`name="pm" value="${pm}"`), `${pm} has a switch`);
+    }
+});
+
+test('describeApiLevel says what the drawable needs', () => {
+    assert.match(describeApiLevel(null), /Convert an SVG/);
+    assert.match(describeApiLevel(21), /from API 21/);
+    assert.match(describeApiLevel(24), /needs API 24.*app:srcCompat/);
+});
+
+test('the status says what the warnings mean, worst category first (T-188)', () => {
+    assert.deepEqual(describeConversion(21, []), { text: 'Converted for API 21+: faithful, no warning.', tone: 'ok' });
+    const w = (category) => ({ code: 'x', message: '', category });
+    assert.match(describeConversion(24, [w('info')]).text, /faithful; 1 note below/);
+    assert.match(
+        describeConversion(24, [w('approximation'), w('info')]).text,
+        /with 1 approximation: close to the SVG/,
+    );
+    const lossy = describeConversion(24, [w('approximation'), w('lossy'), w('lossy')]);
+    assert.match(lossy.text, /but 2 lossy warnings: part of the SVG is missing or drawn wrong/);
+    assert.equal(lossy.tone, 'warn');
+});
+
+test('each warning links to its explanation in docs/warnings.md, which has a section per code (T-188)', () => {
+    const doc = readFileSync(here('../docs/warnings.md'), 'utf8');
+    const documented = [...doc.matchAll(/^### `([a-z-]+)`$/gm)].map((m) => m[1]);
+    assert.ok(documented.length >= 20);
+    for (const code of documented) {
+        assert.equal(
+            warningHelpUrl(code),
+            `https://github.com/IBRAHIMDANS/svg-vectordrawable/blob/main/docs/warnings.md#${code}`,
+        );
+    }
+    assert.equal(warningHelpUrl('not a code'), null);
+    assert.equal(warningHelpUrl(undefined), null);
+});
+
+test('the output format follows the input: Compose from both, SVG from a drawable only (T-188)', async (t) => {
+    const { converter } = trackedConverter([spawnPlaygroundWorker]);
+    t.after(converter.dispose);
+    const svg = EXAMPLES.find((e) => e.id === 'gradient').svg;
+    const drawable = EXAMPLES.find((e) => e.id === 'drawable').svg;
+    assert.equal(isVectorDrawable(svg), false);
+    assert.equal(isVectorDrawable(drawable), true);
+    assert.equal(isVectorDrawable('<?xml version="1.0"?>\n<!-- icon -->\n<vector android:width="24dp"/>'), true);
+    assert.deepEqual(
+        [effectiveFormat('vector', false), effectiveFormat('svg', false), effectiveFormat('compose', false)],
+        ['vector', 'vector', 'compose'],
+    );
+    assert.deepEqual(
+        [effectiveFormat('vector', true), effectiveFormat('svg', true), effectiveFormat('compose', true)],
+        ['svg', 'svg', 'compose'],
+    );
+
+    const compose = await converter.convert(svg, buildOptions(), {}, { format: 'compose', name: 'gradient-icon' });
+    assert.equal(compose.status, 'ok', compose.message);
+    assert.equal(compose.format, 'compose');
+    assert.equal(compose.kotlinName, 'GradientIcon');
+    assert.match(compose.output, /val GradientIcon: ImageVector by lazy/);
+    assert.match(compose.preview, /^<svg/);
+
+    const fromDrawable = await converter.convert(
+        drawable,
+        buildOptions(),
+        {},
+        { format: 'compose', name: 'ic_favorite' },
+    );
+    assert.equal(fromDrawable.status, 'ok', fromDrawable.message);
+    assert.equal(fromDrawable.input, 'vectordrawable');
+    assert.match(fromDrawable.output, /val IcFavorite: ImageVector/);
+    assert.match(fromDrawable.sourcePreview, /^<svg/);
+
+    const back = await converter.convert(drawable, buildOptions(), {}, { format: 'svg' });
+    assert.equal(back.format, 'svg');
+    assert.match(back.output, /^<svg[^>]*viewBox="0 0 24 24"/);
+    assert.equal(back.minSdk, null);
+
+    assert.deepEqual(
+        [
+            outputFileName('vector', 'Arrow Left.svg'),
+            outputFileName('svg', 'ic_favorite.xml'),
+            outputFileName('compose', 'x.svg', 'GradientIcon'),
+        ],
+        ['arrow_left.xml', 'ic_favorite.svg', 'GradientIcon.kt'],
+    );
+});
+
+test('the command-line options table lists every option of svgvd --help (T-188)', () => {
+    const help = execFileSync(process.execPath, [here('../dist/cli.js'), '--help'], { encoding: 'utf8' });
+    const flags = [...new Set([...help.matchAll(/^\s{2}(?:-\w, )?(--[a-z-]+(?:=lossy)?)/gm)].map((m) => m[1]))];
+    assert.ok(flags.length >= 25, `flags found: ${flags.length}`);
+    const html = readFileSync(here('./index.html'), 'utf8');
+    const table = html.slice(html.indexOf('<table class="options-table"'), html.indexOf('</table>'));
+    for (const flag of flags)
+        assert.ok(table.includes(`<code>${flag}`) || table.includes(`, ${flag}`), `${flag} is in the table`);
 });

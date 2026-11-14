@@ -508,10 +508,12 @@ textarea.code-area::placeholder {
 
 /* ---------- Options ---------- */
 
+/* Flex rather than grid: the short fields share a row at any width, without the empty column a grid
+   track would leave next to them, and the wide field takes a row of its own below them. */
 .options {
-    display: grid;
+    display: flex;
+    flex-wrap: wrap;
     gap: 12px;
-    grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
     min-width: 0;
     margin: 0;
     padding: 6px 16px 14px;
@@ -529,8 +531,27 @@ textarea.code-area::placeholder {
 
 .field {
     display: grid;
+    flex: 1 1 170px;
+    align-content: start;
     gap: 4px;
     min-width: 0;
+}
+
+/* Preview colors: pairs such as `?attr/colorControlNormal=#FF6750A4` are long, so the field spans the
+   whole options width and wraps instead of scrolling sideways. */
+.field-wide {
+    flex-basis: 100%;
+}
+
+/* Wide enough for its longest option ("On: fail on lossy and approximations"), which a closed
+   select would otherwise cut once chosen. */
+.field-strict {
+    flex-basis: 300px;
+}
+
+.field-hint {
+    color: var(--muted);
+    font-size: 0.8rem;
 }
 
 .field label {
@@ -540,7 +561,8 @@ textarea.code-area::placeholder {
 }
 
 .field input,
-.field select {
+.field select,
+.field textarea {
     width: 100%;
     min-height: 36px;
     padding: 5px 9px;
@@ -550,6 +572,17 @@ textarea.code-area::placeholder {
     color: inherit;
     font: inherit;
     font-size: 0.9rem;
+}
+
+.field textarea {
+    font-family: var(--mono);
+    font-size: 0.85rem;
+    line-height: 1.5;
+    resize: vertical;
+}
+
+.field textarea::placeholder {
+    color: var(--muted);
 }
 
 /* ---------- Preview ---------- */
@@ -627,6 +660,23 @@ textarea.code-area::placeholder {
     word-break: break-all;
 }
 
+/* "Set preview colors": a link-looking button that takes the user to the field the note is about. */
+.link-button {
+    display: inline;
+    padding: 0;
+    border: 0;
+    background: none;
+    color: var(--accent);
+    font: inherit;
+    text-decoration: underline;
+    text-underline-offset: 3px;
+    cursor: pointer;
+}
+
+.link-button:hover {
+    color: var(--accent-strong);
+}
+
 /* ---------- Warnings ---------- */
 
 .count {
@@ -677,6 +727,12 @@ textarea.code-area::placeholder {
 .warnings li p {
     margin: 4px 0 0;
     color: var(--muted);
+}
+
+.warning-help {
+    display: inline-block;
+    margin-top: 4px;
+    font-size: 0.85rem;
 }
 
 .warnings li.empty {
@@ -832,6 +888,195 @@ textarea.code-area::placeholder {
     padding: 0;
     list-style: none;
     font-size: 0.95rem;
+}
+
+/* ---------- Guide ---------- */
+
+.steps {
+    display: grid;
+    gap: 10px;
+    grid-template-columns: repeat(auto-fit, minmax(min(100%, 230px), 1fr));
+    max-width: 980px;
+    margin: 22px auto 0;
+    padding: 0;
+    list-style: none;
+    counter-reset: step;
+    text-align: left;
+}
+
+.steps li {
+    position: relative;
+    padding: 12px 14px 12px 50px;
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    background: var(--surface);
+    font-size: 0.9rem;
+    counter-increment: step;
+}
+
+.steps li::before {
+    content: counter(step);
+    position: absolute;
+    top: 12px;
+    left: 14px;
+    display: grid;
+    place-items: center;
+    width: 24px;
+    height: 24px;
+    border-radius: 50%;
+    background: var(--accent-soft);
+    color: var(--accent);
+    font-weight: 700;
+    font-size: 0.85rem;
+}
+
+.steps strong {
+    display: block;
+    margin-bottom: 2px;
+}
+
+.steps span {
+    color: var(--muted);
+}
+
+.feedback {
+    margin: 12px 0 0;
+    color: var(--muted);
+    font-size: 0.9rem;
+    text-align: right;
+}
+
+/* Long paths (app/src/main/res/drawable/…) wrap instead of widening a phone screen. */
+.more-lede code,
+.more-note code,
+.steps code {
+    overflow-wrap: anywhere;
+}
+
+.more-note {
+    margin: 16px 0 0;
+    max-width: 85ch;
+    color: var(--muted);
+    font-size: 0.9rem;
+}
+
+.api-note {
+    padding: 10px 12px;
+    border-radius: 8px;
+    background: var(--surface-2);
+    color: var(--text) !important;
+}
+
+.card .api-note {
+    margin-top: 0;
+}
+
+/* Output format, in a bar under the output pane's head. */
+.pane-bar {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 10px;
+    padding: 6px 12px 6px 16px;
+    border-bottom: 1px solid var(--border);
+    background: var(--surface);
+}
+
+.format-switch {
+    display: inline-flex;
+}
+
+.format-switch label:has(input:disabled) {
+    cursor: not-allowed;
+    opacity: 0.45;
+}
+
+.format-switch input:disabled {
+    cursor: not-allowed;
+}
+
+/* The command-line options, as a table that scrolls sideways on a phone. */
+.table-wrap {
+    overflow-x: auto;
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    background: var(--surface);
+}
+
+.options-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 0.9rem;
+}
+
+.options-table th,
+.options-table td {
+    padding: 8px 14px;
+    border-bottom: 1px solid var(--border);
+    text-align: left;
+    vertical-align: top;
+}
+
+.options-table thead th {
+    color: var(--muted);
+    font-size: 0.82rem;
+    font-weight: 550;
+}
+
+.options-table tbody th {
+    padding-top: 14px;
+    background: var(--surface-2);
+    font-size: 0.85rem;
+}
+
+.options-table td:first-child {
+    white-space: nowrap;
+}
+
+.options-table tr:last-child td {
+    border-bottom: 0;
+}
+
+/* Outside a pane head, the segmented control lays its options out on its own. */
+.pm-switch {
+    display: inline-flex;
+    margin-bottom: 10px;
+}
+
+.coverage {
+    display: grid;
+    gap: 16px;
+    grid-template-columns: repeat(auto-fit, minmax(min(100%, 280px), 1fr));
+}
+
+.coverage-col {
+    padding: 18px;
+    border: 1px solid var(--border);
+    border-top: 4px solid var(--ok);
+    border-radius: var(--radius);
+    background: var(--surface);
+}
+
+.coverage-col[data-kind='approximation'] {
+    border-top-color: var(--approximation);
+}
+
+.coverage-col[data-kind='lossy'] {
+    border-top-color: var(--lossy);
+}
+
+.coverage-col h3 {
+    margin: 0 0 10px;
+    font-size: 1rem;
+}
+
+.coverage-col ul {
+    display: grid;
+    gap: 6px;
+    margin: 0;
+    padding-left: 18px;
+    color: var(--muted);
+    font-size: 0.92rem;
 }
 
 /* ---------- Footer ---------- */

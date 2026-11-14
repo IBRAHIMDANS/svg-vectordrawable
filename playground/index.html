@@ -45,6 +45,9 @@
                 <span>svg-vectordrawable</span>
             </a>
             <nav aria-label="Project links">
+                <a href="#use">Use the result</a>
+                <a href="#coverage">What converts</a>
+                <a href="#cli-options">CLI options</a>
                 <a href="https://github.com/IBRAHIMDANS/svg-vectordrawable#readme">Docs</a>
                 <a href="https://github.com/IBRAHIMDANS/svg-vectordrawable">GitHub</a>
                 <a href="https://www.npmjs.com/package/svg-vectordrawable">npm</a>
@@ -63,6 +66,23 @@
                     <li>Gradients, clip-path and groups</li>
                     <li>Free and open source</li>
                 </ul>
+                <ol class="steps" aria-label="How to use this page">
+                    <li>
+                        <strong>Paste or drop an SVG</strong>
+                        <span>or pick an example under the input.</span>
+                    </li>
+                    <li>
+                        <strong>Check the warnings and the preview</strong>
+                        <span>they show what Android will draw, and what it cannot.</span>
+                    </li>
+                    <li>
+                        <strong>Download the XML into <code>res/drawable/</code></strong>
+                        <span
+                            >its file name is the resource name: <a href="#use">use it</a> as
+                            <code>@drawable/name</code>.</span
+                        >
+                    </li>
+                </ol>
             </section>
 
             <div class="workbench">
@@ -72,7 +92,12 @@
                         <span id="input-meta" class="meta"></span>
                         <div class="pane-actions">
                             <label class="button" for="file-input">Open file</label>
-                            <input id="file-input" class="visually-hidden" type="file" accept=".svg,image/svg+xml" />
+                            <input
+                                id="file-input"
+                                class="visually-hidden"
+                                type="file"
+                                accept=".svg,image/svg+xml,.xml,text/xml,application/xml"
+                            />
                             <button id="clear-button" type="button" class="button">Clear</button>
                         </div>
                     </header>
@@ -82,7 +107,7 @@
                         spellcheck="false"
                         autocomplete="off"
                         aria-labelledby="input-title"
-                        placeholder="Paste SVG markup here, or drop a .svg file anywhere on the page"
+                        placeholder="Paste SVG markup (or an Android VectorDrawable) here, or drop a .svg / .xml file anywhere on the page"
                     ></textarea>
                     <div class="pane-foot">
                         <span id="examples-label" class="foot-label">Try</span>
@@ -99,6 +124,16 @@
                             <button id="download-button" type="button" class="button primary" disabled>Download</button>
                         </div>
                     </header>
+                    <div class="pane-bar">
+                        <span class="foot-label" id="format-label">Output as</span>
+                        <div class="segmented format-switch" role="radiogroup" aria-labelledby="format-label">
+                            <label
+                                ><input type="radio" name="format" value="vector" checked /><span>Drawable</span></label
+                            >
+                            <label><input type="radio" name="format" value="compose" /><span>Compose</span></label>
+                            <label><input type="radio" name="format" value="svg" /><span>SVG</span></label>
+                        </div>
+                    </div>
                     <pre
                         id="xml-output"
                         class="code-area"
@@ -112,47 +147,51 @@
 
                 <fieldset id="settings" class="options">
                     <legend>Options</legend>
-                    <div class="field">
+                    <div class="field field-strict">
                         <label for="opt-strict">Strict mode</label>
-                        <select id="opt-strict" name="strict">
+                        <select id="opt-strict" aria-describedby="opt-strict-hint" name="strict">
                             <option value="off">Off: report warnings</option>
                             <option value="lossy">Lossy: fail on lossy constructs</option>
                             <option value="all">On: fail on lossy and approximations</option>
                         </select>
+                        <span id="opt-strict-hint" class="field-hint"
+                            >Off converts and lists every change. Lossy and On refuse the file instead, as a build with
+                            <code>--strict</code> does.</span
+                        >
                     </div>
                     <div class="field">
                         <label for="opt-current-color">currentColor</label>
                         <input
                             id="opt-current-color"
+                            aria-describedby="opt-current-color-hint"
                             name="currentColor"
                             type="text"
                             placeholder="#000000 or ?attr/colorOnSurface"
                         />
+                        <span id="opt-current-color-hint" class="field-hint"
+                            >What <code>currentColor</code> means. A theme attribute such as
+                            <code>?attr/colorOnSurface</code> makes the icon follow the theme.</span
+                        >
                     </div>
                     <div class="field">
                         <label for="opt-tint">Tint</label>
-                        <input id="opt-tint" name="tint" type="text" placeholder="none, e.g. #FF6200EE" />
-                    </div>
-                    <div class="field">
-                        <label for="opt-preview-colors">Preview colors</label>
                         <input
-                            id="opt-preview-colors"
-                            name="previewColors"
+                            id="opt-tint"
+                            aria-describedby="opt-tint-hint"
+                            name="tint"
                             type="text"
-                            spellcheck="false"
-                            autocomplete="off"
-                            aria-describedby="opt-preview-colors-hint"
-                            placeholder="?attr/colorPrimary=#6750A4"
+                            placeholder="none, e.g. #FF6200EE"
                         />
-                        <span id="opt-preview-colors-hint" class="visually-hidden"
-                            >Values used by the preview only, for the color references of the drawable: pairs
-                            reference=color separated by commas</span
+                        <span id="opt-tint-hint" class="field-hint"
+                            >An Android color applied over the whole drawable (<code>android:tint</code>), e.g.
+                            <code>#FF6200EE</code>.</span
                         >
                     </div>
                     <div class="field">
                         <label for="opt-float-precision">Float precision</label>
                         <input
                             id="opt-float-precision"
+                            aria-describedby="opt-float-precision-hint"
                             name="floatPrecision"
                             type="number"
                             min="0"
@@ -161,11 +200,16 @@
                             inputmode="numeric"
                             placeholder="3"
                         />
+                        <span id="opt-float-precision-hint" class="field-hint"
+                            >Decimals kept in the path data (default 3): fewer makes a smaller file, a little less
+                            exact.</span
+                        >
                     </div>
                     <div class="field">
                         <label for="opt-min-sdk">minSdk</label>
                         <input
                             id="opt-min-sdk"
+                            aria-describedby="opt-min-sdk-hint"
                             name="minSdk"
                             type="number"
                             min="1"
@@ -173,6 +217,26 @@
                             inputmode="numeric"
                             placeholder="not checked"
                         />
+                        <span id="opt-min-sdk-hint" class="field-hint"
+                            >Your app's <code>minSdk</code>: warns when the drawable needs a higher API level (gradients
+                            need 24).</span
+                        >
+                    </div>
+                    <div class="field field-wide">
+                        <label for="opt-preview-colors">Preview colors</label>
+                        <textarea
+                            id="opt-preview-colors"
+                            name="previewColors"
+                            rows="2"
+                            spellcheck="false"
+                            autocomplete="off"
+                            aria-describedby="opt-preview-colors-hint"
+                            placeholder="?attr/colorPrimary=#6750A4, @color/brand_primary=#1A73E8"
+                        ></textarea>
+                        <span id="opt-preview-colors-hint" class="field-hint"
+                            >Used by the preview only, for the color references of the drawable: reference=color pairs,
+                            separated by commas or new lines.</span
+                        >
                     </div>
                 </fieldset>
 
@@ -192,7 +256,7 @@
                     <div id="previews" class="previews" data-bg="checker">
                         <figure>
                             <div id="source-preview" class="preview"></div>
-                            <figcaption>Source SVG</figcaption>
+                            <figcaption id="source-caption">Source SVG</figcaption>
                         </figure>
                         <figure>
                             <div id="vd-preview" class="preview"></div>
@@ -209,6 +273,117 @@
                     <ul id="warnings" class="warnings" aria-labelledby="warnings-title"></ul>
                 </section>
             </div>
+            <p class="feedback">
+                Wrong result?
+                <a href="https://github.com/IBRAHIMDANS/svg-vectordrawable/issues/new">Report it with the SVG</a>
+                · Missing a feature?
+                <a href="https://github.com/IBRAHIMDANS/svg-vectordrawable/discussions">Ask in Discussions</a>
+            </p>
+
+            <section id="use" class="more" aria-labelledby="use-title">
+                <h2 id="use-title">Use the result in your app</h2>
+                <p class="more-lede">
+                    Save the downloaded file as
+                    <code>app/src/main/res/drawable/<span class="res-name">icon</span>.xml</code>. Android names the
+                    resource after the file: lowercase letters, digits and underscores only, which the Download button
+                    already takes care of.
+                </p>
+                <div class="cards">
+                    <article class="card">
+                        <h3>Layout XML</h3>
+                        <div class="snippet">
+                            <pre><code>&lt;ImageView
+    android:layout_width="24dp"
+    android:layout_height="24dp"
+    app:srcCompat="@drawable/<span class="res-name">icon</span>" /&gt;</code></pre>
+                            <button type="button" class="button copy-snippet">Copy</button>
+                        </div>
+                        <p>
+                            <code>app:srcCompat</code> (AppCompat) also works below API 24;
+                            <code>android:src</code> needs API 24 for gradients.
+                        </p>
+                    </article>
+                    <article class="card">
+                        <h3>Jetpack Compose</h3>
+                        <div class="snippet">
+                            <pre><code>Icon(
+    painter = painterResource(R.drawable.<span class="res-name">icon</span>),
+    contentDescription = null,
+)</code></pre>
+                            <button type="button" class="button copy-snippet">Copy</button>
+                        </div>
+                        <p>
+                            <code>Icon</code> tints the drawable with the content color; use <code>Image</code> to keep
+                            its own colors. Prefer Kotlin? Choose <strong>Compose</strong> above the output for an
+                            <code>ImageVector</code>: <code>Icon(imageVector = Name, …)</code>.
+                        </p>
+                    </article>
+                    <article class="card">
+                        <h3>API level</h3>
+                        <p id="api-note" class="api-note">Convert an SVG to see the API level it needs.</p>
+                        <p>
+                            Below API 24, gradients need AppCompat:
+                            <code>vectorDrawables.useSupportLibrary = true</code> in <code>build.gradle</code>, and
+                            <code>app:srcCompat</code> in layouts. Set <strong>minSdk</strong> in the options to get a
+                            warning.
+                        </p>
+                    </article>
+                </div>
+            </section>
+
+            <section id="coverage" class="more" aria-labelledby="coverage-title">
+                <h2 id="coverage-title">What converts</h2>
+                <p class="more-lede">
+                    A VectorDrawable cannot draw everything an SVG can. Nothing is dropped silently: whatever is not
+                    converted exactly shows up in the warnings.
+                </p>
+                <div class="coverage">
+                    <article class="coverage-col" data-kind="exact">
+                        <h3>Converted exactly</h3>
+                        <ul>
+                            <li>Paths and shapes, fills and strokes (caps, joins, even-odd)</li>
+                            <li>Groups and transforms; skew is baked into the geometry</li>
+                            <li>Linear and radial gradients, <code>gradientTransform</code> included</li>
+                            <li><code>clip-path</code>, <code>&lt;use&gt;</code> and <code>&lt;symbol&gt;</code></li>
+                            <li>Dashed strokes, drawn as dash segments</li>
+                            <li>
+                                Colors (<code>hsl()</code>, named, <code>currentColor</code>), opacity,
+                                <code>viewBox</code>
+                            </li>
+                        </ul>
+                    </article>
+                    <article class="coverage-col" data-kind="approximation">
+                        <h3>Approximated, with a warning</h3>
+                        <ul>
+                            <li>Opacity of a group whose children overlap</li>
+                            <li>Masks: converted to a clip when they are one, otherwise warned</li>
+                            <li>Focal point of a radial gradient (<code>fx</code> / <code>fy</code>)</li>
+                        </ul>
+                    </article>
+                    <article class="coverage-col" data-kind="lossy">
+                        <h3>Not possible in a VectorDrawable</h3>
+                        <ul>
+                            <li>
+                                <code>&lt;filter&gt;</code>, <code>&lt;image&gt;</code>, <code>&lt;pattern&gt;</code>,
+                                blend modes
+                            </li>
+                            <li>
+                                <code>&lt;text&gt;</code> on this page (the package draws simple text from a font file)
+                            </li>
+                            <li>
+                                For those, the command line can write a PNG instead:
+                                <a href="https://github.com/IBRAHIMDANS/svg-vectordrawable#png-fallback"
+                                    ><code>--fallback-png</code></a
+                                >
+                            </li>
+                        </ul>
+                    </article>
+                </div>
+                <p class="more-note">
+                    This page uses the lightweight build: <code>&lt;style&gt;</code> rules are not applied here, they
+                    are by the package (an inline <code>style="…"</code> works in both).
+                </p>
+            </section>
 
             <section class="more" aria-labelledby="more-title">
                 <h2 id="more-title">Use it in your build</h2>
@@ -219,8 +394,14 @@
                 <div class="cards">
                     <article class="card">
                         <h3>Command line</h3>
+                        <div class="segmented pm-switch" role="radiogroup" aria-label="Package manager">
+                            <label><input type="radio" name="pm" value="npm" checked /><span>npm</span></label>
+                            <label><input type="radio" name="pm" value="pnpm" /><span>pnpm</span></label>
+                            <label><input type="radio" name="pm" value="yarn" /><span>Yarn</span></label>
+                            <label><input type="radio" name="pm" value="bun" /><span>Bun</span></label>
+                        </div>
                         <div class="snippet">
-                            <pre><code>npm i -D svg-vectordrawable
+                            <pre><code id="cli-snippet">npm install -D svg-vectordrawable
 npx svgvd icons/ -o app/src/main/res/drawable</code></pre>
                             <button type="button" class="button copy-snippet">Copy</button>
                         </div>
@@ -263,6 +444,161 @@ const { xml, warnings, minSdk } = convert(svg);</code></pre>
                             </li>
                         </ul>
                     </article>
+                </div>
+            </section>
+            <section id="cli-options" class="more" aria-labelledby="cli-options-title">
+                <h2 id="cli-options-title">Command-line options</h2>
+                <p class="more-lede">
+                    <code>svgvd &lt;input.svg|dir…&gt; [options]</code> converts files or folders;
+                    <code>svgvd -</code> reads stdin. Every option of <code>svgvd --help</code>:
+                </p>
+                <div class="table-wrap">
+                    <table class="options-table">
+                        <thead>
+                            <tr>
+                                <th scope="col">Option</th>
+                                <th scope="col">What it does</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <tr>
+                                <th colspan="2" scope="rowgroup">Input and output</th>
+                            </tr>
+                            <tr>
+                                <td><code>-o, --out &lt;path&gt;</code></td>
+                                <td>Output file (one input) or folder (a batch)</td>
+                            </tr>
+                            <tr>
+                                <td><code>-s, --string &lt;svg&gt;</code></td>
+                                <td>Convert an inline SVG string, printed to stdout</td>
+                            </tr>
+                            <tr>
+                                <td><code>--stdout</code></td>
+                                <td>Print the result instead of writing a file</td>
+                            </tr>
+                            <tr>
+                                <td><code>-r, --recursive</code></td>
+                                <td>Also convert the subfolders, keeping the tree under <code>-o</code></td>
+                            </tr>
+                            <tr>
+                                <td><code>--android-names</code></td>
+                                <td>
+                                    Name outputs as Android resources (<code>Arrow-Left.svg</code> →
+                                    <code>arrow_left.xml</code>)
+                                </td>
+                            </tr>
+                            <tr>
+                                <td><code>--format &lt;f&gt;</code></td>
+                                <td>
+                                    <code>vector</code> (default), <code>compose</code> (Kotlin
+                                    <code>ImageVector</code>) or <code>svg</code> (a VectorDrawable back to SVG)
+                                </td>
+                            </tr>
+                            <tr>
+                                <td><code>--package &lt;name&gt;</code></td>
+                                <td>Kotlin package of the <code>--format compose</code> files</td>
+                            </tr>
+                            <tr>
+                                <td><code>-w, --watch</code></td>
+                                <td>Convert, then reconvert each file you save (Ctrl+C to stop)</td>
+                            </tr>
+                            <tr>
+                                <td><code>--json</code></td>
+                                <td>Print a JSON report (outputs, warnings, errors) for CI</td>
+                            </tr>
+                            <tr>
+                                <td><code>--dry-run</code></td>
+                                <td>Convert and report, write nothing</td>
+                            </tr>
+                            <tr>
+                                <th colspan="2" scope="rowgroup">What to reject</th>
+                            </tr>
+                            <tr>
+                                <td><code>--strict</code></td>
+                                <td>Fail on anything lost or approximated</td>
+                            </tr>
+                            <tr>
+                                <td><code>--strict=lossy</code></td>
+                                <td>Fail only when content is lost</td>
+                            </tr>
+                            <tr>
+                                <td><code>--rule &lt;code=level&gt;</code></td>
+                                <td>
+                                    Severity of one
+                                    <a
+                                        href="https://github.com/IBRAHIMDANS/svg-vectordrawable/blob/main/docs/warnings.md"
+                                        >warning code</a
+                                    >: <code>off</code>, <code>warn</code> or <code>error</code>
+                                </td>
+                            </tr>
+                            <tr>
+                                <td><code>--fallback-png &lt;d&gt;</code></td>
+                                <td>
+                                    Write a PNG for a rejected file instead of failing (<code>all</code> or
+                                    <code>mdpi,xhdpi…</code>)
+                                </td>
+                            </tr>
+                            <tr>
+                                <td><code>--min-sdk &lt;n&gt;</code></td>
+                                <td>Warn when the drawable needs a higher API level than your app's</td>
+                            </tr>
+                            <tr>
+                                <th colspan="2" scope="rowgroup">Drawing</th>
+                            </tr>
+                            <tr>
+                                <td><code>--current-color &lt;c&gt;</code></td>
+                                <td>
+                                    What <code>currentColor</code> stands for: a color, or a theme attribute
+                                    (<code>?attr/colorOnSurface</code>)
+                                </td>
+                            </tr>
+                            <tr>
+                                <td><code>--color-map &lt;c=ref&gt;</code></td>
+                                <td>Map an SVG color to an Android color resource or attribute</td>
+                            </tr>
+                            <tr>
+                                <td><code>--tint &lt;color&gt;</code></td>
+                                <td>Add <code>android:tint</code> to the drawable</td>
+                            </tr>
+                            <tr>
+                                <td><code>--width &lt;dp&gt;</code>, <code>--height &lt;dp&gt;</code></td>
+                                <td>Set the size in dp, keeping the viewport</td>
+                            </tr>
+                            <tr>
+                                <td><code>--auto-mirrored</code></td>
+                                <td>Flip the drawable in right-to-left layouts</td>
+                            </tr>
+                            <tr>
+                                <td><code>--preserve-ids</code></td>
+                                <td>
+                                    Keep SVG ids as <code>android:name</code>, for <code>AnimatedVectorDrawable</code>
+                                </td>
+                            </tr>
+                            <tr>
+                                <td><code>--font &lt;f=file&gt;</code></td>
+                                <td>
+                                    Draw <code>&lt;text&gt;</code> in font family <code>f</code> as outlines, from a
+                                    font file
+                                </td>
+                            </tr>
+                            <tr>
+                                <td><code>-p, --precision &lt;n&gt;</code></td>
+                                <td>Decimals of the numbers (default 3)</td>
+                            </tr>
+                            <tr>
+                                <td><code>--xml-tag</code></td>
+                                <td>Start the file with an XML declaration</td>
+                            </tr>
+                            <tr>
+                                <td><code>--no-optimize</code></td>
+                                <td>Skip the svgo normalization (not recommended)</td>
+                            </tr>
+                            <tr>
+                                <td><code>-h, --help</code></td>
+                                <td>Show this list</td>
+                            </tr>
+                        </tbody>
+                    </table>
                 </div>
             </section>
         </main>

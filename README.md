@@ -22,11 +22,25 @@ _Same SVG ([`radial-gradient-transform.svg`](test/fixtures/radial-gradient-trans
 with resvg: the source, the `svg2vectordrawable` 2.9.1 output and the `svg-vectordrawable` output.
 Regenerated at each release by [`docs/assets/generate-comparison.mjs`](docs/assets/generate-comparison.mjs)._
 
-```
-npm i svg-vectordrawable
+```sh
+npm install svg-vectordrawable    # npm
+pnpm add svg-vectordrawable       # pnpm
+yarn add svg-vectordrawable       # Yarn
+bun add svg-vectordrawable        # Bun
 ```
 
-Requires Node.js 20 or later (the browser builds run in any modern browser).
+Add `-D` (`--save-dev` with npm) when you only use it at build time, through the CLI or a script. To run
+the CLI once without installing anything:
+
+```sh
+npx -p svg-vectordrawable svgvd icon.svg                  # npm
+pnpm --package=svg-vectordrawable dlx svgvd icon.svg      # pnpm
+yarn dlx -p svg-vectordrawable svgvd icon.svg             # Yarn 2+ (Yarn 1 has no dlx: use npx)
+bunx -p svg-vectordrawable svgvd icon.svg                 # Bun
+```
+
+Requires Node.js 20 or later (the browser builds run in any modern browser). The optional dependencies
+below (`opentype.js`, `@resvg/resvg-js`) are added the same way with your package manager.
 
 ## Why another one?
 
@@ -154,6 +168,15 @@ import { convert, vectorDrawableToSvg } from 'svg-vectordrawable';
 const preview = vectorDrawableToSvg(convert(svg).xml, { density: 2, applyTint: true });
 ```
 
+The CLI does the same for existing drawables with `--format svg` (`ic_back.xml` → `ic_back.svg`; a
+directory is read for its `*.xml`). It takes no conversion option, and says on stderr what the SVG does
+not carry over (a color reference drawn gray, `android:tint`, the `android:trimPath*` of a filled path;
+that of a stroked path is drawn):
+
+```sh
+svgvd app/src/main/res/drawable/ic_back.xml --format svg -o preview/
+```
+
 ### Warnings, errors and `rules`
 
 Every construct that cannot be converted faithfully emits a warning with a stable `code` (listed in
@@ -179,7 +202,7 @@ try {
 
 | Code                            | Meaning                                                                                                                                                                                                     |
 | ------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `unsupported-element`           | `<text>`, `<image>`, `<foreignObject>`, `<switch>` — skipped                                                                                                                                                |
+| `unsupported-element`           | `<text>`, `<image>`, `<foreignObject>`, circular `<use>` — skipped                                                                                                                                          |
 | `unsupported-attribute`         | non-clip `mask`, `filter`, `marker*`, `vector-effect`, `paint-order`, `arcs` joins — ignored                                                                                                                |
 | `unsupported-stroke-dasharray`  | dash pattern that cannot be resolved (`em`/`ex` units) — drawn solid                                                                                                                                        |
 | `unsupported-stroke-gradient`   | no longer emitted (gradient strokes are supported); kept for compatibility                                                                                                                                  |
@@ -200,6 +223,8 @@ try {
 | `large-vector` (info)           | `android:width`/`height` above 200 dp (Android lint `VectorRaster`)                                                                                                                                         |
 | `long-path-data` (info, off)    | a `pathData` longer than 800 characters (lint `VectorPath`); enable it with `rules`                                                                                                                         |
 | `invalid-path-data` (info, off) | a `<path>` `d` with a typo after a valid start, drawn up to its last valid segment as browsers do; enable it with `rules`                                                                                   |
+
+Each code is explained, with how to fix it, in [docs/warnings.md](docs/warnings.md).
 
 Node file helpers:
 
@@ -345,6 +370,15 @@ pathFillType = PathFillType.EvenOdd) { moveTo(…) … }`, `group(rotate, pivotX
 alphas (`opacity-approximated` when several paints may overlap). `indent`, `xmlTag` and `minSdk` do
 not apply (`--min-sdk`, `--xml-tag` and `--fallback-png` are rejected with `--format compose`).
 
+An existing VectorDrawable converts too, whatever tool wrote it: `vectorDrawableToImageVector(xml,
+{ name, packageName })`, or an `.xml` file (stdin, `-s`) given to `--format compose`. It is serialized as
+is (the SVG conversion options do not apply), `android:trimPath*` included; an attribute with no
+`ImageVector` equivalent here (`android:tintMode`…) is reported with `unsupported-attribute`.
+
+```sh
+svgvd app/src/main/res/drawable/ic_*.xml -o app/src/main/java/com/example/icons --format compose --package com.example.icons
+```
+
 ### Browser
 
 A browser build (svgo's browser bundle, no Node built-ins) is published under the `./browser`
@@ -355,8 +389,8 @@ import { convert } from 'svg-vectordrawable/browser';
 const { xml } = convert(svgString);
 ```
 
-`svg-vectordrawable/browser-lite` is the same API without svgo (129 KB instead of 687 KB for the minified
-IIFE build, 49 KB instead of 212 KB gzipped): conversion always runs with `optimize: false`, so `<style>` CSS is not inlined and
+`svg-vectordrawable/browser-lite` is the same API without svgo (157 KB instead of 702 KB for the minified
+IIFE build, 58 KB instead of 217 KB gzipped): conversion always runs with `optimize: false`, so `<style>` CSS is not inlined and
 shapes are converted as authored. The [online playground](https://ibrahimdans.github.io/svg-vectordrawable/)
 runs on this build, so its output can differ from the CLI on SVGs that rely on `<style>`.
 
@@ -442,9 +476,10 @@ Limits of the converter itself, some of them **not warned**:
 
 ## Documentation
 
+- [Warnings: what they mean and how to fix them](docs/warnings.md)
 - [Migrating from `svg2vectordrawable`](docs/migration-from-svg2vectordrawable.md)
 - [Integrations](docs/integrations.md) (Node scripts, React Native icons, Gradle, Vite/webpack, CI)
-- Build plugins / MCP server: [Gradle plugin](integrations/gradle-plugin/README.md), [Vite plugin](integrations/vite-plugin/README.md), [MCP server](integrations/mcp-server/README.md), [Figma plugin](integrations/figma-plugin/README.md) (Gradle plugin submitted to the Gradle Plugin Portal, pending review; the others not published yet; [overview](docs/integrations.md#plugins-and-mcp-server))
+- Build plugins / MCP server: [Gradle plugin](integrations/gradle-plugin/README.md), [Vite plugin](integrations/vite-plugin/README.md), [MCP server](integrations/mcp-server/README.md), [Figma plugin](integrations/figma-plugin/README.md) (Gradle, Vite and MCP published; the Figma plugin not yet; [overview](docs/integrations.md#plugins-and-mcp-server))
 - [Comparison with `svg2vectordrawable` and Android Studio's Svg2Vector](docs/comparison.md)
 
 ## Questions and feedback

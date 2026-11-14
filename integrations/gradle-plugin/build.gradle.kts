@@ -1,3 +1,4 @@
+import org.gradle.plugin.compatibility.compatibility
 import org.jetbrains.kotlin.gradle.dsl.JvmTarget
 
 plugins {
@@ -45,6 +46,9 @@ gradlePlugin {
                 "Converts a folder of SVGs into Android VectorDrawable resources with the svg-vectordrawable CLI " +
                 "(Node.js), before the resource merge of every Android variant. Cacheable and incremental."
             tags = listOf("android", "svg", "vectordrawable", "drawable", "resources")
+            // Declared to the Plugin Portal (plugin-publish reads it from the descriptor); the TestKit
+            // test "reuses the configuration cache" checks it.
+            compatibility { features { configurationCache = true } }
         }
     }
 }

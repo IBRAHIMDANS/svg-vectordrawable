@@ -21,9 +21,8 @@ an ESM browser build under `svg-vectordrawable/browser` (`convert` only, no file
 ## Plugins and MCP server
 
 Ready-made integrations live in [`integrations/`](../integrations), each with its own README. They are
-merged in this repository. The Gradle plugin (0.1.0) is submitted to the Gradle Plugin Portal, pending review; the Vite plugin,
-the MCP server and the Figma plugin are **not published yet**: until they are, build them from source as their
-READMEs describe.
+merged in this repository. The Gradle plugin (Gradle Plugin Portal), the Vite plugin and the MCP server (npm) are
+published; the Figma plugin is **not published yet**: build it from source as its README describes.
 
 | Integration                                              | Package / plugin id                        | What it does                                                                                |
 | -------------------------------------------------------- | ------------------------------------------ | ------------------------------------------------------------------------------------------- |
@@ -138,12 +137,9 @@ Gradients in VectorDrawable require API 24+, which adaptive icons (API 26+) alwa
 
 ## Gradle (Android project)
 
-**Plugin (0.1.0, submitted to the Gradle Plugin Portal, pending review):** until it is accepted,
-`id(…) version "0.1.0"` does not resolve; use it from a clone with
-`includeBuild("<clone>/integrations/gradle-plugin")` in the `pluginManagement` block of
-`settings.gradle.kts` (as [its example](../integrations/gradle-plugin/example/settings.gradle.kts) does)
-and no version in `plugins`. The [Gradle plugin](../integrations/gradle-plugin/README.md)
-(`id("io.github.ibrahimdans.svg-vectordrawable")`) registers a cacheable
+**Plugin (on the [Gradle Plugin Portal](https://plugins.gradle.org/plugin/io.github.ibrahimdans.svg-vectordrawable)):**
+the [Gradle plugin](../integrations/gradle-plugin/README.md)
+(`id("io.github.ibrahimdans.svg-vectordrawable") version "0.1.0"`) registers a cacheable
 `convert<Variant>SvgToVectorDrawable` task per Android variant, wired before the resource merge, and
 passes the variant's `minSdk`. It runs the `svgvd` CLI, so it needs **Node.js 20+** on the `PATH` and
 `svg-vectordrawable` installed in the folder the CLI runs in (the root project by default). The
@@ -192,7 +188,7 @@ tasks.named("preBuild") { dependsOn(convertSvgIcons) }
 
 ## Vite
 
-**Plugin (not published yet):** the [Vite plugin](../integrations/vite-plugin/README.md)
+**Plugin (on npm):** the [Vite plugin](../integrations/vite-plugin/README.md)
 (`vite-plugin-svg-vectordrawable`, also a Rollup plugin) converts every `*.svg` of an `input` folder
 into an `output` folder such as `android/app/src/main/res/drawable`, incrementally and in watch mode.
 Use it when the web project and the Android app share the same icons.
@@ -331,7 +327,7 @@ this repository does in `scripts/aapt2-validate.mjs`, or simply build the Androi
 
 ## MCP server
 
-**Not published yet.** The [MCP server](../integrations/mcp-server/README.md)
+**On npm.** The [MCP server](../integrations/mcp-server/README.md)
 (`svg-vectordrawable-mcp`, stdio, Node.js 20+) lets an AI assistant use the library. It exposes two
 tools:
 
@@ -340,14 +336,14 @@ tools:
 - `preview`: VectorDrawable XML → `{ svg }`, with `density` and `applyTint`.
 
 Inputs are limited to 2 MB, and each call runs in a worker thread stopped after 10 seconds
-(`SVGVD_MCP_TIMEOUT_MS` changes it). The server reads no files and opens no network connection. Once
-published, it starts with `npx -y svg-vectordrawable-mcp`, for instance in Claude Code:
+(`SVGVD_MCP_TIMEOUT_MS` changes it). The server reads no files and opens no network connection. It
+starts with `npx -y svg-vectordrawable-mcp`, for instance in Claude Code:
 
 ```sh
 claude mcp add svg-vectordrawable -- npx -y svg-vectordrawable-mcp
 ```
 
-Until then, build it from `integrations/mcp-server` (`pnpm install && pnpm run build`) and register
+To run it from source instead, build `integrations/mcp-server` (`pnpm install && pnpm run build`) and register
 `node <path>/integrations/mcp-server/dist/index.js` as the command.
 
 ## Figma plugin
@@ -386,13 +382,8 @@ checked by default and runs `npm publish --dry-run` or `./gradlew publishPlugins
 after the build and tests. A dry run can start from any branch; a real run (`dry-run` unchecked) must
 start from the integration's tag ("Use workflow from: `mcp-vX.Y.Z`"), otherwise it fails.
 
-**Secrets.** `NPM_TOKEN` (npm automation or granular token allowed to publish both packages),
-`GRADLE_PUBLISH_KEY` and `GRADLE_PUBLISH_SECRET` (Plugin Portal API key, passed as
-`gradle.publish.key` / `gradle.publish.secret`).
-
-**Switching npm to Trusted Publishing.** The library publishes through OIDC without a token, but npm
-only lets you add a Trusted Publisher to a package that already exists, so the first release of each
-npm package uses `NPM_TOKEN`. After it, on npmjs.com → package → Settings → Trusted Publisher, add
-GitHub Actions with this repository and the workflow file `release-integrations.yml`; then remove the
-`NODE_AUTH_TOKEN` line from the job (keep `id-token: write`), and once both packages are switched,
-delete the `NPM_TOKEN` secret.
+**Authentication.** npm: no token. Both packages publish through OIDC (Trusted Publishing, with
+provenance), like the library: on npmjs.com → package → Settings → Trusted Publisher, GitHub Actions
+with this repository and the workflow file `release-integrations.yml`. The job needs `id-token: write`.
+Gradle Plugin Portal: the `GRADLE_PUBLISH_KEY` and `GRADLE_PUBLISH_SECRET` secrets (Plugin Portal API
+key, passed as `gradle.publish.key` / `gradle.publish.secret`).

@@ -1184,7 +1184,7 @@ describe('svgvd CLI', () => {
         });
 
         it.each([
-            [['--format', 'svg'], 'Invalid --format (expected vector or compose): svg'],
+            [['--format', 'png'], 'Invalid --format (expected vector, compose or svg): png'],
             [['--package', 'com.example'], '--package needs --format compose'],
             [['--format', 'compose', '--package', 'com..x'], 'Invalid --package'],
             [['--format', 'compose', '--min-sdk', '21'], '--min-sdk cannot be combined with --format compose'],
@@ -1203,6 +1203,113 @@ describe('svgvd CLI', () => {
             const help = svgvd('--help').stdout;
             expect(help).toContain('--format <f>');
             expect(help).toContain('--package <name>');
+        });
+    });
+
+    describe('VectorDrawable input (T-181)', () => {
+        /** An Android Studio style drawable: XML declaration, comment, trim path, tint mode, color reference. */
+        const FOREIGN =
+            '<?xml version="1.0" encoding="utf-8"?>\n<!-- icon -->\n' +
+            '<vector xmlns:android="http://schemas.android.com/apk/res/android" android:width="24dp" android:height="24dp" ' +
+            'android:viewportWidth="24" android:viewportHeight="24" android:tint="?attr/colorControlNormal" android:tintMode="multiply">' +
+            '<path android:name="ring" android:pathData="M12,2A10,10 0 1,1 11.99,2Z" android:strokeColor="#F00" android:strokeWidth="2" ' +
+            'android:trimPathStart="0.1" android:trimPathEnd="0.8"/></vector>';
+
+        /** Converts `ICON` to `<dir>/vd/arrow-left.xml` and returns that path. */
+        function drawable(): string {
+            const svg = join(dir, 'arrow-left.svg');
+            writeFileSync(svg, ICON);
+            expect(svgvd(svg, '-o', join(dir, 'vd')).status).toBe(0);
+            return join(dir, 'vd', 'arrow-left.xml');
+        }
+
+        it('--format compose gives the same Kotlin from a drawable as from its SVG', () => {
+            const xml = drawable();
+            expect(svgvd(join(dir, 'arrow-left.svg'), '-o', join(dir, 'a'), '--format', 'compose').status).toBe(0);
+            const res = svgvd(xml, '-o', join(dir, 'b'), '--format', 'compose');
+            expect(res.status).toBe(0);
+            expect(readFileSync(join(dir, 'b', 'ArrowLeft.kt'), 'utf8')).toBe(
+                readFileSync(join(dir, 'a', 'ArrowLeft.kt'), 'utf8'),
+            );
+        });
+
+        it('--format compose reads a drawable from stdin and -s, and keeps what only a drawable has', () => {
+            const piped = svgvdStdin(FOREIGN, ['--format', 'compose']);
+            expect(piped.status).toBe(0);
+            expect(piped.stdout).toContain('trimPathStart = 0.1f');
+            expect(piped.stdout).toContain('trimPathEnd = 0.8f');
+            expect(piped.stdout).toContain('name = "ring"');
+            expect(piped.stderr).toContain('[unsupported-attribute] android:tintMode on <vector>');
+            expect(piped.stderr).toContain('[unsupported-color-reference]');
+            expect(svgvd('-s', FOREIGN, '--format', 'compose').stdout).toBe(piped.stdout);
+        });
+
+        it('--format compose --strict rejects a drawable with an attribute it cannot express', () => {
+            const res = svgvdStdin(FOREIGN, ['--format', 'compose', '--strict']);
+            expect(res.status).toBe(1);
+            expect(res.stdout).toBe('');
+            expect(res.stderr).toContain('android:tintMode');
+        });
+
+        it('--format compose says so when an .xml input is not a VectorDrawable', () => {
+            const input = join(dir, 'selector.xml');
+            writeFileSync(input, '<selector xmlns:android="http://schemas.android.com/apk/res/android"/>');
+            const res = svgvd(input, '--format', 'compose', '--stdout');
+            expect(res.status).toBe(1);
+            expect(res.stderr).toContain('Not a VectorDrawable: the root element is not <vector>');
+        });
+
+        it('--format svg writes <name>.svg, and converts the *.xml of a directory', () => {
+            const xml = drawable();
+            const res = svgvd(xml, '--format', 'svg');
+            expect(res.status).toBe(0);
+            const svg = readFileSync(join(dir, 'vd', 'arrow-left.svg'), 'utf8');
+            expect(svg).toMatch(
+                /^<svg xmlns="http:\/\/www\.w3\.org\/2000\/svg" width="24" height="24" viewBox="0 0 24 24"/,
+            );
+            expect(svg).toContain('fill="#ff0000"');
+
+            writeFileSync(join(dir, 'vd', 'notes.txt'), 'not an input');
+            const out = join(dir, 'out');
+            expect(svgvd(join(dir, 'vd'), '--format', 'svg', '-o', out).status).toBe(0);
+            expect(readdirSync(out)).toEqual(['arrow-left.svg']);
+        });
+
+        it('--format svg reads stdin, and says what the SVG does not carry over', () => {
+            const res = svgvdStdin(FOREIGN, ['--format', 'svg']);
+            expect(res.status).toBe(0);
+            expect(res.stdout).toContain('<svg ');
+            // The trim of a stroked path is rendered (dashes): no note for it.
+            expect(res.stdout).toContain('stroke-dasharray=');
+            expect(res.stderr).not.toContain('android:trimPath*');
+            expect(res.stderr).toContain('android:tint is not applied');
+        });
+
+        it('--format svg still says so when a trimmed path is filled (drawn whole)', () => {
+            const filled = FOREIGN.replace('android:strokeColor="#F00"', 'android:fillColor="#F00"');
+            const res = svgvdStdin(filled, ['--format', 'svg']);
+            expect(res.status).toBe(0);
+            expect(res.stdout).not.toContain('stroke-dasharray');
+            expect(res.stderr).toContain('android:trimPath* is not converted on a filled path');
+        });
+
+        it('--format svg fails on an SVG input and on a conversion option', () => {
+            const input = join(dir, 'icon.svg');
+            writeFileSync(input, ICON);
+            const notVector = svgvd(input, '--format', 'svg', '--stdout');
+            expect(notVector.status).toBe(1);
+            expect(notVector.stderr).toContain('Root element is <svg>, expected <vector>');
+
+            const option = svgvd(drawable(), '--format', 'svg', '--strict', '--tint', '#f00');
+            expect(option.status).toBe(1);
+            expect(option.stderr).toContain('--format svg takes no conversion option (given: strict, tint)');
+        });
+
+        it('--format vector still reads a directory for its *.svg only', () => {
+            drawable();
+            const res = svgvd(join(dir, 'vd'), '-o', join(dir, 'again'));
+            expect(existsSync(join(dir, 'again'))).toBe(false);
+            expect(res.stderr).not.toContain('✓');
         });
     });
 

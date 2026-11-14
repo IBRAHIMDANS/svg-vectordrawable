@@ -4,10 +4,11 @@ import { basename, dirname, extname, join, sep } from 'node:path';
 import { isatty } from 'node:tty';
 import { fileURLToPath } from 'node:url';
 import { colorRefs } from './colorRef.js';
-import { kotlinName, kotlinPackage, toImageVector } from './compose.js';
+import { kotlinName, kotlinPackage, toImageVector, vectorDrawableToImageVector } from './compose.js';
 import { convert } from './convert.js';
 import { ConversionError } from './errors.js';
 import { DENSITIES, renderFallbackPng, type Density } from './fallback.js';
+import { hasUnrenderedTrim, vectorDrawableToSvg } from './preview.js';
 import {
     assertDistinctOutputs,
     batchOutputPath,
@@ -82,12 +83,18 @@ Options:
                        arrow_left.xml); fails if two inputs map to the same name.
                        An explicit -o file.xml is used as is
   -p, --precision <n>  Decimal places for numbers (default 3)
-  --format <f>         vector (VectorDrawable XML, default) or compose: a Kotlin
-                       file declaring a Jetpack Compose ImageVector, named from
-                       the file name (arrow-left.svg → ArrowLeft.kt, val
-                       ArrowLeft; "Icon" for stdin / -s without -o Name.kt).
-                       Implies --android-names (flat output, unique names); not
-                       with --fallback-png, --min-sdk or --xml-tag
+  --format <f>         vector (VectorDrawable XML, default), compose or svg.
+                       compose: a Kotlin file declaring a Jetpack Compose
+                       ImageVector, named from the file name (arrow-left.svg →
+                       ArrowLeft.kt, val ArrowLeft; "Icon" for stdin / -s
+                       without -o Name.kt). Implies --android-names (flat
+                       output, unique names); not with --fallback-png,
+                       --min-sdk or --xml-tag. The input may also be an
+                       existing VectorDrawable (ic_back.xml, stdin, -s): the
+                       conversion options then do not apply.
+                       svg: the reverse conversion, an existing VectorDrawable
+                       to SVG (ic_back.xml → ic_back.svg; a directory is read
+                       for its *.xml). Takes no conversion option
   --package <name>     Kotlin package of the --format compose files
   -h, --help           Show this help
 `;
@@ -95,8 +102,15 @@ Options:
 const SEVERITIES = new Set(['off', 'warn', 'error']);
 
 /** Output file extension of each `--format`. */
-const EXTENSIONS = { vector: '.xml', compose: '.kt' } as const;
+const EXTENSIONS = { vector: '.xml', compose: '.kt', svg: '.svg' } as const;
 type Format = keyof typeof EXTENSIONS;
+
+/** Extension of the files a directory input is read for: VectorDrawables with `--format svg`. */
+const inputExtension = (format: Format): string => (format === 'svg' ? '.xml' : '.svg');
+
+/** Whether `source` is a VectorDrawable rather than an SVG: its root element is `<vector>`. */
+const isVectorDrawable = (source: string): boolean =>
+    /^\uFEFF?\s*(?:<\?xml[^>]*\?>\s*)?(?:<!--[\s\S]*?-->\s*)*<vector[\s>]/.test(source);
 
 /** How output files are named: {@link FileNamingOptions} plus the output format. */
 type Naming = FileNamingOptions & { format: Format };
@@ -256,7 +270,8 @@ function parseArgs(
             opts[arg === '--width' ? 'width' : 'height'] = Number(dp);
         } else if (arg === '--format') {
             const format = value();
-            if (!Object.hasOwn(EXTENSIONS, format)) fail(`Invalid --format (expected vector or compose): ${format}`);
+            if (!Object.hasOwn(EXTENSIONS, format))
+                fail(`Invalid --format (expected vector, compose or svg): ${format}`);
             naming.format = format as Format;
         } else if (arg === '--package') {
             packageName = value();
@@ -285,6 +300,12 @@ function parseArgs(
         // One package, one namespace: names must be unique, hence flat and collision-checked.
         naming.androidNames = true;
     } else if (packageName !== undefined) fail('--package needs --format compose');
+    if (naming.format === 'svg') {
+        // Nothing of the SVG → VectorDrawable conversion applies to the reverse one.
+        const given = [...Object.keys(opts), ...(fallback ? ['fallback-png'] : [])];
+        if (given.length > 0)
+            fail(`--format svg takes no conversion option (given: ${given.join(', ')}): it reads a VectorDrawable`);
+    }
     // Reported once here rather than as a conversion failure of every input.
     try {
         colorRefs(opts.currentColor ?? '#000000', opts.colorMap);
@@ -306,6 +327,8 @@ interface RunSettings {
     opts: ConvertOptions;
     /** Set with `--format compose`: the job writes a Kotlin `ImageVector` instead of the XML. */
     compose?: { packageName?: string };
+    /** Set with `--format svg`: the job reads a VectorDrawable and writes its SVG. */
+    svg?: boolean;
     dryRun: boolean;
     /** Densities of the PNG fallback (`--fallback-png`), undefined without it. */
     fallback?: readonly Density[];
@@ -372,14 +395,16 @@ function runJob(job: Job, settings: RunSettings, io: CliIo): ReportEntry {
     let svg: string | undefined;
     try {
         svg = job.read();
-        const { text, warnings, minSdk } = convertJob(job, svg, settings);
+        const { text, warnings, minSdk, notes = [] } = convertJob(job, svg, settings);
         for (const w of warnings) io.stderr(`  ⚠ ${label}[${w.code}] ${w.message}\n`);
+        for (const note of notes) io.stderr(`  ⚠ ${label}${note}\n`);
         if (job.output === undefined) {
             if (!dryRun) io.stdout(text);
         } else {
             if (!dryRun) writeOutput(job.output, text);
             if (file !== undefined) io.stderr(`✓ ${file} → ${job.output}${dryRun ? ' (dry run)' : ''}\n`);
-            if (!settings.compose) deleteStale(allFallbackPngPaths(job.output), 'stale PNG fallback', file, dryRun, io);
+            if (!settings.compose && !settings.svg)
+                deleteStale(allFallbackPngPaths(job.output), 'stale PNG fallback', file, dryRun, io);
         }
         return {
             input: job.input,
@@ -412,15 +437,32 @@ function runJob(job: Job, settings: RunSettings, io: CliIo): ReportEntry {
 function convertJob(
     job: Job,
     svg: string,
-    { opts, compose }: RunSettings,
-): { text: string; warnings: Warning[]; minSdk: number | null } {
+    { opts, compose, svg: toSvg }: RunSettings,
+): { text: string; warnings: Warning[]; minSdk: number | null; notes?: string[] } {
+    if (toSvg) {
+        const notes: string[] = [];
+        // What the SVG does not carry over, said rather than dropped silently.
+        if (hasUnrenderedTrim(svg))
+            notes.push('android:trimPath* is not converted on a filled path: that path is drawn whole');
+        if (/\bandroid:tint\s*=/.test(svg)) notes.push('android:tint is not applied: the drawing keeps its own colors');
+        const text = vectorDrawableToSvg(svg, {
+            onUnresolvedColor: (ref) => notes.push(`color reference ${ref} has no value here: drawn in gray`),
+        });
+        return { text, warnings: [], minSdk: null, notes };
+    }
     if (!compose) {
         const { xml, warnings, minSdk } = convert(svg, opts);
         return { text: xml, warnings, minSdk };
     }
     const source = job.output ?? (job.input !== null && job.input !== '-' ? job.input : undefined);
     const name = source === undefined ? DEFAULT_KOTLIN_NAME : basename(source, extname(source));
-    const { kotlin, warnings } = toImageVector(svg, { ...opts, name, packageName: compose.packageName });
+    const { packageName } = compose;
+    if (!isVectorDrawable(svg) && extname(job.input ?? '').toLowerCase() === '.xml')
+        throw new Error('Not a VectorDrawable: the root element is not <vector>');
+    // An existing VectorDrawable is serialized as is: the SVG conversion options do not apply to it.
+    const { kotlin, warnings } = isVectorDrawable(svg)
+        ? vectorDrawableToImageVector(svg, { name, packageName, strict: opts.strict, rules: opts.rules })
+        : toImageVector(svg, { ...opts, name, packageName });
     return { text: kotlin, warnings, minSdk: null };
 }
 
@@ -538,7 +580,7 @@ function fileJobs(
     const found = inputs.flatMap((input): { file: string; root?: string }[] => {
         try {
             if (!statSync(input).isDirectory()) return [{ file: input }];
-            return listSvgFiles(input, recursive).map((file) => ({ file, root: input }));
+            return listSvgFiles(input, recursive, inputExtension(naming.format)).map((file) => ({ file, root: input }));
         } catch (err) {
             const missing = (err as NodeJS.ErrnoException).code === 'ENOENT';
             const message = missing ? 'no such file or directory' : (err as Error).message;
@@ -561,8 +603,15 @@ function fileJob(
     naming: Naming,
 ): FileJob {
     const xml = root === undefined ? defaultOutputPath(file, out, naming) : batchOutputPath(file, root, out, naming);
-    // --format compose: the Kotlin name of the (Android) resource name, `arrow_left.xml` → `ArrowLeft.kt`.
-    const output = naming.format === 'compose' ? join(dirname(xml), `${kotlinName(basename(xml, '.xml'))}.kt`) : xml;
+    // --format compose: the Kotlin name of the (Android) resource name, `arrow_left.xml` → `ArrowLeft.kt`;
+    // --format svg: the same name with the SVG extension.
+    const stem = basename(xml, '.xml');
+    const output =
+        naming.format === 'compose'
+            ? join(dirname(xml), `${kotlinName(stem)}.kt`)
+            : naming.format === 'svg'
+              ? join(dirname(xml), `${stem}.svg`)
+              : xml;
     return { input: file, root, read: () => readFileSync(file, 'utf8'), output: explicitTarget ?? output };
 }
 
@@ -692,8 +741,12 @@ function startWatch(ctx: WatchContext, io: CliIo): WatchSession | number {
             if (root === undefined || (path !== root && !recursive)) return;
             for (const job of known.values())
                 if (isUnder(job.input, path) && lstatOrUndefined(job.input) === undefined) forget(job);
-            for (const file of listSvgFiles(path, path === root ? recursive : true)) convertOne(file, root);
-        } else if (statOrUndefined(path)?.isFile() && (root === undefined || extname(path).toLowerCase() === '.svg')) {
+            const listed = listSvgFiles(path, path === root ? recursive : true, inputExtension(naming.format));
+            for (const file of listed) convertOne(file, root);
+        } else if (
+            statOrUndefined(path)?.isFile() &&
+            (root === undefined || extname(path).toLowerCase() === inputExtension(naming.format))
+        ) {
             convertOne(path, root);
         }
     };
@@ -813,6 +866,7 @@ export function run(argv: string[], io: CliIo = processIo): number | Promise<num
         dryRun,
         fallback,
         compose: naming.format === 'compose' ? { packageName: args.packageName } : undefined,
+        svg: naming.format === 'svg',
     };
 
     const explicitStdin = inline === undefined && inputs[0] === '-';

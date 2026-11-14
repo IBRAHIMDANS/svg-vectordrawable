@@ -5,16 +5,24 @@
 import {
     MAX_HIGHLIGHT_CHARS,
     MAX_INPUT_BYTES,
+    CLI_SNIPPETS,
+    FORMATS,
     buildOptions,
     createConverter,
+    describeApiLevel,
+    describeConversion,
     describeError,
     describeSize,
+    effectiveFormat,
     describeUnresolvedColors,
     formatBytes,
+    isVectorDrawable,
+    outputFileName,
     parsePreviewColors,
     resourceFileName,
     svgDataUrl,
     tokenizeXml,
+    warningHelpUrl,
 } from './core.js';
 import { EXAMPLES } from './examples.js';
 
@@ -39,6 +47,10 @@ const el = {
     output: document.getElementById('xml-output'),
     outputCode: document.getElementById('xml-code'),
     outputMeta: document.getElementById('output-meta'),
+    outputTitle: document.getElementById('output-title'),
+    inputTitle: document.getElementById('input-title'),
+    sourceCaption: document.getElementById('source-caption'),
+    formatRadios: document.querySelectorAll('input[name="format"]'),
     copyButton: document.getElementById('copy-button'),
     downloadButton: document.getElementById('download-button'),
     warnings: document.getElementById('warnings'),
@@ -46,6 +58,9 @@ const el = {
     previews: document.getElementById('previews'),
     sourcePreview: document.getElementById('source-preview'),
     vdPreview: document.getElementById('vd-preview'),
+    apiNote: document.getElementById('api-note'),
+    cliSnippet: document.getElementById('cli-snippet'),
+    resNames: document.querySelectorAll('.res-name'),
 };
 
 // Lists the color references the drawable preview drew in gray; built here, under both previews
@@ -54,11 +69,19 @@ el.unresolvedColors = document.createElement('p');
 el.unresolvedColors.className = 'preview-note';
 el.unresolvedColors.hidden = true;
 el.previews.after(el.unresolvedColors);
+// Ends the note: the fix for a gray reference is a pair in the Preview colors field.
+el.previewColorsLink = document.createElement('button');
+el.previewColorsLink.type = 'button';
+el.previewColorsLink.className = 'link-button';
+el.previewColorsLink.textContent = 'Set preview colors';
+el.previewColorsLink.setAttribute('aria-controls', 'opt-preview-colors');
 
 const converter = createConverter(() => new Worker(new URL('worker.js', import.meta.url)));
 let debounceTimer;
 /** The XML on screen (the highlighted `<code>` is only its rendering). */
-let currentXml = '';
+let currentOutput = '';
+let currentFormat = 'vector';
+let currentKotlinName = '';
 /** Name of the file the input came from, used to name the download; `''` for pasted markup. */
 let sourceName = '';
 
@@ -110,20 +133,30 @@ function renderUnresolvedColors(references) {
         if (i < references.length - 1) item.append(',');
         return i ? [' ', item] : [item];
     });
-    el.unresolvedColors.replaceChildren(prefix, ...parts);
+    el.unresolvedColors.replaceChildren(prefix, ...parts, ' ', el.previewColorsLink);
     el.unresolvedColors.hidden = !text;
 }
 
-/** Shows the XML with syntax colors: one `<span>` per token, plain text for very large outputs. */
-function renderXml(xml) {
-    currentXml = xml;
-    el.copyButton.disabled = !xml;
-    el.downloadButton.disabled = !xml;
-    if (xml.length > MAX_HIGHLIGHT_CHARS) {
-        el.outputCode.textContent = xml;
+/** Takes the user from the note to the field that gives the gray references a preview color. */
+function focusPreviewColors() {
+    el.previewColors.scrollIntoView({ block: 'center' });
+    el.previewColors.focus({ preventScroll: true });
+}
+
+/**
+ * Shows the output: XML and SVG with syntax colors (one `<span>` per token), Kotlin and very large
+ * outputs as plain text.
+ */
+function renderOutput(text, format = currentFormat) {
+    currentOutput = text;
+    el.copyButton.disabled = !text;
+    el.downloadButton.disabled = !text;
+    if (format === 'compose' || text.length > MAX_HIGHLIGHT_CHARS) {
+        el.outputCode.textContent = text;
+        el.output.scrollTop = 0;
         return;
     }
-    const nodes = tokenizeXml(xml).map(({ type, text }) => {
+    const nodes = tokenizeXml(text).map(({ type, text }) => {
         if (type === 'text') return text;
         const span = document.createElement('span');
         span.className = `tok-${type}`;
@@ -155,6 +188,16 @@ function renderWarnings(warnings) {
         const message = document.createElement('p');
         message.textContent = warning.message;
         li.append(code, ' ', category, message);
+        const help = warningHelpUrl(warning.code);
+        if (help) {
+            const link = document.createElement('a');
+            link.className = 'warning-help';
+            link.href = help;
+            link.target = '_blank';
+            link.rel = 'noopener';
+            link.textContent = 'What it means and how to fix it';
+            li.append(link);
+        }
         return li;
     });
     if (items.length === 0) {
@@ -166,26 +209,36 @@ function renderWarnings(warnings) {
 }
 
 function resetOutput(warningsText) {
-    renderXml('');
+    renderOutput('');
     el.outputMeta.textContent = '';
     el.warnings.replaceChildren(emptyWarningsItem(warningsText));
     el.warningsCount.hidden = true;
     setPreview(el.vdPreview, null, '', 'No drawable yet.');
     renderUnresolvedColors([]);
+    el.apiNote.textContent = describeApiLevel(null);
 }
 
 function render(outcome) {
     if (outcome.status === 'ok') {
-        renderXml(outcome.xml);
-        el.outputMeta.textContent = [describeSize(outcome.xml), formatBytes(byteSize(outcome.xml))]
+        currentFormat = outcome.format;
+        currentKotlinName = outcome.kotlinName ?? '';
+        el.outputTitle.textContent = FORMATS[outcome.format].title;
+        renderOutput(outcome.output, outcome.format);
+        el.outputMeta.textContent = [describeSize(outcome.xml ?? el.input.value), formatBytes(byteSize(outcome.output))]
             .filter(Boolean)
             .join(' · ');
         renderWarnings(outcome.warnings);
-        const count = outcome.warnings.length;
-        setStatus(
-            `Converted: needs API ${outcome.minSdk}+, ${count} warning${count === 1 ? '' : 's'}.`,
-            count ? 'warn' : 'ok',
-        );
+        if (outcome.input === 'vectordrawable') {
+            setPreview(el.sourcePreview, outcome.sourcePreview, 'The source VectorDrawable', 'No preview.');
+            const count = outcome.warnings.length;
+            setStatus(
+                `Read as an existing VectorDrawable (the SVG options do not apply)${count ? `: ${count} warning${count === 1 ? '' : 's'}.` : '.'}`,
+                count ? 'warn' : 'ok',
+            );
+        } else {
+            const status = describeConversion(outcome.minSdk, outcome.warnings);
+            setStatus(status.text, status.tone);
+        }
         setPreview(
             el.vdPreview,
             outcome.preview,
@@ -193,6 +246,7 @@ function render(outcome) {
             `No preview: ${outcome.previewError || 'unknown error'}`,
         );
         renderUnresolvedColors(outcome.unresolvedColors);
+        if (outcome.minSdk) el.apiNote.textContent = describeApiLevel(outcome.minSdk);
         return;
     }
     resetOutput('No drawable: see the error under the XML pane.');
@@ -204,7 +258,13 @@ async function run() {
     const svg = el.input.value;
     const hasInput = Boolean(svg.trim());
     el.inputMeta.textContent = hasInput ? formatBytes(byteSize(svg)) : '';
-    setPreview(el.sourcePreview, hasInput ? svg : null, 'The source SVG', 'No SVG yet.');
+    const vectorInput = isVectorDrawable(svg);
+    const format = syncFormatSwitch(vectorInput);
+    el.inputTitle.textContent = vectorInput ? 'VectorDrawable' : 'SVG';
+    el.sourceCaption.textContent = vectorInput ? 'Source drawable' : 'Source SVG';
+    // A VectorDrawable is not an image a browser can show: the worker renders it.
+    if (!vectorInput) setPreview(el.sourcePreview, hasInput ? svg : null, 'The source SVG', 'No SVG yet.');
+    else setPreview(el.sourcePreview, null, '', 'Reading the drawable…');
     if (!hasInput) {
         resetOutput('Warnings show up here once an SVG is converted.');
         setStatus('Paste or drop an SVG to start.');
@@ -224,7 +284,8 @@ async function run() {
     });
     setStatus('Converting…');
     const preview = { applyTint: Boolean(options.tint), colors: parsePreviewColors(el.previewColors.value) };
-    const outcome = await converter.convert(svg, options, preview);
+    const name = sourceName.replace(/\.(svg|xml)$/i, '') || 'Icon';
+    const outcome = await converter.convert(svg, options, preview, { format, name });
     if (outcome.status !== 'superseded') render(outcome);
 }
 
@@ -237,6 +298,9 @@ function schedule(delay = DEBOUNCE_MS) {
 function setInput(svg, name = '', exampleId = '') {
     el.input.value = svg;
     sourceName = name;
+    // The "Use the result" snippets name the resource the Download button writes.
+    const resource = resourceFileName(sourceName.replace(/\.xml$/i, '')).replace(/\.xml$/, '');
+    for (const span of el.resNames) span.textContent = resource;
     for (const chip of el.examples.children) chip.setAttribute('aria-pressed', String(chip.dataset.id === exampleId));
     schedule(0);
 }
@@ -258,21 +322,21 @@ function selectOutput() {
 }
 
 function copyXml() {
-    navigator.clipboard.writeText(currentXml).then(
+    navigator.clipboard.writeText(currentOutput).then(
         () => flashLabel(el.copyButton, 'Copied'),
         () => {
             el.output.focus();
             selectOutput();
-            setStatus('Copy blocked by the browser: the XML is selected, press Ctrl+C (or Cmd+C).', 'warn');
+            setStatus('Copy blocked by the browser: the output is selected, press Ctrl+C (or Cmd+C).', 'warn');
         },
     );
 }
 
 function downloadXml() {
-    const url = URL.createObjectURL(new Blob([currentXml], { type: 'application/xml' }));
+    const url = URL.createObjectURL(new Blob([currentOutput], { type: FORMATS[currentFormat].type }));
     const link = document.createElement('a');
     link.href = url;
-    link.download = resourceFileName(sourceName);
+    link.download = outputFileName(currentFormat, sourceName, currentKotlinName);
     link.click();
     URL.revokeObjectURL(url);
     setStatus(`Downloaded ${link.download}.`, 'ok');
@@ -305,8 +369,71 @@ el.fileInput.addEventListener('change', () => {
     if (file) loadFile(file);
     el.fileInput.value = '';
 });
+el.previewColorsLink.addEventListener('click', focusPreviewColors);
 el.copyButton.addEventListener('click', copyXml);
 el.downloadButton.addEventListener('click', downloadXml);
+
+// Output format: the choice is remembered; the switch shows the format the input allows.
+const FORMAT_KEY = 'svgvd-playground-format';
+let requestedFormat = 'vector';
+try {
+    const saved = localStorage.getItem(FORMAT_KEY);
+    if (saved && Object.hasOwn(FORMATS, saved)) requestedFormat = saved;
+} catch {
+    // Storage blocked (private window): the default format.
+}
+
+/** Checks and enables the format options for the input; returns the format to produce. */
+function syncFormatSwitch(vectorInput) {
+    const format = effectiveFormat(requestedFormat, vectorInput);
+    for (const radio of el.formatRadios) {
+        // An SVG becomes a drawable, a drawable becomes an SVG: the other way round is not offered.
+        radio.disabled = vectorInput ? radio.value === 'vector' : radio.value === 'svg';
+        radio.closest('label').title = radio.disabled
+            ? vectorInput
+                ? 'The input is already a VectorDrawable'
+                : 'SVG output is for a VectorDrawable input'
+            : '';
+        radio.checked = radio.value === format;
+    }
+    return format;
+}
+
+for (const radio of el.formatRadios) {
+    radio.addEventListener('change', () => {
+        requestedFormat = radio.value;
+        try {
+            localStorage.setItem(FORMAT_KEY, requestedFormat);
+        } catch {
+            // Storage blocked: the choice only lasts for this visit.
+        }
+        schedule(0);
+    });
+}
+
+// Command-line card: the commands of the chosen package manager, remembered for the next visit.
+const PM_KEY = 'svgvd-playground-pm';
+function showPackageManager(pm) {
+    if (!Object.hasOwn(CLI_SNIPPETS, pm)) return;
+    el.cliSnippet.textContent = CLI_SNIPPETS[pm];
+    const radio = document.querySelector(`input[name="pm"][value="${pm}"]`);
+    if (radio) radio.checked = true;
+}
+for (const radio of document.querySelectorAll('input[name="pm"]')) {
+    radio.addEventListener('change', () => {
+        showPackageManager(radio.value);
+        try {
+            localStorage.setItem(PM_KEY, radio.value);
+        } catch {
+            // Storage blocked (private window): the choice only lasts for this visit.
+        }
+    });
+}
+try {
+    showPackageManager(localStorage.getItem(PM_KEY) ?? 'npm');
+} catch {
+    showPackageManager('npm');
+}
 
 for (const radio of document.querySelectorAll('input[name="preview-bg"]')) {
     radio.addEventListener('change', () => (el.previews.dataset.bg = radio.value));

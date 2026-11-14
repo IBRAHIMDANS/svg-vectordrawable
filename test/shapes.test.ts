@@ -309,3 +309,109 @@ describe('CSS d property on <path> (SVG 2 §9.3.1: the declaration wins over the
         });
     }
 });
+
+/**
+ * T-178: SVG numbers are floats in browsers and in Android's PathParser. A shape whose geometry leaves
+ * the float range (~3.4e38) is not drawn, as in Firefox (Chrome clamps it); verified in Firefox 158 and
+ * Chrome 157 on 2026-11-13. Both draw up to 1e37.
+ */
+describe('geometry beyond the float range (T-178)', () => {
+    const svg = (body: string): string =>
+        `<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24">${body}</svg>`;
+
+    it.each([
+        ['circle r', '<circle cx="12" cy="12" r="1e400"/>'],
+        ['circle r above the float', '<circle cx="12" cy="12" r="1e39"/>'],
+        ['circle whose diameter overflows', '<circle cx="12" cy="12" r="2e38"/>'],
+        ['circle cx', '<circle cx="1e400" cy="12" r="5"/>'],
+        ['ellipse rx', '<ellipse cx="12" cy="12" rx="1e400" ry="5"/>'],
+        ['rect width', '<rect width="1e400" height="5"/>'],
+        ['rect width above the float', '<rect width="1e39" height="5"/>'],
+        ['line x2', '<line x1="0" y1="0" x2="1e400" y2="0" stroke="#000"/>'],
+        ['polyline point', '<polyline points="0 0 1e400 5 10 10" stroke="#000"/>'],
+    ])('%s: nothing drawn, empty-path, in both modes', (_, body) => {
+        for (const optimize of [true, false]) {
+            const { xml, warnings } = convert(svg(body), { optimize });
+            expect(xml, `optimize: ${optimize}`).not.toContain('pathData');
+            expect(warnings.map((w) => w.code)).toContain('empty-path');
+        }
+    });
+
+    it('draws nothing for a polygon with a point that overflows (an error, T-182)', () => {
+        expect(shapeToPathData('polygon', { points: '0 0 10 0 10 10 1e400 5' })).toBeNull();
+    });
+
+    it('keeps a large geometry within the float range', () => {
+        expect(shapeToPathData('rect', { width: '1e37', height: '5' })).toBe('M0,0h1e+37v5h-1e+37z');
+    });
+});
+
+/**
+ * T-182: a `points` list in error draws nothing, an odd trailing coordinate is ignored, a polygon is
+ * closed. Verified in Firefox and Chrome on 2026-11-14 (filled and stroked): both draw nothing for a
+ * list in error, not the prefix SVG 2 §10.10 describes. Where they differ (a trailing comma, `.1.5`,
+ * `10+5`, a y token `10-5`), Chrome reads on and Firefox draws nothing; the converter follows Firefox.
+ */
+describe('polygon / polyline points in error or with an odd count (T-182)', () => {
+    const svg = (el: string, points: string, paint: string): string =>
+        `<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24">` +
+        `<${el} points="${points}" ${paint}/></svg>`;
+    const paints = [
+        ['filled', 'fill="red"'],
+        ['stroked', 'fill="none" stroke="#000" stroke-width="2"'],
+    ] as const;
+    const pathDataOf = (xml: string): string[] => [...xml.matchAll(/android:pathData="([^"]*)"/g)].map((m) => m[1]!);
+
+    it.each([
+        ['a non-number', '0 0 10 0 x 10 10 0 10'],
+        ['a unit', '0 0 10 0 10px 10 0 10'],
+        ['an empty item between commas', '0 0 10 0 , , 10 10'],
+        ['a trailing comma', '0 0 10 0 10 10 0 10 ,'],
+        ['a leading comma', ', 0 0 10 0 10 10 0 10'],
+        ['an error after an odd count', '0 0 10 0 10 10 x'],
+        ['a trailing dot', '0 0 10 0 10 10 0 10.'],
+        ['an exponent without digits', '0 0 10 0 10 10 0 1e'],
+        ['a y token holding the next x', '0 0 10 0 10 10 0 10-5 5'],
+        ['NaN', '0 0 10 0 10 10 0 10 NaN'],
+    ])('%s: nothing drawn, empty-path, in both modes', (_, points) => {
+        for (const el of ['polygon', 'polyline']) {
+            expect(shapeToPathData(el, { points })).toBeNull();
+            for (const [label, paint] of paints) {
+                for (const optimize of [true, false]) {
+                    const { xml, warnings } = convert(svg(el, points, paint), { optimize });
+                    const where = `${el} ${label}, optimize: ${optimize}`;
+                    expect(pathDataOf(xml), where).toEqual([]);
+                    expect(
+                        warnings.map((w) => w.code),
+                        where,
+                    ).toContain('empty-path');
+                }
+            }
+        }
+    });
+
+    // [case, points, polygon path data with optimize: true, then with optimize: false]
+    it.each([
+        ['an odd count', '0 0 10 0 10 10 0', 'M0 0h10v10z', 'M0,0L10,0L10,10z'],
+        ['an odd count with an exponent', '0 0,10 0,10,10 1e2', 'M0 0h10v10z', 'M0,0L10,0L10,10z'],
+        ['an odd count of two points', '0 0 10 0 10', 'M0 0h10z', 'M0,0L10,0z'],
+        ['an x token holding its y', '0 0 10 0 10-10 0 10', 'M0 0h10v-10L0 10z', 'M0,0L10,0L10,-10L0,10z'],
+    ])('%s: drawn as the browsers do, alike in both modes', (_, points, optimized, unoptimized) => {
+        for (const el of ['polygon', 'polyline']) {
+            // A polyline is the polygon without its closing `z`.
+            const open = (d: string): string => (el === 'polygon' ? d : d.slice(0, -1));
+            expect(shapeToPathData(el, { points })).toBe(open(unoptimized));
+            for (const [label, paint] of paints) {
+                for (const [optimize, d] of [
+                    [true, optimized],
+                    [false, unoptimized],
+                ] as const) {
+                    const { xml, warnings } = convert(svg(el, points, paint), { optimize });
+                    const where = `${el} ${label}, optimize: ${optimize}`;
+                    expect(pathDataOf(xml), where).toEqual([open(d)]);
+                    expect(warnings, where).toEqual([]);
+                }
+            }
+        }
+    });
+});

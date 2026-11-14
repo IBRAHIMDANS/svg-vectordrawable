@@ -36,7 +36,7 @@ jobs:
         runs-on: ubuntu-latest
         permissions:
             contents: read
-            id-token: write # npm provenance (OIDC)
+            id-token: write # npm Trusted Publishing and provenance (OIDC)
         defaults:
             run:
                 working-directory: integrations/mcp-server
@@ -71,28 +71,17 @@ jobs:
             - run: pnpm run typecheck
             # Builds dist/, then drives the server over stdio with the MCP SDK client.
             - run: pnpm test
-            # npm CLI (not pnpm) for provenance; `prepublishOnly` rebuilds dist/.
-            # NPM_TOKEN, not Trusted Publishing: a Trusted Publisher can only be configured on a package
-            # that already exists on npmjs.com. Once the first release is out, configure it for this
-            # workflow and drop NODE_AUTH_TOKEN (see docs/integrations.md, "Publishing the integrations").
-            - name: Require an npm token
-              if: ${{ inputs.dry-run != true }}
-              env:
-                  NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-              run: |
-                  if [[ -z "$NODE_AUTH_TOKEN" ]]; then
-                      echo "::error::The NPM_TOKEN repository secret is empty or missing: set an npm automation (or granular, publish) token."
-                      exit 1
-                  fi
+            # npm CLI (not pnpm): no NODE_AUTH_TOKEN, authentication and provenance go through OIDC (Trusted
+            # Publisher on npmjs.com for this workflow, as release.yml for the library). `prepublishOnly`
+            # rebuilds dist/.
             - name: Publish to npm
               env:
-                  NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
                   DRY_RUN: ${{ inputs.dry-run }}
               run: |
                   if [[ "$DRY_RUN" == "true" ]]; then
-                      npm publish --provenance --access public --dry-run
+                      npm publish --access public --dry-run
                   else
-                      npm publish --provenance --access public
+                      npm publish --access public
                   fi
 
     vite-plugin:
@@ -100,7 +89,7 @@ jobs:
         runs-on: ubuntu-latest
         permissions:
             contents: read
-            id-token: write # npm provenance (OIDC)
+            id-token: write # npm Trusted Publishing and provenance (OIDC)
         defaults:
             run:
                 working-directory: integrations/vite-plugin
@@ -135,28 +124,17 @@ jobs:
             - run: pnpm run typecheck
             # node:test: incremental builds, watch mode, dev server, warnings and strict errors.
             - run: pnpm test
-            # npm CLI (not pnpm) for provenance; `prepublishOnly` rebuilds dist/.
-            # NPM_TOKEN, not Trusted Publishing: a Trusted Publisher can only be configured on a package
-            # that already exists on npmjs.com. Once the first release is out, configure it for this
-            # workflow and drop NODE_AUTH_TOKEN (see docs/integrations.md, "Publishing the integrations").
-            - name: Require an npm token
-              if: ${{ inputs.dry-run != true }}
-              env:
-                  NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-              run: |
-                  if [[ -z "$NODE_AUTH_TOKEN" ]]; then
-                      echo "::error::The NPM_TOKEN repository secret is empty or missing: set an npm automation (or granular, publish) token."
-                      exit 1
-                  fi
+            # npm CLI (not pnpm): no NODE_AUTH_TOKEN, authentication and provenance go through OIDC (Trusted
+            # Publisher on npmjs.com for this workflow, as release.yml for the library). `prepublishOnly`
+            # rebuilds dist/.
             - name: Publish to npm
               env:
-                  NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
                   DRY_RUN: ${{ inputs.dry-run }}
               run: |
                   if [[ "$DRY_RUN" == "true" ]]; then
-                      npm publish --provenance --access public --dry-run
+                      npm publish --access public --dry-run
                   else
-                      npm publish --provenance --access public
+                      npm publish --access public
                   fi
 
     gradle-plugin:

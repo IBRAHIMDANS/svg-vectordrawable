@@ -8,6 +8,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+Existing VectorDrawables are now an input too, the preview draws trimmed strokes, and every warning is explained with how to fix it.
+
+- **Added:** `--format compose` accepts an existing `.xml` drawable (`vectorDrawableToImageVector` in the API), and `--format svg` converts a drawable back to SVG; `vectorDrawableToSvg` draws `android:trimPath*` on stroked paths; [docs/warnings.md](docs/warnings.md) explains each warning code and how to fix it.
+- **Fixed:** a `<use>` pointing at its own ancestor is dropped (it was expanded ten times, or failed on large files); `points` in error draw nothing and an odd trailing coordinate is ignored, as in Chrome and Firefox; geometry beyond the float range no longer writes `Infinity`; an invalid or commented `style` declaration no longer fails or hides the others.
+
 ## [1.0.0] - 2026-11-12
 
 The converter now warns (and `strict` rejects) where it used to draw wrong silently, matches Chrome and Firefox on edge cases, and gives the same result with `optimize: true` and `false`.

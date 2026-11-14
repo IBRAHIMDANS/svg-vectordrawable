@@ -60,9 +60,10 @@ export function createConverter(createWorker, { timeoutMs = DEFAULT_TIMEOUT_MS }
      * @param {string} svg
      * @param {object} options ConvertOptions of the lite build
      * @param {{ applyTint?: boolean, colors?: Record<string, string> }} [preview] options of vectorDrawableToSvg
+     * @param {{ format?: 'vector' | 'compose' | 'svg', name?: string }} [request] output format, Kotlin name
      * @returns {Promise<object>} an outcome: `ok`, `error`, `timeout` or `superseded`
      */
-    function convert(svg, options, preview = {}) {
+    function convert(svg, options, preview = {}, request = {}) {
         if (pending) {
             // The worker is still busy: it cannot be interrupted, only replaced.
             discardWorker();
@@ -79,7 +80,8 @@ export function createConverter(createWorker, { timeoutMs = DEFAULT_TIMEOUT_MS }
             }, timeoutMs);
             pending = { id, resolve, timer };
             try {
-                ensureWorker().postMessage({ id, svg, options, preview });
+                const { format = 'vector', name = 'Icon' } = request;
+                ensureWorker().postMessage({ id, svg, options, preview, format, name });
             } catch (error) {
                 // e.g. a SecurityError when the page is opened from file:// instead of over HTTP.
                 discardWorker();
@@ -220,4 +222,88 @@ export function describeSize(xml) {
     const width = /android:width="([^"]+?)dp"/.exec(xml);
     const height = /android:height="([^"]+?)dp"/.exec(xml);
     return width && height ? `${width[1]} × ${height[1]} dp` : '';
+}
+
+/**
+ * Install and run commands of the command-line card, per package manager. `dlx` / `bunx` would run
+ * it without installing; the card shows the usual setup: a dev dependency, then the project's binary.
+ */
+export const CLI_SNIPPETS = {
+    npm: 'npm install -D svg-vectordrawable\nnpx svgvd icons/ -o app/src/main/res/drawable',
+    pnpm: 'pnpm add -D svg-vectordrawable\npnpm exec svgvd icons/ -o app/src/main/res/drawable',
+    yarn: 'yarn add -D svg-vectordrawable\nyarn svgvd icons/ -o app/src/main/res/drawable',
+    bun: 'bun add -D svg-vectordrawable\nbunx svgvd icons/ -o app/src/main/res/drawable',
+};
+
+/**
+ * What the API-level card says about a conversion's `minSdk` (the level the drawable needs; 21 is the
+ * VectorDrawable floor, 24 means gradients or `fillType`).
+ */
+export function describeApiLevel(minSdk) {
+    if (!minSdk) return 'Convert an SVG to see the API level it needs.';
+    if (minSdk <= 21) return `This drawable works from API ${minSdk} (every VectorDrawable device) with android:src.`;
+    return `This drawable needs API ${minSdk} with android:src (gradients or fill rules): use app:srcCompat below it.`;
+}
+
+/** Where each warning code is explained, with how to fix it (one section per code). */
+export const WARNINGS_DOC_URL = 'https://github.com/IBRAHIMDANS/svg-vectordrawable/blob/main/docs/warnings.md';
+
+/** The link to the explanation of a warning code, or null for a code that is not one. */
+export function warningHelpUrl(code) {
+    return /^[a-z]+(?:-[a-z]+)*$/.test(code ?? '') ? `${WARNINGS_DOC_URL}#${code}` : null;
+}
+
+const plural = (count, word) => `${count} ${word}${count === 1 ? '' : 's'}`;
+
+/**
+ * The status line of a successful conversion: what its warnings mean for the drawable, worst
+ * category first (lossy: something is missing or wrong; approximation: close, not identical; info:
+ * faithful, Android advice). `tone` is the status color.
+ */
+export function describeConversion(minSdk, warnings = []) {
+    const count = (category) => warnings.filter((w) => w.category === category).length;
+    const lossy = count('lossy');
+    const approximations = count('approximation');
+    const head = `Converted for API ${minSdk}+`;
+    if (lossy)
+        return {
+            text: `${head}, but ${plural(lossy, 'lossy warning')}: part of the SVG is missing or drawn wrong in the drawable.`,
+            tone: 'warn',
+        };
+    if (approximations)
+        return {
+            text: `${head} with ${plural(approximations, 'approximation')}: close to the SVG, not identical.`,
+            tone: 'warn',
+        };
+    if (warnings.length) return { text: `${head}, faithful; ${plural(warnings.length, 'note')} below.`, tone: 'ok' };
+    return { text: `${head}: faithful, no warning.`, tone: 'ok' };
+}
+
+/** Same test as the CLI and the worker: the root element is <vector>, after a prolog and comments. */
+const VECTOR_ROOT = /^\uFEFF?\s*(?:<\?xml[^>]*\?>\s*)?(?:<!--[\s\S]*?-->\s*)*<vector[\s>]/;
+
+/** Whether the input is an existing Android VectorDrawable rather than an SVG. */
+export const isVectorDrawable = (source) => VECTOR_ROOT.test(source ?? '');
+
+/** The output formats of the output pane: its title, the downloaded file's extension and type. */
+export const FORMATS = {
+    vector: { title: 'VectorDrawable XML', extension: '.xml', type: 'application/xml' },
+    compose: { title: 'Compose ImageVector', extension: '.kt', type: 'text/plain' },
+    svg: { title: 'SVG', extension: '.svg', type: 'image/svg+xml' },
+};
+
+/**
+ * The format actually produced for an input: VectorDrawable XML is the output of an SVG, SVG the
+ * output of a VectorDrawable; Compose works from both. An impossible request falls back to the other.
+ */
+export function effectiveFormat(requested, vectorInput) {
+    if (requested === 'compose') return 'compose';
+    return vectorInput ? 'svg' : 'vector';
+}
+
+/** The name the Download button gives the output: a resource name, or the Kotlin name for Compose. */
+export function outputFileName(format, sourceName = '', kotlinName = '') {
+    if (format === 'compose') return `${kotlinName || 'Icon'}.kt`;
+    const resource = resourceFileName(sourceName.replace(/\.xml$/i, ''));
+    return format === 'svg' ? resource.replace(/\.xml$/, '.svg') : resource;
 }
