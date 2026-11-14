@@ -171,7 +171,9 @@ const preview = vectorDrawableToSvg(convert(svg).xml, { density: 2, applyTint: t
 The CLI does the same for existing drawables with `--format svg` (`ic_back.xml` → `ic_back.svg`; a
 directory is read for its `*.xml`). It takes no conversion option, and says on stderr what the SVG does
 not carry over (a color reference drawn gray, `android:tint`, the `android:trimPath*` of a filled path;
-that of a stroked path is drawn):
+that of a stroked path is drawn). A trim window that wraps past the start of the path is drawn in two
+parts, as by Android up to 16; Android 16 QPR2 draws only the part after the start
+([platform bug](https://issuetracker.google.com/issues/585623232)):
 
 ```sh
 svgvd app/src/main/res/drawable/ic_back.xml --format svg -o preview/
