@@ -22,11 +22,25 @@ _Same SVG ([`radial-gradient-transform.svg`](test/fixtures/radial-gradient-trans
 with resvg: the source, the `svg2vectordrawable` 2.9.1 output and the `svg-vectordrawable` output.
 Regenerated at each release by [`docs/assets/generate-comparison.mjs`](docs/assets/generate-comparison.mjs)._
 
-```
-npm i svg-vectordrawable
+```sh
+npm install svg-vectordrawable    # npm
+pnpm add svg-vectordrawable       # pnpm
+yarn add svg-vectordrawable       # Yarn
+bun add svg-vectordrawable        # Bun
 ```
 
-Requires Node.js 20 or later (the browser builds run in any modern browser).
+Add `-D` (`--save-dev` with npm) when you only use it at build time, through the CLI or a script. To run
+the CLI once without installing anything:
+
+```sh
+npx -p svg-vectordrawable svgvd icon.svg                  # npm
+pnpm --package=svg-vectordrawable dlx svgvd icon.svg      # pnpm
+yarn dlx -p svg-vectordrawable svgvd icon.svg             # Yarn 2+ (Yarn 1 has no dlx: use npx)
+bunx -p svg-vectordrawable svgvd icon.svg                 # Bun
+```
+
+Requires Node.js 20 or later (the browser builds run in any modern browser). The optional dependencies
+below (`opentype.js`, `@resvg/resvg-js`) are added the same way with your package manager.
 
 ## Why another one?
 
@@ -156,7 +170,8 @@ const preview = vectorDrawableToSvg(convert(svg).xml, { density: 2, applyTint: t
 
 The CLI does the same for existing drawables with `--format svg` (`ic_back.xml` → `ic_back.svg`; a
 directory is read for its `*.xml`). It takes no conversion option, and says on stderr what the SVG does
-not carry over (a color reference drawn gray, `android:tint`, `android:trimPath*`):
+not carry over (a color reference drawn gray, `android:tint`, the `android:trimPath*` of a filled path;
+that of a stroked path is drawn):
 
 ```sh
 svgvd app/src/main/res/drawable/ic_back.xml --format svg -o preview/
