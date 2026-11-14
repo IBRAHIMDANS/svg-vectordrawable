@@ -8,6 +8,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.1.0] - 2026-11-14
+
 Existing VectorDrawables are now an input too, the preview draws trimmed strokes, and every warning is explained with how to fix it.
 
 - **Added:** `--format compose` accepts an existing `.xml` drawable (`vectorDrawableToImageVector` in the API), and `--format svg` converts a drawable back to SVG; `vectorDrawableToSvg` draws `android:trimPath*` on stroked paths; [docs/warnings.md](docs/warnings.md) explains each warning code and how to fix it.
