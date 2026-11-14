@@ -179,6 +179,16 @@ test('parsePreviewColors reads reference=color pairs', () => {
     });
     // The last pair wins; a pair without `=` keeps an empty color, which the library rejects by name.
     assert.deepEqual(parsePreviewColors('?attr/a=#000, ?attr/a=#FFF, ?attr/b'), { '?attr/a': '#FFF', '?attr/b': '' });
+    // One pair per line, as typed in the multi-line field (Windows line ends included).
+    assert.deepEqual(parsePreviewColors('?attr/a=#000\r\n@color/b=#FFF\n'), { '?attr/a': '#000', '@color/b': '#FFF' });
+});
+
+test('the Preview colors field is multi-line and the gray note leads to it', () => {
+    const html = readFileSync(here('index.html'), 'utf8');
+    assert.match(html, /<textarea\s+id="opt-preview-colors"/);
+    const app = readFileSync(here('app.js'), 'utf8');
+    assert.match(app, /getElementById\('opt-preview-colors'\)/);
+    assert.match(app, /setAttribute\('aria-controls', 'opt-preview-colors'\)/);
 });
 
 test('an invalid SVG reports the error and the worker keeps working', async (t) => {

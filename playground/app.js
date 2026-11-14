@@ -54,6 +54,12 @@ el.unresolvedColors = document.createElement('p');
 el.unresolvedColors.className = 'preview-note';
 el.unresolvedColors.hidden = true;
 el.previews.after(el.unresolvedColors);
+// Ends the note: the fix for a gray reference is a pair in the Preview colors field.
+el.previewColorsLink = document.createElement('button');
+el.previewColorsLink.type = 'button';
+el.previewColorsLink.className = 'link-button';
+el.previewColorsLink.textContent = 'Set preview colors';
+el.previewColorsLink.setAttribute('aria-controls', 'opt-preview-colors');
 
 const converter = createConverter(() => new Worker(new URL('worker.js', import.meta.url)));
 let debounceTimer;
@@ -110,8 +116,14 @@ function renderUnresolvedColors(references) {
         if (i < references.length - 1) item.append(',');
         return i ? [' ', item] : [item];
     });
-    el.unresolvedColors.replaceChildren(prefix, ...parts);
+    el.unresolvedColors.replaceChildren(prefix, ...parts, ' ', el.previewColorsLink);
     el.unresolvedColors.hidden = !text;
+}
+
+/** Takes the user from the note to the field that gives the gray references a preview color. */
+function focusPreviewColors() {
+    el.previewColors.scrollIntoView({ block: 'center' });
+    el.previewColors.focus({ preventScroll: true });
 }
 
 /** Shows the XML with syntax colors: one `<span>` per token, plain text for very large outputs. */
@@ -305,6 +317,7 @@ el.fileInput.addEventListener('change', () => {
     if (file) loadFile(file);
     el.fileInput.value = '';
 });
+el.previewColorsLink.addEventListener('click', focusPreviewColors);
 el.copyButton.addEventListener('click', copyXml);
 el.downloadButton.addEventListener('click', downloadXml);
 
