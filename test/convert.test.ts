@@ -26,13 +26,13 @@ describe('basic paths & colors', () => {
     });
 
     it('resolves named, rgb() and hsl() colors', () => {
-        expect(convert(svg('<path d="M0 0z" fill="red"/>'), raw).xml).toContain('#FFFF0000');
-        expect(convert(svg('<path d="M0 0z" fill="rgb(0,128,0)"/>'), raw).xml).toContain('#FF008000');
-        expect(convert(svg('<path d="M0 0z" fill="hsl(240,100%,50%)"/>'), raw).xml).toContain('#FF0000FF');
+        expect(convert(svg('<path d="M0 0h1v1z" fill="red"/>'), raw).xml).toContain('#FFFF0000');
+        expect(convert(svg('<path d="M0 0h1v1z" fill="rgb(0,128,0)"/>'), raw).xml).toContain('#FF008000');
+        expect(convert(svg('<path d="M0 0h1v1z" fill="hsl(240,100%,50%)"/>'), raw).xml).toContain('#FF0000FF');
     });
 
     it('substitutes currentColor', () => {
-        const { xml } = convert(svg('<path d="M0 0z" fill="currentColor"/>'), {
+        const { xml } = convert(svg('<path d="M0 0h1v1z" fill="currentColor"/>'), {
             optimize: false,
             currentColor: '#112233',
         });
@@ -40,7 +40,7 @@ describe('basic paths & colors', () => {
     });
 
     it('maps fill-rule="evenodd" to fillType', () => {
-        const { xml } = convert(svg('<path d="M0 0z" fill="#000" fill-rule="evenodd"/>'), raw);
+        const { xml } = convert(svg('<path d="M0 0h1v1z" fill="#000" fill-rule="evenodd"/>'), raw);
         expect(xml).toContain('android:fillType="evenOdd"');
     });
 });
@@ -111,7 +111,7 @@ describe('gradients', () => {
 
     it('warns and paints nothing on a missing gradient', () => {
         const onWarn = vi.fn();
-        const { xml } = convert(svg('<path d="M0 0z" fill="url(#nope)"/>'), { optimize: false, onWarn });
+        const { xml } = convert(svg('<path d="M0 0h1v1z" fill="url(#nope)"/>'), { optimize: false, onWarn });
         expect(xml).not.toContain('fillColor');
         expect(onWarn).toHaveBeenCalledWith(expect.objectContaining({ code: 'missing-gradient' }));
     });
@@ -295,10 +295,13 @@ describe('inheritance & groups', () => {
     it('bakes a sheared <g> transform into path geometry (no <group>)', () => {
         const onWarn = vi.fn();
         // matrix(1,0,0.5,1,0,0): x' = x + 0.5y → (0,10) becomes (5,10)
-        const { xml } = convert(svg('<g transform="matrix(1,0,0.5,1,0,0)"><path d="M0 0L0 10" fill="#000"/></g>'), {
-            optimize: false,
-            onWarn,
-        });
+        const { xml } = convert(
+            svg('<g transform="matrix(1,0,0.5,1,0,0)"><path d="M0 0L0 10L1 10z" fill="#000"/></g>'),
+            {
+                optimize: false,
+                onWarn,
+            },
+        );
         // Baking a fill is exact: no group-skew (only a stroke is approximated).
         expect(onWarn).not.toHaveBeenCalledWith(expect.objectContaining({ code: 'group-skew' }));
         expect(xml).not.toContain('<group');
@@ -306,7 +309,7 @@ describe('inheritance & groups', () => {
     });
 
     it('folds opacity into fillAlpha', () => {
-        const { xml } = convert(svg('<path d="M0 0z" fill="#000" opacity="0.5"/>'), raw);
+        const { xml } = convert(svg('<path d="M0 0h1v1z" fill="#000" opacity="0.5"/>'), raw);
         expect(xml).toContain('android:fillAlpha="0.5"');
     });
 });
@@ -331,12 +334,12 @@ describe('fail-loud on unsupported', () => {
     it('warns (non-strict) on a masked path and still draws it', () => {
         const { xml, warnings } = convert(
             svg(
-                '<mask id="m"><rect width="5" height="5" fill="#fff"/></mask><path d="M0 0z" fill="#000" mask="url(#m)"/>',
+                '<mask id="m"><rect width="5" height="5" fill="#fff"/><rect width="3" height="3" fill="#888"/></mask><path d="M0 0h1v1z" fill="#000" mask="url(#m)"/>',
             ),
             raw,
         );
         expect(warnings.map((w) => w.code)).toEqual(['unsupported-attribute']);
-        expect(xml).toContain('android:pathData="M0 0z"');
+        expect(xml).toContain('android:pathData="M0 0h1v1z"');
     });
 
     it('does not warn on a <mask>/<pattern> definition that nothing references (never rendered)', () => {
@@ -533,14 +536,14 @@ describe('rendering fidelity', () => {
     it('skips visibility="hidden" drawables, inherited from a <g>, unless a child overrides it', () => {
         const { xml } = convert(
             svg(
-                '<g visibility="hidden"><path d="M1 1h1z"/><path visibility="visible" d="M2 2h1z"/></g>' +
-                    '<path style="visibility:collapse" d="M3 3h1z"/>',
+                '<g visibility="hidden"><path d="M1 1h1v1z"/><path visibility="visible" d="M2 2h1v1z"/></g>' +
+                    '<path style="visibility:collapse" d="M3 3h1v1z"/>',
             ),
             raw,
         );
-        expect(xml).not.toContain('M1 1h1z');
-        expect(xml).toContain('M2 2h1z');
-        expect(xml).not.toContain('M3 3h1z');
+        expect(xml).not.toContain('M1 1h1v1z');
+        expect(xml).toContain('M2 2h1v1z');
+        expect(xml).not.toContain('M3 3h1v1z');
     });
 
     it('uses the SVG paint fallback color when the url() target is missing', () => {
@@ -563,7 +566,7 @@ describe('rendering fidelity', () => {
     it('reports a pattern fill as unsupported paint (not as a missing gradient)', () => {
         const { xml, warnings } = convert(
             svg(
-                '<pattern id="p" width="2" height="2"><rect width="1" height="1"/></pattern><path d="M0 0z" fill="url(#p) red"/>',
+                '<pattern id="p" width="2" height="2"><rect width="1" height="1"/></pattern><path d="M0 0h1v1z" fill="url(#p) red"/>',
             ),
             raw,
         );

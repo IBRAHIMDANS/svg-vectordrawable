@@ -185,7 +185,7 @@ describe('normalize: rotate / skew angles keep their decimals (svgo convertTrans
 
 describe('convert() forwards floatPrecision to svgo', () => {
     const input =
-        '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M2.123456 2L10.987654 3.333333z"/></svg>';
+        '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M2.123456 2L10.987654 3.333333z" stroke="#000"/></svg>';
 
     it('keeps 6 decimals with optimize: true', () => {
         expect(convert(input, { floatPrecision: 6 }).xml).toContain('2.123456');
