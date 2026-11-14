@@ -192,14 +192,7 @@ function shapePathData(name: string, attrs: Attrs, options: ShapeOptions): strin
             return p`M${n('x1', 'x')},${n('y1', 'y')}L${n('x2', 'x')},${n('y2', 'y')}`;
         case 'polyline':
         case 'polygon': {
-            const all = (attrs.points ?? '')
-                .trim()
-                .split(/[\s,]+/)
-                .map(Number)
-                .filter((v) => !Number.isNaN(v));
-            // A number a float cannot hold is an error: the list is drawn up to it (SVG 2 §10.10).
-            const overflow = all.findIndex((v) => !inFloatRange(v));
-            const pts = overflow === -1 ? all : all.slice(0, overflow - (overflow % 2));
+            const pts = parsePoints(attrs.points ?? '');
             if (pts.length < 4) return null;
             let d = `M${pts[0]},${pts[1]}`;
             for (let i = 2; i + 1 < pts.length; i += 2) d += `L${pts[i]},${pts[i + 1]}`;
@@ -208,6 +201,45 @@ function shapePathData(name: string, attrs: Attrs, options: ShapeOptions): strin
         default:
             return null;
     }
+}
+
+const SVG_WSP = '[ \\t\\r\\n]';
+/** A whole SVG number: digits are required on both sides of the dot and in the exponent. */
+const POINTS_NUMBER = /^[+-]?(?:\d+(?:\.\d+)?|\.\d+)(?:[eE][+-]?\d+)?/;
+const POINTS_SEPARATOR = new RegExp(`${SVG_WSP}*,${SVG_WSP}*|${SVG_WSP}+`);
+const POINTS_TRIM = new RegExp(`^${SVG_WSP}+|${SVG_WSP}+$`, 'g');
+
+/**
+ * The coordinates a `points` list draws, [x0, y0, x1, y1, …], read as Firefox does (verified in
+ * Firefox and Chrome on 2026-11-14). Unlike SVG 2 §10.10 ("rendered up to the error"), a list in error
+ * draws nothing: a token that is not a whole number (`x`, `10px`, `10.`, `NaN`), an empty token
+ * (leading, trailing or doubled comma), or a number a float cannot hold. An odd trailing coordinate
+ * is ignored. As in Firefox, an x token may hold its y after a minus sign (`10-5` → 10, -5), a y token
+ * may not (Chrome is more lenient: `.1.5`, `10+5`, a trailing comma).
+ */
+export function parsePoints(value: string): number[] {
+    const text = value.replace(POINTS_TRIM, '');
+    if (text === '') return [];
+    const tokens = text.split(POINTS_SEPARATOR);
+    /** The token as a number when it is a whole number within the float range, else NaN. */
+    const whole = (token: string): number => {
+        const v = POINTS_NUMBER.exec(token)?.[0] === token ? Number(token) : NaN;
+        return inFloatRange(v) ? v : NaN;
+    };
+    const coords: number[] = [];
+    for (let i = 0; i < tokens.length;) {
+        const token = tokens[i++]!;
+        const head = POINTS_NUMBER.exec(token)?.[0];
+        if (head === undefined) return [];
+        const x = whole(head);
+        const rest = token.slice(head.length);
+        if (Number.isNaN(x) || (rest !== '' && !rest.startsWith('-'))) return [];
+        if (rest === '' && i === tokens.length) break; // odd trailing coordinate
+        const y = whole(rest === '' ? tokens[i++]! : rest);
+        if (Number.isNaN(y)) return [];
+        coords.push(x, y);
+    }
+    return coords;
 }
 
 /** Length attributes of each shape, with the axis their percentages resolve against (d: diagonal). */

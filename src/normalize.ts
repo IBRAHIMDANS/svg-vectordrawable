@@ -3,6 +3,7 @@ import type { Config } from 'svgo';
 import type { XastRoot } from './ast.js';
 import { hasIgnoredPresentationValue, isUsablePaint } from './inherited.js';
 import { matrixScale, scaledPrecision, validPathData } from './pathData.js';
+import { parsePoints } from './shapes.js';
 import { cascadedStyle } from './style.js';
 import { isInvalidTransform, parseCssTransform, parseTransform, type Matrix } from './transform.js';
 import { rootExtraDigits, rootLayout } from './viewport.js';
@@ -176,6 +177,43 @@ const cutPathDataInError = {
                 if (node.name !== 'path' || d === undefined) return;
                 const valid = validPathData(d) ?? '';
                 if (valid !== d) node.attributes.d = valid;
+            },
+        },
+    }),
+};
+
+const POINTS_ATTR = /<poly(?:line|gon)\b[^>]*?\spoints\s*=\s*(?:"([^"]*)"|'([^']*)')/gi;
+
+/**
+ * A `points` list in error draws nothing in the browsers and in the converter (`parsePoints`), and
+ * one with an odd count drops its last coordinate; svgo's `convertShapeToPath` skips the bad tokens
+ * instead (`0 0 10 0 x 10 10 0 10` → a full square) and loses the `z` of an odd-count polygon. True
+ * when some list draws nothing (fewer than two points) though svgo could read it otherwise: such an
+ * element is kept, like {@link MAY_HAVE_EMPTY_GEOMETRY}, so both modes report it with `empty-path`.
+ * Read on the source text, where an undecoded character reference makes the list look in error
+ * (a false positive only keeps the element for the converter).
+ */
+function hasPointsDrawingNothing(svg: string): boolean {
+    for (const m of svg.matchAll(POINTS_ATTR)) {
+        if (parsePoints(m[1] ?? m[2] ?? '').length < 4) return true;
+    }
+    return false;
+}
+
+/**
+ * Rewrites each `points` to the coordinates it draws ({@link parsePoints}) before svgo runs: emptied
+ * when in error, its odd trailing coordinate dropped, so `convertShapeToPath` draws what the browsers
+ * draw. svgo has already decoded character references at this point.
+ */
+const normalizePoints = {
+    name: 'svgvd-normalize-points',
+    fn: () => ({
+        element: {
+            enter: (node: { name: string; attributes: Record<string, string> }) => {
+                const { points } = node.attributes;
+                if ((node.name !== 'polyline' && node.name !== 'polygon') || points === undefined) return;
+                const drawn = parsePoints(points).join(' ');
+                if (drawn !== points) node.attributes.points = drawn;
             },
         },
     }),
@@ -669,7 +707,7 @@ function defaultConfigFor(
         overrides.convertEllipseToCircle = false;
     }
     if (MAY_HAVE_CSS_PATH_DATA.test(svg)) overrides.mergePaths = false;
-    if (MAY_HAVE_EMPTY_GEOMETRY.test(svg)) {
+    if (MAY_HAVE_EMPTY_GEOMETRY.test(svg) || hasPointsDrawingNothing(svg)) {
         overrides.convertShapeToPath = false;
         overrides.removeHiddenElems = {
             ...(overrides.removeHiddenElems as object | undefined),
@@ -825,7 +863,7 @@ export function parseSvg(
     };
     const plugins = [
         stripMarkers,
-        ...(optimizeFlag ? [cascadeStyles, stashInvalidTransforms, cutPathDataInError] : []),
+        ...(optimizeFlag ? [cascadeStyles, stashInvalidTransforms, cutPathDataInError, normalizePoints] : []),
         ...(base.plugins ?? []),
         ...(optimizeFlag ? [restoreInvalidTransforms] : []),
         capture,
