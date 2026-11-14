@@ -971,6 +971,72 @@ textarea.code-area::placeholder {
     margin-top: 0;
 }
 
+/* Output format, in a bar under the output pane's head. */
+.pane-bar {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 10px;
+    padding: 6px 12px 6px 16px;
+    border-bottom: 1px solid var(--border);
+    background: var(--surface);
+}
+
+.format-switch {
+    display: inline-flex;
+}
+
+.format-switch label:has(input:disabled) {
+    cursor: not-allowed;
+    opacity: 0.45;
+}
+
+.format-switch input:disabled {
+    cursor: not-allowed;
+}
+
+/* The command-line options, as a table that scrolls sideways on a phone. */
+.table-wrap {
+    overflow-x: auto;
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    background: var(--surface);
+}
+
+.options-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 0.9rem;
+}
+
+.options-table th,
+.options-table td {
+    padding: 8px 14px;
+    border-bottom: 1px solid var(--border);
+    text-align: left;
+    vertical-align: top;
+}
+
+.options-table thead th {
+    color: var(--muted);
+    font-size: 0.82rem;
+    font-weight: 550;
+}
+
+.options-table tbody th {
+    padding-top: 14px;
+    background: var(--surface-2);
+    font-size: 0.85rem;
+}
+
+.options-table td:first-child {
+    white-space: nowrap;
+}
+
+.options-table tr:last-child td {
+    border-bottom: 0;
+}
+
 /* Outside a pane head, the segmented control lays its options out on its own. */
 .pm-switch {
     display: inline-flex;
