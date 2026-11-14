@@ -154,6 +154,14 @@ import { convert, vectorDrawableToSvg } from 'svg-vectordrawable';
 const preview = vectorDrawableToSvg(convert(svg).xml, { density: 2, applyTint: true });
 ```
 
+The CLI does the same for existing drawables with `--format svg` (`ic_back.xml` → `ic_back.svg`; a
+directory is read for its `*.xml`). It takes no conversion option, and says on stderr what the SVG does
+not carry over (a color reference drawn gray, `android:tint`, `android:trimPath*`):
+
+```sh
+svgvd app/src/main/res/drawable/ic_back.xml --format svg -o preview/
+```
+
 ### Warnings, errors and `rules`
 
 Every construct that cannot be converted faithfully emits a warning with a stable `code` (listed in
@@ -345,6 +353,15 @@ pathFillType = PathFillType.EvenOdd) { moveTo(…) … }`, `group(rotate, pivotX
 alphas (`opacity-approximated` when several paints may overlap). `indent`, `xmlTag` and `minSdk` do
 not apply (`--min-sdk`, `--xml-tag` and `--fallback-png` are rejected with `--format compose`).
 
+An existing VectorDrawable converts too, whatever tool wrote it: `vectorDrawableToImageVector(xml,
+{ name, packageName })`, or an `.xml` file (stdin, `-s`) given to `--format compose`. It is serialized as
+is (the SVG conversion options do not apply), `android:trimPath*` included; an attribute with no
+`ImageVector` equivalent here (`android:tintMode`…) is reported with `unsupported-attribute`.
+
+```sh
+svgvd app/src/main/res/drawable/ic_*.xml -o app/src/main/java/com/example/icons --format compose --package com.example.icons
+```
+
 ### Browser
 
 A browser build (svgo's browser bundle, no Node built-ins) is published under the `./browser`
@@ -355,8 +372,8 @@ import { convert } from 'svg-vectordrawable/browser';
 const { xml } = convert(svgString);
 ```
 
-`svg-vectordrawable/browser-lite` is the same API without svgo (129 KB instead of 687 KB for the minified
-IIFE build, 49 KB instead of 212 KB gzipped): conversion always runs with `optimize: false`, so `<style>` CSS is not inlined and
+`svg-vectordrawable/browser-lite` is the same API without svgo (157 KB instead of 702 KB for the minified
+IIFE build, 58 KB instead of 217 KB gzipped): conversion always runs with `optimize: false`, so `<style>` CSS is not inlined and
 shapes are converted as authored. The [online playground](https://ibrahimdans.github.io/svg-vectordrawable/)
 runs on this build, so its output can differ from the CLI on SVGs that rely on `<style>`.
 

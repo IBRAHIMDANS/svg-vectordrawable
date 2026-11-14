@@ -2,7 +2,7 @@ import { readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { kotlinName, kotlinPackage } from '../src/compose.js';
-import { ConversionError, convert, toImageVector } from '../src/index.js';
+import { ConversionError, convert, toImageVector, vectorDrawableToImageVector } from '../src/index.js';
 import * as browser from '../src/browser.js';
 import * as lite from '../src/browser-lite.js';
 
@@ -503,5 +503,50 @@ describe('toImageVector: root opacity, the stroke margin covers miter tips and s
     it.each(MODES)('clearly disjoint mitered strokes do not warn (optimize: %s)', (optimize) => {
         const apart = chevron().replace('x="13"', 'x="40"').replace('width="7"', 'width="2"');
         expect(CODES(apart, optimize)).toEqual([]);
+    });
+});
+
+describe('vectorDrawableToImageVector (T-181)', () => {
+    const vd = (body: string, attrs = ''): string =>
+        `<vector xmlns:android="http://schemas.android.com/apk/res/android" android:width="24dp" android:height="24dp" android:viewportWidth="24" android:viewportHeight="24"${attrs}>${body}</vector>`;
+
+    it('gives the same file as toImageVector for the drawable convert writes', () => {
+        const source = svg('<g transform="rotate(30 12 12)"><path d="M2 2h20v20H2z" fill="#1A73E8" stroke="red"/></g>');
+        const { xml } = convert(source);
+        expect(vectorDrawableToImageVector(xml, { name: 'Icon', packageName: 'com.example' }).kotlin).toBe(
+            toImageVector(source, { name: 'Icon', packageName: 'com.example' }).kotlin,
+        );
+    });
+
+    it('keeps trim paths, which convert never writes', () => {
+        const { kotlin, warnings } = vectorDrawableToImageVector(
+            vd(
+                '<path android:pathData="M0 0h24" android:strokeColor="#000" android:strokeWidth="1" android:trimPathStart="0.25" android:trimPathOffset="0.5"/>',
+            ),
+            { name: 'Icon' },
+        );
+        expect(kotlin).toContain('trimPathStart = 0.25f');
+        expect(kotlin).toContain('trimPathOffset = 0.5f');
+        expect(kotlin).not.toContain('trimPathEnd');
+        expect(warnings).toEqual([]);
+    });
+
+    it('reports an attribute it does not read, and rejects it under strict', () => {
+        const xml = vd(
+            '<path android:pathData="M0 0h24v24z" android:fillColor="#000"/>',
+            ' android:tintMode="multiply"',
+        );
+        const { warnings } = vectorDrawableToImageVector(xml, { name: 'Icon' });
+        expect(warnings.map((w) => w.code)).toEqual(['unsupported-attribute']);
+        expect(() => vectorDrawableToImageVector(xml, { name: 'Icon', strict: true })).toThrow(ConversionError);
+    });
+
+    it('throws when the root is not <vector> or holds an element it cannot express', () => {
+        expect(() => vectorDrawableToImageVector('<selector/>', { name: 'Icon' })).toThrow(
+            'Root element is <selector>, expected <vector>',
+        );
+        expect(() => vectorDrawableToImageVector(vd('<target/>'), { name: 'Icon' })).toThrow(
+            'Unsupported VectorDrawable element <target>',
+        );
     });
 });
