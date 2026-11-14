@@ -1,6 +1,6 @@
 {
     "name": "svg-vectordrawable-mcp",
-    "version": "0.1.0",
+    "version": "0.1.1",
     "description": "MCP server (stdio) that converts SVG to Android VectorDrawable XML and previews VectorDrawable as SVG, powered by svg-vectordrawable.",
     "type": "module",
     "bin": {
