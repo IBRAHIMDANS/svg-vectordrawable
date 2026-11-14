@@ -11,6 +11,7 @@ import {
     buildOptions,
     createConverter,
     describeApiLevel,
+    describeConversion,
     describeError,
     describeSize,
     describeUnresolvedColors,
@@ -19,6 +20,7 @@ import {
     resourceFileName,
     svgDataUrl,
     tokenizeXml,
+    warningHelpUrl,
 } from './core.js';
 import { EXAMPLES } from './examples.js';
 
@@ -377,4 +379,31 @@ test('describeApiLevel says what the drawable needs', () => {
     assert.match(describeApiLevel(null), /Convert an SVG/);
     assert.match(describeApiLevel(21), /from API 21/);
     assert.match(describeApiLevel(24), /needs API 24.*app:srcCompat/);
+});
+
+test('the status says what the warnings mean, worst category first (T-188)', () => {
+    assert.deepEqual(describeConversion(21, []), { text: 'Converted for API 21+: faithful, no warning.', tone: 'ok' });
+    const w = (category) => ({ code: 'x', message: '', category });
+    assert.match(describeConversion(24, [w('info')]).text, /faithful; 1 note below/);
+    assert.match(
+        describeConversion(24, [w('approximation'), w('info')]).text,
+        /with 1 approximation: close to the SVG/,
+    );
+    const lossy = describeConversion(24, [w('approximation'), w('lossy'), w('lossy')]);
+    assert.match(lossy.text, /but 2 lossy warnings: part of the SVG is missing or drawn wrong/);
+    assert.equal(lossy.tone, 'warn');
+});
+
+test('each warning links to its explanation in docs/warnings.md, which has a section per code (T-188)', () => {
+    const doc = readFileSync(here('../docs/warnings.md'), 'utf8');
+    const documented = [...doc.matchAll(/^### `([a-z-]+)`$/gm)].map((m) => m[1]);
+    assert.ok(documented.length >= 20);
+    for (const code of documented) {
+        assert.equal(
+            warningHelpUrl(code),
+            `https://github.com/IBRAHIMDANS/svg-vectordrawable/blob/main/docs/warnings.md#${code}`,
+        );
+    }
+    assert.equal(warningHelpUrl('not a code'), null);
+    assert.equal(warningHelpUrl(undefined), null);
 });

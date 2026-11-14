@@ -242,3 +242,37 @@ export function describeApiLevel(minSdk) {
     if (minSdk <= 21) return `This drawable works from API ${minSdk} (every VectorDrawable device) with android:src.`;
     return `This drawable needs API ${minSdk} with android:src (gradients or fill rules): use app:srcCompat below it.`;
 }
+
+/** Where each warning code is explained, with how to fix it (one section per code). */
+export const WARNINGS_DOC_URL = 'https://github.com/IBRAHIMDANS/svg-vectordrawable/blob/main/docs/warnings.md';
+
+/** The link to the explanation of a warning code, or null for a code that is not one. */
+export function warningHelpUrl(code) {
+    return /^[a-z]+(?:-[a-z]+)*$/.test(code ?? '') ? `${WARNINGS_DOC_URL}#${code}` : null;
+}
+
+const plural = (count, word) => `${count} ${word}${count === 1 ? '' : 's'}`;
+
+/**
+ * The status line of a successful conversion: what its warnings mean for the drawable, worst
+ * category first (lossy: something is missing or wrong; approximation: close, not identical; info:
+ * faithful, Android advice). `tone` is the status color.
+ */
+export function describeConversion(minSdk, warnings = []) {
+    const count = (category) => warnings.filter((w) => w.category === category).length;
+    const lossy = count('lossy');
+    const approximations = count('approximation');
+    const head = `Converted for API ${minSdk}+`;
+    if (lossy)
+        return {
+            text: `${head}, but ${plural(lossy, 'lossy warning')}: part of the SVG is missing or drawn wrong in the drawable.`,
+            tone: 'warn',
+        };
+    if (approximations)
+        return {
+            text: `${head} with ${plural(approximations, 'approximation')}: close to the SVG, not identical.`,
+            tone: 'warn',
+        };
+    if (warnings.length) return { text: `${head}, faithful; ${plural(warnings.length, 'note')} below.`, tone: 'ok' };
+    return { text: `${head}: faithful, no warning.`, tone: 'ok' };
+}

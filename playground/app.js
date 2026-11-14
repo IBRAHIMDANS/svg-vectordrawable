@@ -9,6 +9,7 @@ import {
     buildOptions,
     createConverter,
     describeApiLevel,
+    describeConversion,
     describeError,
     describeSize,
     describeUnresolvedColors,
@@ -17,6 +18,7 @@ import {
     resourceFileName,
     svgDataUrl,
     tokenizeXml,
+    warningHelpUrl,
 } from './core.js';
 import { EXAMPLES } from './examples.js';
 
@@ -172,6 +174,16 @@ function renderWarnings(warnings) {
         const message = document.createElement('p');
         message.textContent = warning.message;
         li.append(code, ' ', category, message);
+        const help = warningHelpUrl(warning.code);
+        if (help) {
+            const link = document.createElement('a');
+            link.className = 'warning-help';
+            link.href = help;
+            link.target = '_blank';
+            link.rel = 'noopener';
+            link.textContent = 'What it means and how to fix it';
+            li.append(link);
+        }
         return li;
     });
     if (items.length === 0) {
@@ -199,11 +211,8 @@ function render(outcome) {
             .filter(Boolean)
             .join(' · ');
         renderWarnings(outcome.warnings);
-        const count = outcome.warnings.length;
-        setStatus(
-            `Converted: needs API ${outcome.minSdk}+, ${count} warning${count === 1 ? '' : 's'}.`,
-            count ? 'warn' : 'ok',
-        );
+        const status = describeConversion(outcome.minSdk, outcome.warnings);
+        setStatus(status.text, status.tone);
         setPreview(
             el.vdPreview,
             outcome.preview,
