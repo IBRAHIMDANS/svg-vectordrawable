@@ -53,7 +53,7 @@ export function findOutputCollisions(entries: readonly { input: string; output: 
 }
 
 /** How output files are named, plus the output format (`'vector'` when absent), which names a collision. */
-export type CollisionNaming = FileNamingOptions & { format?: 'vector' | 'compose' };
+export type CollisionNaming = FileNamingOptions & { format?: 'vector' | 'compose' | 'svg' };
 
 /**
  * What a collision is called in messages, chosen by the output format first: a Kotlin name with
@@ -79,14 +79,14 @@ export function assertDistinctOutputs(
 /**
  * The `*.svg` files inside `dir` (extension matched case-insensitively), sorted by name. With
  * `recursive`, also those of its subdirectories, depth first; symbolic links to directories are not
- * followed (no cycles).
+ * followed (no cycles). `extension` lists another kind of file (`.xml` for VectorDrawable inputs).
  */
-export function listSvgFiles(dir: string, recursive = false): string[] {
+export function listSvgFiles(dir: string, recursive = false, extension = '.svg'): string[] {
     const entries = readdirSync(dir, { withFileTypes: true }).sort((a, b) => (a.name < b.name ? -1 : 1));
     return entries.flatMap((entry) => {
         const path = join(dir, entry.name);
-        if (entry.isDirectory()) return recursive ? listSvgFiles(path, true) : [];
-        return extname(entry.name).toLowerCase() === '.svg' && statSync(path).isFile() ? [path] : [];
+        if (entry.isDirectory()) return recursive ? listSvgFiles(path, true, extension) : [];
+        return extname(entry.name).toLowerCase() === extension && statSync(path).isFile() ? [path] : [];
     });
 }
 

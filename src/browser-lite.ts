@@ -15,6 +15,9 @@ import type {
 export { ConversionError } from './errors.js';
 export { WARNING_CATEGORIES, WARNING_CODES } from './types.js';
 export { vectorDrawableToSvg, UNRESOLVED_COLOR } from './preview.js';
+// No svgo involved: the same function as in the full builds.
+export { vectorDrawableToImageVector } from './compose.js';
+export type { VectorDrawableImageVectorOptions } from './compose.js';
 export type {
     ConvertResult,
     Warning,

@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+- **Added:** existing VectorDrawables as input: `--format compose` accepts an `.xml` drawable (also `vectorDrawableToImageVector` in the API), and `--format svg` converts a drawable back to SVG.
 - **Fixed:** a shape or path number beyond the float range (`1e39`, `1e400`) no longer writes `Infinity` into `android:pathData` with `optimize: false`: the shape is not drawn (`empty-path`) and path data stops at that number, as in Firefox and with `optimize: true`; an invalid `style` declaration (`stroke-width 2`, no colon) is ignored as in a browser instead of failing the default conversion with "Invalid SVG"; a CSS comment in `style` (`/*c*/fill:red`) no longer hides the declaration with `optimize: false`.
 
 ## [1.0.0] - 2026-11-12

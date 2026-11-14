@@ -390,6 +390,15 @@ function pathCall(node: XmlNode, ctx: Ctx): Block {
         use(ctx, 'androidx.compose.ui.graphics.PathFillType');
         args.push('pathFillType = PathFillType.EvenOdd');
     }
+    // Never written by `convert`; an existing VectorDrawable may trim its paths.
+    for (const [attr, neutral] of [
+        ['trimPathStart', 0],
+        ['trimPathEnd', 1],
+        ['trimPathOffset', 0],
+    ] as const) {
+        const v = num(a, attr, neutral);
+        if (v !== neutral) args.push(`${attr} = ${float(v)}`);
+    }
     use(ctx, 'androidx.compose.ui.graphics.vector.path');
     return call('path', args, pathCommands(d, ctx));
 }
@@ -471,9 +480,70 @@ export function toImageVector(svg: string, options: ImageVectorOptions): ImageVe
         minSdk?: unknown;
     };
     const { xml, warnings } = convert(svg, rest);
-    const { warn } = warningSink(rest, warnings);
+    return serialize(xml, name, pkg, rest, warnings, false);
+}
+
+/** Options of {@link vectorDrawableToImageVector}: the names, and the warning policy of `convert`. */
+export type VectorDrawableImageVectorOptions = Pick<
+    ImageVectorOptions,
+    'name' | 'packageName' | 'strict' | 'rules' | 'onWarn'
+>;
+
+/**
+ * Converts an existing VectorDrawable XML (from this library, Android Studio or any other tool) into
+ * the same Kotlin file as {@link toImageVector}. What an `ImageVector` cannot express is reported with
+ * the warnings of `toImageVector`; an attribute this serializer does not know (`android:tintMode`, an
+ * animation target…) is reported with `unsupported-attribute` instead of being dropped silently.
+ * Throws when the root element is not `<vector>`.
+ */
+export function vectorDrawableToImageVector(xml: string, options: VectorDrawableImageVectorOptions): ImageVectorResult {
+    const { name: rawName, packageName, ...policy } = options ?? ({} as VectorDrawableImageVectorOptions);
+    const pkg = packageName === undefined ? undefined : kotlinPackage(packageName);
+    return serialize(xml, kotlinName(rawName), pkg, policy, [], true);
+}
+
+/** Attributes read on each VectorDrawable element; any other `android:` one is reported on foreign XML. */
+const KNOWN_ATTRIBUTES: Record<string, ReadonlySet<string>> = {
+    vector: new Set(['width', 'height', 'viewportWidth', 'viewportHeight', 'tint', 'autoMirrored', 'alpha', 'name']),
+    group: new Set(['name', ...['rotation', 'pivotX', 'pivotY', 'scaleX', 'scaleY', 'translateX', 'translateY']]),
+    'clip-path': new Set(['name', 'pathData']),
+    path: new Set([
+        ...['name', 'pathData', 'fillColor', 'fillAlpha', 'fillType'],
+        ...['strokeColor', 'strokeAlpha', 'strokeWidth', 'strokeLineCap', 'strokeLineJoin', 'strokeMiterLimit'],
+        ...['trimPathStart', 'trimPathEnd', 'trimPathOffset'],
+    ]),
+};
+
+/** Reports the `android:` attributes of `node` and its descendants that the serializer does not read. */
+function reportUnknownAttributes(node: XmlNode, warn: (w: Warning) => void): void {
+    const known = KNOWN_ATTRIBUTES[node.name];
+    if (known) {
+        for (const attr of Object.keys(node.attrs)) {
+            if (!attr.startsWith('android:') || known.has(attr.slice('android:'.length))) continue;
+            warn({
+                code: 'unsupported-attribute',
+                message: `${attr} on <${node.name}> has no ImageVector equivalent here; ignored.`,
+                node: node.name,
+            });
+        }
+    }
+    for (const child of node.children) if (child.name !== 'aapt:attr') reportUnknownAttributes(child, warn);
+}
+
+/** Serializes VectorDrawable `xml` as the Kotlin file of an `ImageVector` named `name`. */
+function serialize(
+    xml: string,
+    name: string,
+    pkg: string | undefined,
+    policy: Pick<ImageVectorOptions, 'strict' | 'rules' | 'onWarn'>,
+    warnings: Warning[],
+    foreign: boolean,
+): ImageVectorResult {
+    const { warn } = warningSink(policy, warnings);
 
     const vector = parseXml(xml);
+    if (vector.name !== 'vector') throw new Error(`Root element is <${vector.name}>, expected <vector>`);
+    if (foreign) reportUnknownAttributes(vector, warn);
     const a = vector.attrs;
     const ctx: Ctx = {
         imports: new Set(),

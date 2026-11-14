@@ -1,5 +1,6 @@
 export { convert } from './convert.js';
-export { toImageVector } from './compose.js';
+export { toImageVector, vectorDrawableToImageVector } from './compose.js';
+export type { VectorDrawableImageVectorOptions } from './compose.js';
 export { ConversionError } from './errors.js';
 export { WARNING_CATEGORIES, WARNING_CODES } from './types.js';
 export { convertFile, convertDir } from './file.js';
