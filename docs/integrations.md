@@ -139,7 +139,7 @@ Gradients in VectorDrawable require API 24+, which adaptive icons (API 26+) alwa
 
 **Plugin (on the [Gradle Plugin Portal](https://plugins.gradle.org/plugin/io.github.ibrahimdans.svg-vectordrawable)):**
 the [Gradle plugin](../integrations/gradle-plugin/README.md)
-(`id("io.github.ibrahimdans.svg-vectordrawable") version "0.1.0"`) registers a cacheable
+(`id("io.github.ibrahimdans.svg-vectordrawable") version "1.0.0"`) registers a cacheable
 `convert<Variant>SvgToVectorDrawable` task per Android variant, wired before the resource merge, and
 passes the variant's `minSdk`. It runs the `svgvd` CLI, so it needs **Node.js 20+** on the `PATH` and
 `svg-vectordrawable` installed in the folder the CLI runs in (the root project by default). The
@@ -372,9 +372,9 @@ integration in its own folder (`pnpm install --frozen-lockfile`), runs its typec
 To release, bump the version in the file above, merge, then tag that commit and push the tag:
 
 ```sh
-git tag mcp-v0.1.0 && git push origin mcp-v0.1.0        # MCP server
-git tag vite-v0.1.0 && git push origin vite-v0.1.0      # Vite plugin
-git tag gradle-v0.2.0 && git push origin gradle-v0.2.0  # Gradle plugin
+git tag mcp-v1.0.1 && git push origin mcp-v1.0.1        # MCP server
+git tag vite-v1.0.1 && git push origin vite-v1.0.1      # Vite plugin
+git tag gradle-v1.0.1 && git push origin gradle-v1.0.1  # Gradle plugin
 ```
 
 **Dry run first.** Actions → "Release integrations" → "Run workflow", pick the integration; `dry-run` is
