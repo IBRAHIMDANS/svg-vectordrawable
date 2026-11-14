@@ -543,6 +543,12 @@ textarea.code-area::placeholder {
     flex-basis: 100%;
 }
 
+/* Wide enough for its longest option ("On: fail on lossy and approximations"), which a closed
+   select would otherwise cut once chosen. */
+.field-strict {
+    flex-basis: 300px;
+}
+
 .field-hint {
     color: var(--muted);
     font-size: 0.8rem;
