@@ -3,7 +3,7 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { convert, vectorDrawableToSvg } from '../src/index.js';
-import { UNRESOLVED_COLOR } from '../src/preview.js';
+import { hasUnrenderedTrim, UNRESOLVED_COLOR } from '../src/preview.js';
 import * as browser from '../src/browser.js';
 import { vdToSvg } from './visual/vdToSvg.js';
 import { compareSvgs, renderSvg, DEFAULT_MAX_MISMATCH } from './visual/compare.js';
@@ -199,6 +199,137 @@ describe('vectorDrawableToSvg: color references', () => {
         expect(xml).toContain('?attr/colorPrimary');
         const { svg } = preview(xml, { '?attr/colorPrimary': '#f00' });
         expect(compareSvgs(svg24(HALF_SVG('#f00')), svg).mismatch).toBe(0);
+    });
+});
+
+describe('vectorDrawableToSvg: trimmed paths (T-187)', () => {
+    /** A square of perimeter 64 starting at (4,4) clockwise, then a second contour Android does not trim. */
+    const SQUARE = 'M4,4H20V20H4Z M8,10H16';
+    const stroked = (trim: string, extra = '') =>
+        vd(
+            `<path android:pathData="${SQUARE}" android:strokeColor="#FF000000" android:strokeWidth="2" ${trim}${extra}/>`,
+        );
+    /** The expected SVG: `d` stroked like the drawable (butt caps, miter joins). */
+    const strokedSvg = (d: string) =>
+        svg24(`<path d="${d}" fill="none" stroke="#000" stroke-width="2" stroke-miterlimit="4"/>`);
+    const attrsOf = (svg: string) => /<path ([^>]*)\/>/.exec(svg)![1]!;
+
+    it('draws from trimPathStart to the end of the first contour', () => {
+        const svg = vectorDrawableToSvg(stroked('android:trimPathStart="0.25"'));
+        expect(attrsOf(svg)).toContain(
+            'd="M4,4H20V20H4Z" fill="none" stroke="#000000" stroke-width="2" stroke-linecap="butt" ' +
+                'stroke-linejoin="miter" stroke-miterlimit="4" stroke-dasharray="48 64" stroke-dashoffset="-16"',
+        );
+        expect(compareSvgs(strokedSvg('M20,4V20H4V4'), svg).mismatch).toBe(0);
+    });
+
+    it('draws from the start to trimPathEnd, with no dash offset', () => {
+        const svg = vectorDrawableToSvg(stroked('android:trimPathEnd="0.5"'));
+        expect(attrsOf(svg)).toContain('stroke-miterlimit="4" stroke-dasharray="32 64"');
+        expect(svg).not.toContain('stroke-dashoffset');
+        expect(compareSvgs(strokedSvg('M4,4H20V20'), svg).mismatch).toBe(0);
+    });
+
+    it('draws the window between trimPathStart and trimPathEnd', () => {
+        const svg = vectorDrawableToSvg(stroked('android:trimPathStart="0.125" android:trimPathEnd="0.625"'));
+        expect(attrsOf(svg)).toContain('stroke-dasharray="32 64" stroke-dashoffset="-8"');
+        expect(compareSvgs(strokedSvg('M12,4H20V20H12'), svg).mismatch).toBe(0);
+    });
+
+    it('wraps a window shifted past the end by trimPathOffset into two dashes', () => {
+        // (0.5 + 0.375, 0.9 + 0.375) mod 1 = [0.875, 1] then [0, 0.275].
+        const xml = stroked('android:trimPathStart="0.5" android:trimPathEnd="0.9" android:trimPathOffset="0.375"');
+        const svg = vectorDrawableToSvg(xml);
+        expect(attrsOf(svg)).toContain('stroke-dasharray="17.6 38.4 8 64"');
+        expect(svg).not.toContain('stroke-dashoffset');
+        // On a closed contour, SVG renderers join the two dashes at the start point (Android leaves
+        // two butt ends there, a notch at this corner): the only difference, documented in preview.ts.
+        expect(compareSvgs(strokedSvg('M4,12V4H20V5.6'), svg).mismatch).toBe(0);
+    });
+
+    it('wraps trimPathStart > trimPathEnd too, as Android does', () => {
+        const svg = vectorDrawableToSvg(stroked('android:trimPathStart="0.75" android:trimPathEnd="0.25"'));
+        expect(attrsOf(svg)).toContain('stroke-dasharray="16 32 16 64"');
+        expect(compareSvgs(strokedSvg('M4,20V4H20'), svg).mismatch).toBe(0);
+    });
+
+    it('draws nothing when the window is empty', () => {
+        for (const trim of [
+            'android:trimPathStart="0.4" android:trimPathEnd="0.4"',
+            'android:trimPathStart="0.25" android:trimPathEnd="0.25" android:trimPathOffset="0.5"',
+        ]) {
+            const svg = vectorDrawableToSvg(stroked(trim));
+            expect(svg, trim).not.toContain('stroke=');
+            expect(
+                renderSvg(svg).pixels.some((v) => v !== 0),
+                trim,
+            ).toBe(false);
+        }
+    });
+
+    it('adds nothing for the defaults, nor for an offset alone (Android ignores it)', () => {
+        const whole = vectorDrawableToSvg(stroked(''));
+        expect(whole).not.toContain('stroke-dash');
+        expect(whole).toContain(`d="${SQUARE}"`);
+        for (const trim of ['android:trimPathStart="0" android:trimPathEnd="1"', 'android:trimPathOffset="0.3"']) {
+            expect(vectorDrawableToSvg(stroked(trim)), trim).toBe(whole);
+        }
+    });
+
+    it('keeps the round caps of the drawable at both ends of the window', () => {
+        const svg = vectorDrawableToSvg(
+            stroked('android:trimPathStart="0.25" android:trimPathEnd="0.5"', ' android:strokeLineCap="round"'),
+        );
+        const expected = svg24(
+            '<path d="M20,4V20" fill="none" stroke="#000" stroke-width="2" stroke-linecap="round"/>',
+        );
+        expect(compareSvgs(expected, svg).mismatch).toBeLessThan(DEFAULT_MAX_MISMATCH);
+    });
+
+    it('draws a filled trimmed path whole (Android fills the trimmed geometry: no SVG equivalent)', () => {
+        const filled = (trim: string) =>
+            vd(
+                `<path android:pathData="${SQUARE}" android:fillColor="#FFFF0000" android:strokeColor="#FF000000" ` +
+                    `android:strokeWidth="2" ${trim}/>`,
+            );
+        const svg = vectorDrawableToSvg(filled('android:trimPathStart="0.25" android:trimPathEnd="0.5"'));
+        expect(svg).toBe(vectorDrawableToSvg(filled('')));
+        expect(svg).not.toContain('stroke-dash');
+    });
+
+    it('measures curves and arcs, in absolute lengths (resvg ignores pathLength)', () => {
+        // A circle of radius 8 (length 16π ≈ 50.2655) as two arcs, then the same as two cubics.
+        const circle = 'M4,12a8,8 0 1,1 16,0a8,8 0 1,1 -16,0z';
+        const svg = vectorDrawableToSvg(
+            vd(
+                `<path android:pathData="${circle}" android:strokeColor="#FF000000" android:strokeWidth="2" ` +
+                    'android:trimPathEnd="0.5"/>',
+            ),
+        );
+        const [half, whole] = /stroke-dasharray="([\d.]+) ([\d.]+)"/.exec(svg)!.slice(1).map(Number);
+        expect(half).toBeCloseTo(8 * Math.PI, 2);
+        expect(whole).toBeCloseTo(16 * Math.PI, 2);
+        expect(svg).not.toContain('pathLength');
+        const upperHalf = svg24('<path d="M4,12a8,8 0 1,1 16,0" fill="none" stroke="#000" stroke-width="2"/>');
+        expect(compareSvgs(upperHalf, svg).mismatch).toBeLessThan(DEFAULT_MAX_MISMATCH);
+    });
+});
+
+describe('hasUnrenderedTrim', () => {
+    it('is true only for a filled path with an effective trim', () => {
+        const path = (attrs: string, body = '') =>
+            vd(`<group><path android:pathData="M0,0h24v24h-24z" ${attrs}>${body}</path></group>`);
+        const gradient =
+            '<aapt:attr name="android:fillColor"><gradient android:startColor="#FF000000" android:endColor="#FFFFFFFF"/></aapt:attr>';
+        expect(hasUnrenderedTrim(path('android:fillColor="#FF000000" android:trimPathEnd="0.5"'))).toBe(true);
+        expect(hasUnrenderedTrim(path('android:trimPathStart="0.1"', gradient))).toBe(true);
+        expect(hasUnrenderedTrim(path('android:fillColor="#FF000000"'))).toBe(false);
+        expect(hasUnrenderedTrim(path('android:fillColor="#FF000000" android:trimPathOffset="0.5"'))).toBe(false);
+        expect(
+            hasUnrenderedTrim(
+                path('android:strokeColor="#FF000000" android:strokeWidth="1" android:trimPathEnd="0.5"'),
+            ),
+        ).toBe(false);
     });
 });
 
