@@ -8,7 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-- **Fixed:** a path without area and with only a fill (a line, `M12 5v1`), which draws nothing, is no longer written to the drawable; the position of an XML parse error (`<input>:line:col`) is the one in your file, also after character references (`&#233;`) or a dropped SVG prefix. A filled shape far longer than it is thick (a strip `1e15` long) is no longer dropped as if it had no area.
+- **Fixed:** a path without area that only has a fill (a line such as `M12 5v1`), which draws nothing, is no longer written to the drawable, and a filled shape far longer than it is thick (a strip `1e15` long) is no longer dropped as if it had no area; an XML parse error (`<input>:line:col`) points at its position in your file, also after character references (`&#233;`) or a dropped SVG prefix.
 
 ## [1.1.0] - 2026-11-14
 
