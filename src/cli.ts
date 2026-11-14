@@ -8,7 +8,7 @@ import { kotlinName, kotlinPackage, toImageVector, vectorDrawableToImageVector }
 import { convert } from './convert.js';
 import { ConversionError } from './errors.js';
 import { DENSITIES, renderFallbackPng, type Density } from './fallback.js';
-import { vectorDrawableToSvg } from './preview.js';
+import { hasUnrenderedTrim, vectorDrawableToSvg } from './preview.js';
 import {
     assertDistinctOutputs,
     batchOutputPath,
@@ -442,8 +442,8 @@ function convertJob(
     if (toSvg) {
         const notes: string[] = [];
         // What the SVG does not carry over, said rather than dropped silently.
-        if (/\bandroid:trimPath(?:Start|End|Offset)\s*=/.test(svg))
-            notes.push('android:trimPath* is not converted: the paths are drawn whole');
+        if (hasUnrenderedTrim(svg))
+            notes.push('android:trimPath* is not converted on a filled path: that path is drawn whole');
         if (/\bandroid:tint\s*=/.test(svg)) notes.push('android:tint is not applied: the drawing keeps its own colors');
         const text = vectorDrawableToSvg(svg, {
             onUnresolvedColor: (ref) => notes.push(`color reference ${ref} has no value here: drawn in gray`),

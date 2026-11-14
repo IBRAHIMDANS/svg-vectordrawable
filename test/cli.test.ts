@@ -1279,8 +1279,18 @@ describe('svgvd CLI', () => {
             const res = svgvdStdin(FOREIGN, ['--format', 'svg']);
             expect(res.status).toBe(0);
             expect(res.stdout).toContain('<svg ');
-            expect(res.stderr).toContain('android:trimPath* is not converted');
+            // The trim of a stroked path is rendered (dashes): no note for it.
+            expect(res.stdout).toContain('stroke-dasharray=');
+            expect(res.stderr).not.toContain('android:trimPath*');
             expect(res.stderr).toContain('android:tint is not applied');
+        });
+
+        it('--format svg still says so when a trimmed path is filled (drawn whole)', () => {
+            const filled = FOREIGN.replace('android:strokeColor="#F00"', 'android:fillColor="#F00"');
+            const res = svgvdStdin(filled, ['--format', 'svg']);
+            expect(res.status).toBe(0);
+            expect(res.stdout).not.toContain('stroke-dasharray');
+            expect(res.stderr).toContain('android:trimPath* is not converted on a filled path');
         });
 
         it('--format svg fails on an SVG input and on a conversion option', () => {
