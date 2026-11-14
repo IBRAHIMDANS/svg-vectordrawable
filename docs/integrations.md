@@ -382,13 +382,8 @@ checked by default and runs `npm publish --dry-run` or `./gradlew publishPlugins
 after the build and tests. A dry run can start from any branch; a real run (`dry-run` unchecked) must
 start from the integration's tag ("Use workflow from: `mcp-vX.Y.Z`"), otherwise it fails.
 
-**Secrets.** `NPM_TOKEN` (npm automation or granular token allowed to publish both packages),
-`GRADLE_PUBLISH_KEY` and `GRADLE_PUBLISH_SECRET` (Plugin Portal API key, passed as
-`gradle.publish.key` / `gradle.publish.secret`).
-
-**Switching npm to Trusted Publishing.** The library publishes through OIDC without a token, but npm
-only lets you add a Trusted Publisher to a package that already exists, so the first release of each
-npm package uses `NPM_TOKEN`. After it, on npmjs.com → package → Settings → Trusted Publisher, add
-GitHub Actions with this repository and the workflow file `release-integrations.yml`; then remove the
-`NODE_AUTH_TOKEN` line from the job (keep `id-token: write`), and once both packages are switched,
-delete the `NPM_TOKEN` secret.
+**Authentication.** npm: no token. Both packages publish through OIDC (Trusted Publishing, with
+provenance), like the library: on npmjs.com → package → Settings → Trusted Publisher, GitHub Actions
+with this repository and the workflow file `release-integrations.yml`. The job needs `id-token: write`.
+Gradle Plugin Portal: the `GRADLE_PUBLISH_KEY` and `GRADLE_PUBLISH_SECRET` secrets (Plugin Portal API
+key, passed as `gradle.publish.key` / `gradle.publish.secret`).
