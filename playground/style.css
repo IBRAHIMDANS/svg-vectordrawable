@@ -729,6 +729,12 @@ textarea.code-area::placeholder {
     color: var(--muted);
 }
 
+.warning-help {
+    display: inline-block;
+    margin-top: 4px;
+    font-size: 0.85rem;
+}
+
 .warnings li.empty {
     display: grid;
     place-items: center;

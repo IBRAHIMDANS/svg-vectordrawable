@@ -202,7 +202,7 @@ try {
 
 | Code                            | Meaning                                                                                                                                                                                                     |
 | ------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `unsupported-element`           | `<text>`, `<image>`, `<foreignObject>`, `<switch>` — skipped                                                                                                                                                |
+| `unsupported-element`           | `<text>`, `<image>`, `<foreignObject>`, circular `<use>` — skipped                                                                                                                                          |
 | `unsupported-attribute`         | non-clip `mask`, `filter`, `marker*`, `vector-effect`, `paint-order`, `arcs` joins — ignored                                                                                                                |
 | `unsupported-stroke-dasharray`  | dash pattern that cannot be resolved (`em`/`ex` units) — drawn solid                                                                                                                                        |
 | `unsupported-stroke-gradient`   | no longer emitted (gradient strokes are supported); kept for compatibility                                                                                                                                  |
@@ -223,6 +223,8 @@ try {
 | `large-vector` (info)           | `android:width`/`height` above 200 dp (Android lint `VectorRaster`)                                                                                                                                         |
 | `long-path-data` (info, off)    | a `pathData` longer than 800 characters (lint `VectorPath`); enable it with `rules`                                                                                                                         |
 | `invalid-path-data` (info, off) | a `<path>` `d` with a typo after a valid start, drawn up to its last valid segment as browsers do; enable it with `rules`                                                                                   |
+
+Each code is explained, with how to fix it, in [docs/warnings.md](docs/warnings.md).
 
 Node file helpers:
 
@@ -474,6 +476,7 @@ Limits of the converter itself, some of them **not warned**:
 
 ## Documentation
 
+- [Warnings: what they mean and how to fix them](docs/warnings.md)
 - [Migrating from `svg2vectordrawable`](docs/migration-from-svg2vectordrawable.md)
 - [Integrations](docs/integrations.md) (Node scripts, React Native icons, Gradle, Vite/webpack, CI)
 - Build plugins / MCP server: [Gradle plugin](integrations/gradle-plugin/README.md), [Vite plugin](integrations/vite-plugin/README.md), [MCP server](integrations/mcp-server/README.md), [Figma plugin](integrations/figma-plugin/README.md) (Gradle, Vite and MCP published; the Figma plugin not yet; [overview](docs/integrations.md#plugins-and-mcp-server))
